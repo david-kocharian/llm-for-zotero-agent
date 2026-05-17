@@ -30,6 +30,17 @@ export type ProviderPreset = {
   defaultEmbeddingModel?: string;
 };
 
+const GENERAL_API_KEY_PROTOCOL_OPTIONS: ProviderProtocol[] = [
+  "responses_api",
+  "openai_chat_compat",
+  "anthropic_messages",
+];
+
+const CUSTOMIZED_API_KEY_PROTOCOL_OPTIONS: ProviderProtocol[] = [
+  ...GENERAL_API_KEY_PROTOCOL_OPTIONS,
+  "gemini_native",
+];
+
 type ParsedApiBase = {
   hostname: string;
   pathname: string;
@@ -121,6 +132,9 @@ const QWEN_PATHS = [
   "/",
   "/compatible-mode/v1",
   "/compatible-mode/v1/chat/completions",
+  "/compatible-mode/v1/responses",
+  "/api/v2/apps/protocols/compatible-mode/v1",
+  "/api/v2/apps/protocols/compatible-mode/v1/responses",
 ];
 const KIMI_PATHS = ["/", "/v1", "/v1/chat/completions"];
 const COPILOT_PATHS = ["/", "/chat/completions", "/models"];
@@ -143,11 +157,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     label: "Gemini",
     defaultApiBase: "https://generativelanguage.googleapis.com/v1beta",
     defaultProtocol: "gemini_native",
-    supportedProtocols: [
-      "gemini_native",
-      "responses_api",
-      "openai_chat_compat",
-    ],
+    supportedProtocols: ["gemini_native", "openai_chat_compat"],
     helperText: "Preset uses Gemini's native generateContent endpoint.",
     matches: makeHostAndPathMatcher(
       ["generativelanguage.googleapis.com"],
@@ -219,12 +229,17 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     label: "Qwen",
     defaultApiBase: "https://dashscope.aliyuncs.com/compatible-mode/v1",
     defaultProtocol: "openai_chat_compat",
-    supportedProtocols: ["openai_chat_compat"],
+    supportedProtocols: ["openai_chat_compat", "responses_api"],
     helperText: "Preset uses DashScope's compatible-mode API base (v1).",
     matches: makeHostAndPathMatcher(
-      ["dashscope.aliyuncs.com", "dashscope-intl.aliyuncs.com"],
+      [
+        "dashscope.aliyuncs.com",
+        "dashscope-intl.aliyuncs.com",
+        "dashscope-us.aliyuncs.com",
+      ],
       QWEN_PATHS,
     ),
+    supportsResponsesEndpoint: true,
     supportsEmbeddings: true,
     defaultEmbeddingModel: "text-embedding-v4",
   },
@@ -234,7 +249,8 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     defaultApiBase: "https://api.moonshot.ai/v1",
     defaultProtocol: "openai_chat_compat",
     supportedProtocols: ["openai_chat_compat"],
-    helperText: "Preset uses Moonshot's international API. Use api.moonshot.cn for China.",
+    helperText:
+      "Preset uses Moonshot's international API. Use api.moonshot.cn for China.",
     matches: makeHostAndPathMatcher(
       ["api.moonshot.cn", "api.moonshot.ai"],
       KIMI_PATHS,
@@ -249,10 +265,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     supportedProtocols: ["openai_chat_compat", "responses_api"],
     helperText:
       "Uses GitHub Copilot via device login. Requires an active Copilot subscription.",
-    matches: makeHostAndPathMatcher(
-      ["api.githubcopilot.com"],
-      COPILOT_PATHS,
-    ),
+    matches: makeHostAndPathMatcher(["api.githubcopilot.com"], COPILOT_PATHS),
     supportsEmbeddings: false,
   },
 ];
@@ -265,6 +278,25 @@ export function getProviderPreset(
     throw new Error(`Unknown provider preset: ${id}`);
   }
   return preset;
+}
+
+function dedupeProtocols(protocols: ProviderProtocol[]): ProviderProtocol[] {
+  return protocols.filter(
+    (protocol, index) => protocols.indexOf(protocol) === index,
+  );
+}
+
+export function getProviderPresetProtocolOptions(
+  id: ProviderPresetId,
+): ProviderProtocol[] {
+  if (id === "customized") {
+    return [...CUSTOMIZED_API_KEY_PROTOCOL_OPTIONS];
+  }
+  const preset = getProviderPreset(id);
+  return dedupeProtocols([
+    ...preset.supportedProtocols,
+    ...GENERAL_API_KEY_PROTOCOL_OPTIONS,
+  ]);
 }
 
 export function detectProviderPreset(apiBase: string): ProviderPresetId {

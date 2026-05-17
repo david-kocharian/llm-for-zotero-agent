@@ -50,6 +50,15 @@ function isDeepSeekHost(parsed: ParsedApiBase | null): boolean {
   return Boolean(parsed && parsed.hostname === "api.deepseek.com");
 }
 
+function isQwenHost(parsed: ParsedApiBase | null): boolean {
+  return Boolean(
+    parsed &&
+    (parsed.hostname === "dashscope.aliyuncs.com" ||
+      parsed.hostname === "dashscope-intl.aliyuncs.com" ||
+      parsed.hostname === "dashscope-us.aliyuncs.com"),
+  );
+}
+
 function rewriteApiBasePath(parsed: ParsedApiBase, pathname: string): string {
   return `${parsed.origin}${pathname}`;
 }
@@ -92,6 +101,34 @@ export function normalizeOpenAICompatibleBase(apiBase: string): string {
     }
   }
 
+  if (isQwenHost(parsed)) {
+    if (
+      parsed.pathname === "/" ||
+      parsed.pathname === "/api/v2/apps/protocols/compatible-mode/v1" ||
+      parsed.pathname === "/api/v2/apps/protocols/compatible-mode/v1/responses"
+    ) {
+      return rewriteApiBasePath(parsed, "/compatible-mode/v1");
+    }
+  }
+
+  return cleaned;
+}
+
+function normalizeQwenResponsesBase(apiBase: string): string {
+  const cleaned = trimTrailingSlash(apiBase);
+  const parsed = parseApiBase(cleaned);
+  if (!parsed || !isQwenHost(parsed)) return cleaned;
+  if (
+    parsed.pathname === "/" ||
+    parsed.pathname === "/compatible-mode/v1" ||
+    parsed.pathname === "/compatible-mode/v1/chat/completions" ||
+    parsed.pathname === "/compatible-mode/v1/responses"
+  ) {
+    return rewriteApiBasePath(
+      parsed,
+      "/api/v2/apps/protocols/compatible-mode/v1",
+    );
+  }
   return cleaned;
 }
 
@@ -203,7 +240,10 @@ export function resolveProviderTransportEndpoint(params: {
       const base = trimTrailingSlash(params.apiBase);
       return `${base}/responses`;
     }
-    return resolveEndpoint(params.apiBase, RESPONSES_ENDPOINT);
+    return resolveEndpoint(
+      normalizeQwenResponsesBase(params.apiBase),
+      RESPONSES_ENDPOINT,
+    );
   }
   if (params.protocol === "openai_chat_compat") {
     if (params.authMode === "copilot_auth" || isCopilotHost(params.apiBase)) {

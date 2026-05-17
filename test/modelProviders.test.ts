@@ -156,7 +156,7 @@ describe("modelProviders", function () {
     assert.equal(entries[1].displayModelLabel, "gpt-4o-mini #2");
     assert.equal(entries[0].providerLabel, "OpenAI");
     assert.equal(entries[0].authMode, "api_key");
-    assert.equal(entries[0].providerProtocol, "openai_chat_compat");
+    assert.equal(entries[0].providerProtocol, "responses_api");
   });
 
   it("infers Anthropic protocol for customized providers with default chat protocol", function () {
@@ -239,6 +239,59 @@ describe("modelProviders", function () {
 
     assert.lengthOf(entries, 1);
     assert.equal(entries[0].providerProtocol, "openai_chat_compat");
+  });
+
+  it("uses the preset default protocol for known-provider auto mode", function () {
+    const groups: ModelProviderGroup[] = [
+      {
+        id: "provider-1",
+        apiBase: "https://api.moonshot.ai/v1",
+        apiKey: "sk-kimi",
+        authMode: "api_key",
+        providerProtocol: "responses_api",
+        models: [
+          {
+            id: "model-1",
+            model: "kimi-k2.6",
+            temperature: 0.3,
+            maxTokens: 4096,
+          },
+        ],
+      },
+    ];
+
+    setModelProviderGroups(groups);
+    const entries = getRuntimeModelEntries();
+
+    assert.lengthOf(entries, 1);
+    assert.equal(entries[0].providerProtocol, "openai_chat_compat");
+  });
+
+  it("keeps explicit per-model protocol overrides for known providers", function () {
+    const groups: ModelProviderGroup[] = [
+      {
+        id: "provider-1",
+        apiBase: "https://api.moonshot.ai/v1",
+        apiKey: "sk-kimi",
+        authMode: "api_key",
+        providerProtocol: "openai_chat_compat",
+        models: [
+          {
+            id: "model-1",
+            model: "kimi-k2.6",
+            temperature: 0.3,
+            maxTokens: 4096,
+            providerProtocol: "responses_api",
+          },
+        ],
+      },
+    ];
+
+    setModelProviderGroups(groups);
+    const entries = getRuntimeModelEntries();
+
+    assert.lengthOf(entries, 1);
+    assert.equal(entries[0].providerProtocol, "responses_api");
   });
 
   it("keeps input token cap unset when no override is stored", function () {

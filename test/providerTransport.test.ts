@@ -69,4 +69,22 @@ describe("providerTransport", function () {
       "https://api.deepseek.com/anthropic/v1/messages",
     );
   });
+
+  it("maps Qwen between Chat Completions and Responses bases", function () {
+    assert.equal(
+      resolveProviderTransportEndpoint({
+        protocol: "responses_api",
+        apiBase: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      }),
+      "https://dashscope-intl.aliyuncs.com/api/v2/apps/protocols/compatible-mode/v1/responses",
+    );
+    assert.equal(
+      resolveProviderTransportEndpoint({
+        protocol: "openai_chat_compat",
+        apiBase:
+          "https://dashscope-intl.aliyuncs.com/api/v2/apps/protocols/compatible-mode/v1",
+      }),
+      "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions",
+    );
+  });
 });

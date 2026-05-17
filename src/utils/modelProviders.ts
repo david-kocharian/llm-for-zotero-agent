@@ -32,7 +32,12 @@ export type ModelProviderModel = AdvancedModelConfig & {
   providerProtocol?: ProviderProtocol;
 };
 
-export type ModelProviderAuthMode = "api_key" | "codex_auth" | "codex_app_server" | "copilot_auth" | "webchat"; // [webchat]
+export type ModelProviderAuthMode =
+  | "api_key"
+  | "codex_auth"
+  | "codex_app_server"
+  | "copilot_auth"
+  | "webchat"; // [webchat]
 
 export type ModelProviderGroup = {
   id: string;
@@ -321,17 +326,31 @@ function resolveRuntimeProviderProtocol(
     presetId === "customized"
       ? undefined
       : getProviderPreset(presetId).defaultProtocol;
+  if (modelEntry?.providerProtocol) {
+    return normalizeProviderProtocolForAuthMode({
+      protocol: modelEntry.providerProtocol,
+      authMode,
+      apiBase: group.apiBase,
+      ...(fallback ? { fallback } : {}),
+    });
+  }
+  if (fallback) {
+    return normalizeProviderProtocolForAuthMode({
+      protocol: fallback,
+      authMode,
+      apiBase: group.apiBase,
+      fallback,
+    });
+  }
   const shouldInferCustomizedProtocol =
     presetId === "customized" &&
     group.providerProtocol === "openai_chat_compat";
-  const protocol =
-    modelEntry?.providerProtocol ||
-    (shouldInferCustomizedProtocol ? undefined : group.providerProtocol);
   return normalizeProviderProtocolForAuthMode({
-    protocol,
+    protocol: shouldInferCustomizedProtocol
+      ? undefined
+      : group.providerProtocol,
     authMode,
     apiBase: group.apiBase,
-    ...(fallback ? { fallback } : {}),
   });
 }
 

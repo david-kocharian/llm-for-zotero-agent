@@ -26,10 +26,10 @@ import {
   PROVIDER_PRESETS,
   detectProviderPreset,
   getProviderPreset,
+  getProviderPresetProtocolOptions,
   type ProviderPresetId,
 } from "../utils/providerPresets";
 import {
-  PROVIDER_PROTOCOL_SPECS,
   isProviderProtocol,
   normalizeProviderProtocolForAuthMode,
   getProviderProtocolSpec,
@@ -270,13 +270,8 @@ function getProtocolOptions(
     return ["codex_responses"];
   if (authMode === "copilot_auth")
     return ["openai_chat_compat", "responses_api"];
-  if (presetId !== "customized") {
-    return getProviderPreset(presetId).supportedProtocols.filter(
-      (protocol) => protocol !== "codex_responses",
-    );
-  }
-  return PROVIDER_PROTOCOL_SPECS.map((entry) => entry.id).filter(
-    (protocol) => protocol !== "codex_responses",
+  return getProviderPresetProtocolOptions(presetId).filter(
+    (protocol) => protocol !== "codex_responses" && protocol !== "web_sync",
   );
 }
 
@@ -284,13 +279,22 @@ function resolveSelectedProtocol(
   group: ModelProviderGroup,
   presetId: ProviderPresetId,
 ): ProviderProtocol {
+  const allowed = getProtocolOptions(group.authMode, presetId);
+  if (presetId !== "customized") {
+    const defaultProtocol =
+      group.authMode === "codex_auth" || group.authMode === "codex_app_server"
+        ? "codex_responses"
+        : group.authMode === "webchat"
+          ? "web_sync"
+          : group.authMode === "copilot_auth"
+            ? "openai_chat_compat"
+            : getProviderPreset(presetId).defaultProtocol;
+    return allowed.includes(defaultProtocol) ? defaultProtocol : allowed[0];
+  }
   const fallback =
     group.authMode === "codex_auth" || group.authMode === "codex_app_server"
       ? "codex_responses"
-      : presetId === "customized"
-        ? undefined
-        : getProviderPreset(presetId).defaultProtocol;
-  const allowed = getProtocolOptions(group.authMode, presetId);
+      : undefined;
   const shouldInferCustomizedProtocol =
     presetId === "customized" &&
     group.providerProtocol === "openai_chat_compat";
@@ -303,6 +307,26 @@ function resolveSelectedProtocol(
     ...(fallback ? { fallback } : {}),
   });
   return allowed.includes(normalized) ? normalized : allowed[0];
+}
+
+function resolveModelSelectedProtocol(
+  group: ModelProviderGroup,
+  presetId: ProviderPresetId,
+  modelEntry: ModelProviderModel,
+): ProviderProtocol {
+  const allowed = getProtocolOptions(group.authMode, presetId);
+  if (modelEntry.providerProtocol) {
+    const normalized = normalizeProviderProtocolForAuthMode({
+      protocol: modelEntry.providerProtocol,
+      authMode: group.authMode,
+      apiBase: group.apiBase,
+      ...(presetId === "customized"
+        ? {}
+        : { fallback: getProviderPreset(presetId).defaultProtocol }),
+    });
+    if (allowed.includes(normalized)) return normalized;
+  }
+  return resolveSelectedProtocol(group, presetId);
 }
 
 // ── DOM helpers ────────────────────────────────────────────────────
@@ -1831,9 +1855,10 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
               profile.defaultModel ||
               "gpt-5.4"
             ).trim();
-            const providerProtocol = resolveSelectedProtocol(
+            const providerProtocol = resolveModelSelectedProtocol(
               group,
               selectedPresetId,
+              modelEntry,
             );
 
             if (!apiBase) throw new Error(t("API URL is required"));

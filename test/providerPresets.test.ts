@@ -2,6 +2,7 @@ import { assert } from "chai";
 import {
   detectProviderPreset,
   getProviderPreset,
+  getProviderPresetProtocolOptions,
   providerSupportsResponsesEndpoint,
 } from "../src/utils/providerPresets";
 
@@ -47,6 +48,18 @@ describe("providerPresets", function () {
     assert.equal(
       detectProviderPreset(
         "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions",
+      ),
+      "qwen",
+    );
+    assert.equal(
+      detectProviderPreset(
+        "https://dashscope-us.aliyuncs.com/compatible-mode/v1/responses",
+      ),
+      "qwen",
+    );
+    assert.equal(
+      detectProviderPreset(
+        "https://dashscope-intl.aliyuncs.com/api/v2/apps/protocols/compatible-mode/v1/responses",
       ),
       "qwen",
     );
@@ -119,6 +132,31 @@ describe("providerPresets", function () {
       "anthropic_messages",
       "openai_chat_compat",
     ]);
+    assert.deepEqual(getProviderPreset("gemini").supportedProtocols, [
+      "gemini_native",
+      "openai_chat_compat",
+    ]);
+    assert.deepEqual(getProviderPreset("qwen").supportedProtocols, [
+      "openai_chat_compat",
+      "responses_api",
+    ]);
+    assert.deepEqual(getProviderPreset("kimi").supportedProtocols, [
+      "openai_chat_compat",
+    ]);
+  });
+
+  it("offers advanced protocol options beyond preset defaults", function () {
+    assert.deepEqual(getProviderPresetProtocolOptions("kimi"), [
+      "openai_chat_compat",
+      "responses_api",
+      "anthropic_messages",
+    ]);
+    assert.deepEqual(getProviderPresetProtocolOptions("gemini"), [
+      "gemini_native",
+      "openai_chat_compat",
+      "responses_api",
+      "anthropic_messages",
+    ]);
   });
 
   it("does not advertise Gemini as Responses-capable", function () {
@@ -130,6 +168,14 @@ describe("providerPresets", function () {
     assert.isFalse(
       providerSupportsResponsesEndpoint(
         "https://generativelanguage.googleapis.com/v1beta/openai/responses",
+      ),
+    );
+  });
+
+  it("advertises Qwen as Responses-capable", function () {
+    assert.isTrue(
+      providerSupportsResponsesEndpoint(
+        "https://dashscope.aliyuncs.com/compatible-mode/v1",
       ),
     );
   });
