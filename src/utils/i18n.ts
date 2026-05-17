@@ -442,40 +442,57 @@ export function t(en: string): string {
   return en;
 }
 
-/**
- * Returns the welcome screen HTML, translated if needed.
- * Centralized here to keep the full welcome text in one place.
- */
+/** Returns the WebChat start page HTML. */
 export function getWebChatWelcomeHtml(targetLabel?: string, targetDomain?: string): string {
   const label = targetLabel || "WebChat";
   const domain = targetDomain || "the chat site";
   if (getEffectiveLocale().startsWith("zh")) {
     return `
-      <div class="llm-welcome">
-        <div class="llm-welcome-icon">🌐</div>
-        <div class="llm-welcome-text">
-          <div class="llm-welcome-title">${label} Web Sync 模式</div>
-          <ul class="llm-welcome-list">
-            <li>你的问题将通过浏览器扩展直接发送到 <strong>${domain}</strong>。请确保扩展已安装并且对应的标签页已打开。</li>
-            <li>右键点击论文标签可切换是否发送 <strong>PDF 全文</strong>。紫色 = 发送，灰色 = 跳过。</li>
-            <li>使用截图按钮可附加<strong>图片上下文</strong>到你的消息中。</li>
-            <li>点击 <strong>Exit</strong> 按钮可退出 WebChat 模式，恢复到常规 API 模式。</li>
-          </ul>
+      <div class="llm-start-page llm-webchat-start-page">
+        <div class="llm-start-page-title">LLM-for-Zotero WebChat</div>
+        <div class="llm-start-page-subtitle">通过已打开的 ${label} 浏览器标签页工作</div>
+        <div class="llm-start-page-recommendations">
+          <div class="llm-start-page-rec-title">工作方式</div>
+          <ol class="llm-start-page-rec-list">
+            <li>Zotero 会通过 Sync for Zotero 浏览器扩展，把你的问题发送到已经打开的 <strong>${domain}</strong> 标签页，然后把回答同步回这里。</li>
+          </ol>
+          <div class="llm-start-page-rec-title llm-webchat-warning-title">⚠️⚠️⚠️ 发送前必须确认</div>
+          <ol class="llm-start-page-rec-list">
+            <li>已经安装并启用 <strong>Sync for Zotero</strong> 浏览器扩展。</li>
+            <li>已经在 Chrome 或 Edge 中打开 <strong>${domain}</strong>，并且已经登录。</li>
+            <li>保持 <strong>${domain}</strong> 标签页可见；不要最小化，不要放到另一个显示器。Zotero 模型标签旁的绿点表示已连接。</li>
+          </ol>
+          <div class="llm-start-page-rec-title llm-webchat-rec-title-spaced">怎么提问</div>
+          <ol class="llm-start-page-rec-list">
+            <li>在这里输入问题并点击 <strong>Send</strong>。</li>
+            <li>论文对话中，论文标签高亮表示会附加当前 PDF；右键论文标签可切换发送 PDF 或跳过 PDF。每个 WebChat 会话通常只上传一次 PDF。</li>
+            <li>如果没有反应，请刷新 <strong>${domain}</strong> 标签页，确认扩展已启用，并让 Zotero 和浏览器保持在同一个显示器。</li>
+          </ol>
         </div>
       </div>
     `;
   }
   return `
-    <div class="llm-welcome">
-      <div class="llm-welcome-icon">🌐</div>
-      <div class="llm-welcome-text">
-        <div class="llm-welcome-title">${label} Web Sync mode</div>
-        <ul class="llm-welcome-list">
-          <li>Your questions are sent directly to <strong>${domain}</strong> via the browser extension. Make sure the extension is installed and a ${label} tab is open.</li>
-          <li>Right-click a paper chip to toggle sending its <strong>full PDF</strong>. Purple = send, grey = skip.</li>
-          <li>Use the screenshot button to attach <strong>figure context</strong> to your message.</li>
-          <li>Click the <strong>Exit</strong> button to leave WebChat mode and return to regular API mode.</li>
-        </ul>
+    <div class="llm-start-page llm-webchat-start-page">
+      <div class="llm-start-page-title">LLM-for-Zotero WebChat</div>
+      <div class="llm-start-page-subtitle">Use your open ${label} browser tab</div>
+      <div class="llm-start-page-recommendations">
+        <div class="llm-start-page-rec-title">How it works</div>
+        <ol class="llm-start-page-rec-list">
+          <li>Zotero sends your question to the already-open <strong>${domain}</strong> tab through the Sync for Zotero browser extension, then streams the answer back here.</li>
+        </ol>
+        <div class="llm-start-page-rec-title llm-webchat-warning-title">⚠️⚠️⚠️ Before sending</div>
+        <ol class="llm-start-page-rec-list">
+          <li>Install and enable the <strong>Sync for Zotero</strong> browser extension.</li>
+          <li>Open <strong>${domain}</strong> in Chrome or Edge, and make sure you are signed in.</li>
+          <li>Keep the <strong>${domain}</strong> tab visible; do not minimize it or put it on another monitor. A green dot in Zotero's model chip means connected.</li>
+        </ol>
+        <div class="llm-start-page-rec-title llm-webchat-rec-title-spaced">Ask from Zotero</div>
+        <ol class="llm-start-page-rec-list">
+          <li>Type your question here and press <strong>Send</strong>.</li>
+          <li>For paper chat, a highlighted paper chip means the current PDF will be attached; right-click the chip to switch between send PDF and skip PDF. A PDF is uploaded only once per webchat session.</li>
+          <li>If nothing happens, reload the <strong>${domain}</strong> tab, confirm the extension is enabled, and keep Zotero and the browser on the same monitor.</li>
+        </ol>
       </div>
     </div>
   `;

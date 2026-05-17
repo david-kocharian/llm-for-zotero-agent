@@ -6606,6 +6606,7 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         targetEntry?.label,
         targetEntry?.modelName,
       );
+      if (panelRoot) panelRoot.dataset.startPageActive = "true";
     } else {
       const isStandalone =
         panelRoot?.dataset?.standalone === "true" ||
