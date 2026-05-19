@@ -24,6 +24,7 @@ import {
 import {
   config,
   AUTO_SCROLL_BOTTOM_THRESHOLD,
+  MAX_FULL_TEXT_PAPER_CONTEXTS,
   MAX_SELECTED_IMAGES,
   MAX_SELECTED_PAPER_CONTEXTS,
   PERSISTED_HISTORY_LIMIT,
@@ -1972,7 +1973,7 @@ export function setupHandlers(
         isPaperContextFullTextMode(
           resolvePaperContextNextSendMode(currentItem.id, paperContext),
         ),
-    );
+    ).slice(0, MAX_FULL_TEXT_PAPER_CONTEXTS);
   };
 
   const getEffectivePdfModePaperContexts = (

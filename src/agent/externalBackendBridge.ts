@@ -1,5 +1,9 @@
 import { config } from "../../package.json";
 import {
+  MAX_FULL_TEXT_PAPER_CONTEXTS,
+  MAX_SELECTED_PAPER_CONTEXTS,
+} from "../shared/contextLimits";
+import {
   getClaudeBridgeUrl,
   getClaudeCustomInstructionPref,
   getConversationSystemPref,
@@ -1030,13 +1034,22 @@ function buildContextEnvelope(request: AgentRuntimeRequest): ContextEnvelope {
     source: typeof selectedSources[index] === "string" ? selectedSources[index] : "unknown",
     text: trimText(text, 280),
   })).filter((row) => row.text);
-  const selectedPapers = normalizePaperRefs(request.selectedPaperContexts, 10);
-  const fullTextPapers = normalizePaperRefs(request.fullTextPaperContexts, 8).map((paper) => ({
+  const selectedPapers = normalizePaperRefs(
+    request.selectedPaperContexts,
+    MAX_SELECTED_PAPER_CONTEXTS,
+  );
+  const fullTextPapers = normalizePaperRefs(
+    request.fullTextPaperContexts,
+    MAX_FULL_TEXT_PAPER_CONTEXTS,
+  ).map((paper) => ({
     itemId: paper.itemId,
     contextItemId: paper.contextItemId,
     title: paper.title,
   }));
-  const pinnedPapers = normalizePaperRefs(request.pinnedPaperContexts, 8).map((paper) => ({
+  const pinnedPapers = normalizePaperRefs(
+    request.pinnedPaperContexts,
+    MAX_FULL_TEXT_PAPER_CONTEXTS,
+  ).map((paper) => ({
     itemId: paper.itemId,
     contextItemId: paper.contextItemId,
     title: paper.title,
@@ -1310,6 +1323,12 @@ async function buildBridgeRuntimeRequest(
         }))
       : undefined,
   };
+}
+
+export function buildExternalBridgeContextEnvelopeForTests(
+  request: AgentRuntimeRequest,
+) {
+  return buildContextEnvelope(request);
 }
 
 function signatureForContextEnvelope(envelope: ContextEnvelope): string {

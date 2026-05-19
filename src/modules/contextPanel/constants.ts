@@ -1,6 +1,11 @@
 import { config } from "../../../package.json";
 import { t } from "../../utils/i18n";
 import { ReasoningLevel as LLMReasoningLevel } from "../../utils/llmClient";
+export {
+  COLLECTION_RETRIEVAL_MAX_PAPERS,
+  MAX_FULL_TEXT_PAPER_CONTEXTS,
+  MAX_SELECTED_PAPER_CONTEXTS,
+} from "../../shared/contextLimits";
 
 // =============================================================================
 // Constants
@@ -18,7 +23,6 @@ export const RETRIEVAL_MIN_ACTIVE_PAPER_CHUNKS = 2;
 export const RETRIEVAL_MIN_OTHER_PAPER_CHUNKS = 1;
 export const PAPER_FOLLOWUP_RETRIEVAL_MIN_CHUNKS = 2;
 export const PAPER_FOLLOWUP_RETRIEVAL_MAX_CHUNKS = 5;
-export const COLLECTION_RETRIEVAL_MAX_PAPERS = 50;
 export const COLLECTION_RETRIEVAL_MIN_SCORE_FALLBACK_PAPERS = 10;
 export const PERSISTED_HISTORY_LIMIT = 200;
 export const AUTO_SCROLL_BOTTOM_THRESHOLD = 64;
@@ -32,7 +36,6 @@ export const MAX_SELECTED_TEXT_CONTEXTS = 5;
 export const MAX_EDITABLE_SHORTCUTS = 10;
 export const MAX_SELECTED_IMAGES = 50;
 export const MAX_UPLOAD_PDF_SIZE_BYTES = 50 * 1024 * 1024;
-export const MAX_SELECTED_PAPER_CONTEXTS = 10;
 export const CHAT_ATTACHMENTS_DIR_NAME = "chat-attachments";
 export const PAPER_CONVERSATION_KEY_BASE = 1_500_000_000;
 export const GLOBAL_CONVERSATION_KEY_BASE = 2_000_000_000;

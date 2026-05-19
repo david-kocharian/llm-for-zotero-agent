@@ -5,7 +5,11 @@ import {
   resolveMultiContextPlan,
   selectContextAssemblyMode,
 } from "../src/modules/contextPanel/multiContextPlanner";
-import { COLLECTION_RETRIEVAL_MAX_PAPERS } from "../src/modules/contextPanel/constants";
+import {
+  COLLECTION_RETRIEVAL_MAX_PAPERS,
+  COLLECTION_RETRIEVAL_MIN_SCORE_FALLBACK_PAPERS,
+  MAX_FULL_TEXT_PAPER_CONTEXTS,
+} from "../src/modules/contextPanel/constants";
 import {
   buildChunkMetadata,
   buildPaperKey,
@@ -626,9 +630,41 @@ describe("multiContextPlanner", function () {
     assert.match(plan.contextText, /Title: Pinned [AB]/);
   });
 
+  it("caps full-text prompt preload without dropping retrieval paper refs", async function () {
+    const papers = Array.from(
+      { length: MAX_FULL_TEXT_PAPER_CONTEXTS + 5 },
+      (_, index) => ({
+        itemId: 7_000 + index,
+        contextItemId: 8_000 + index,
+        title: `Full cap paper ${String(index + 1).padStart(2, "0")}`,
+      }),
+    );
+
+    const plan = await resolveMultiContextPlan({
+      conversationMode: "open",
+      activeContextItem: null,
+      question: "Compare the selected papers.",
+      paperContexts: papers,
+      fullTextPaperContexts: papers,
+      historyPaperContexts: [],
+      history: [],
+      model: "gpt-5.4",
+      advanced: {
+        temperature: 0.2,
+        maxTokens: 512,
+        inputTokenCap: 1_000_000,
+      },
+    });
+
+    assert.equal(plan.mode, "full");
+    assert.equal(plan.selectedPaperCount, MAX_FULL_TEXT_PAPER_CONTEXTS);
+    assert.include(plan.contextText, "Title: Full cap paper 30");
+    assert.notInclude(plan.contextText, "Title: Full cap paper 31");
+  });
+
   it("metadata-ranks large collection scopes and caps deep retrieval", async function () {
     const itemIds: number[] = [];
-    for (let index = 1; index <= 60; index += 1) {
+    for (let index = 1; index <= 120; index += 1) {
       const suffix = String(index).padStart(3, "0");
       itemIds.push(1_000 + index);
       registerMockPaper({
@@ -685,12 +721,13 @@ describe("multiContextPlanner", function () {
     assert.include(plan.contextText, "metadata-ranked shortlist");
     assert.include(
       plan.contextText,
-      `${COLLECTION_RETRIEVAL_MAX_PAPERS} of 60 PDF-backed papers selected`,
+      `${COLLECTION_RETRIEVAL_MAX_PAPERS} of 120 PDF-backed papers selected`,
     );
     assert.include(plan.contextText, "Title: Calibration Drift Paper 001");
-    assert.include(plan.contextText, "Title: Calibration Drift Paper 060");
-    assert.include(plan.contextText, "itemId=1060");
-    assert.include(plan.contextText, "contextItemId=2060");
+    assert.include(plan.contextText, "Title: Calibration Drift Paper 100");
+    assert.include(plan.contextText, "Title: Calibration Drift Paper 120");
+    assert.include(plan.contextText, "itemId=1100");
+    assert.include(plan.contextText, "contextItemId=2100");
     assert.isAtMost(plan.selectedPaperCount, COLLECTION_RETRIEVAL_MAX_PAPERS);
     assert.isAtLeast(plan.citationPaperContexts?.length || 0, 1);
     assert.isAtMost(
@@ -703,7 +740,66 @@ describe("multiContextPlanner", function () {
     );
     assert.notInclude(
       (plan.citationPaperContexts || []).map((paper) => paper.title),
-      "Calibration Drift Paper 060",
+      "Calibration Drift Paper 120",
+    );
+  });
+
+  it("keeps no-score collection fallback below the broad shortlist cap", async function () {
+    const itemIds: number[] = [];
+    for (let index = 1; index <= 60; index += 1) {
+      itemIds.push(9_000 + index);
+      registerMockPaper({
+        itemId: 9_000 + index,
+        contextItemId: 10_000 + index,
+        title: `Unrelated Folder Paper ${String(index).padStart(3, "0")}`,
+        firstCreator: "NoMatch",
+        year: "2026",
+        abstractNote: "Alpha beta gamma content.",
+        pdfContext: buildPdfContext(`Unrelated Folder Paper ${index}`, [
+          "Alpha beta gamma content.",
+        ]),
+      });
+    }
+    zoteroCollections.set(88, {
+      id: 88,
+      name: "Unrelated Folder",
+      libraryID: 1,
+      getChildItems: () => itemIds,
+      getChildCollections: () => [],
+    });
+
+    const plan = await resolveMultiContextPlan({
+      conversationMode: "open",
+      activeContextItem: null,
+      question: "zzzznonmatch",
+      collectionContexts: [
+        {
+          collectionId: 88,
+          name: "Unrelated Folder",
+          libraryID: 1,
+        },
+      ],
+      paperContexts: [],
+      fullTextPaperContexts: [],
+      historyPaperContexts: [],
+      history: [],
+      model: "gpt-4o-mini",
+      advanced: {
+        temperature: 0.2,
+        maxTokens: 512,
+        inputTokenCap: 8_000,
+      },
+    });
+
+    assert.include(
+      plan.contextText,
+      `${COLLECTION_RETRIEVAL_MIN_SCORE_FALLBACK_PAPERS} of 60 PDF-backed papers selected`,
+    );
+    assert.include(plan.contextText, "Title: Unrelated Folder Paper 010");
+    assert.include(plan.contextText, "Title: Unrelated Folder Paper 060");
+    assert.isAtMost(
+      plan.selectedPaperCount,
+      COLLECTION_RETRIEVAL_MIN_SCORE_FALLBACK_PAPERS,
     );
   });
 

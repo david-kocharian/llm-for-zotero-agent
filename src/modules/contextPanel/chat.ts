@@ -79,6 +79,7 @@ import { inferLegacyProviderProtocol } from "../../utils/providerProtocol";
 import {
   PERSISTED_HISTORY_LIMIT,
   AUTO_SCROLL_BOTTOM_THRESHOLD,
+  MAX_FULL_TEXT_PAPER_CONTEXTS,
   MAX_SELECTED_IMAGES,
   formatFigureCountLabel,
   formatPaperCountLabel,
@@ -3887,7 +3888,13 @@ function derivePdfModePaperKeys(
 function normalizeEditableFullTextPaperContexts(
   fullTextPaperContexts?: PaperContextRef[],
 ): PaperContextRef[] {
-  return normalizePaperContexts(fullTextPaperContexts);
+  return limitFullTextPaperContexts(normalizePaperContexts(fullTextPaperContexts));
+}
+
+function limitFullTextPaperContexts(
+  paperContexts: PaperContextRef[],
+): PaperContextRef[] {
+  return paperContexts.slice(0, MAX_FULL_TEXT_PAPER_CONTEXTS);
 }
 
 function includeAutoLoadedPaperContext(
@@ -3909,8 +3916,8 @@ function includeAutoLoadedPaperContext(
       paperContexts: normalizedPaperContexts,
       fullTextPaperContexts:
         fullTextPaperContexts === undefined
-          ? normalizedPaperContexts
-          : normalizedFullTextPaperContexts,
+          ? limitFullTextPaperContexts(normalizedPaperContexts)
+          : limitFullTextPaperContexts(normalizedFullTextPaperContexts),
     };
   }
   const autoLoadedPaperContext = resolveAutoLoadedPaperContextForItem(
@@ -3920,7 +3927,9 @@ function includeAutoLoadedPaperContext(
   if (!autoLoadedPaperContext) {
     return {
       paperContexts: normalizedPaperContexts,
-      fullTextPaperContexts: normalizedFullTextPaperContexts,
+      fullTextPaperContexts: limitFullTextPaperContexts(
+        normalizedFullTextPaperContexts,
+      ),
     };
   }
   // Always include auto-loaded paper in paperContexts (for display in chat history).
@@ -3933,13 +3942,15 @@ function includeAutoLoadedPaperContext(
       ...normalizedPaperContexts,
     ]),
     fullTextPaperContexts: isExcludedFromTextPipeline
-      ? normalizedFullTextPaperContexts
+      ? limitFullTextPaperContexts(normalizedFullTextPaperContexts)
       : fullTextPaperContexts === undefined
-        ? normalizePaperContexts([
-            autoLoadedPaperContext,
-            ...normalizedFullTextPaperContexts,
-          ])
-        : normalizedFullTextPaperContexts,
+        ? limitFullTextPaperContexts(
+            normalizePaperContexts([
+              autoLoadedPaperContext,
+              ...normalizedFullTextPaperContexts,
+            ]),
+          )
+        : limitFullTextPaperContexts(normalizedFullTextPaperContexts),
   };
 }
 

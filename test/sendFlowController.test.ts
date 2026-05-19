@@ -68,6 +68,7 @@ describe("sendFlowController", function () {
       body: {} as Element,
       inputBox,
       getItem: () => item,
+      getContextSourceItem: () => item,
       closeSlashMenu: () => undefined,
       closePaperPicker: () => undefined,
       getSelectedTextContextEntries: () => selectedTextContexts,

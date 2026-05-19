@@ -8,6 +8,7 @@ import { estimateTextTokens } from "../../utils/modelInputCap";
 import {
   COLLECTION_RETRIEVAL_MAX_PAPERS,
   COLLECTION_RETRIEVAL_MIN_SCORE_FALLBACK_PAPERS,
+  MAX_FULL_TEXT_PAPER_CONTEXTS,
   PAPER_FOLLOWUP_RETRIEVAL_MAX_CHUNKS,
   PAPER_FOLLOWUP_RETRIEVAL_MIN_CHUNKS,
   RETRIEVAL_MMR_LAMBDA,
@@ -185,6 +186,12 @@ function resolveContextItem(ref: PaperContextRef): Zotero.Item | null {
 
 function normalizePaperContextEntries(value: unknown): PaperContextRef[] {
   return normalizePaperContextRefs(value, { sanitizeText });
+}
+
+function limitFullTextPaperContexts(
+  paperContexts: PaperContextRef[],
+): PaperContextRef[] {
+  return paperContexts.slice(0, MAX_FULL_TEXT_PAPER_CONTEXTS);
 }
 
 function buildPaperRefFromContextItem(
@@ -1071,8 +1078,8 @@ async function resolvePlannerPaperEntries(params: {
   historyPaperContexts: PaperContextRef[] | undefined;
 }): Promise<PlannerPaperEntry[]> {
   const selected = normalizePaperContextEntries(params.paperContexts || []);
-  const explicitFullText = normalizePaperContextEntries(
-    params.fullTextPaperContexts || [],
+  const explicitFullText = limitFullTextPaperContexts(
+    normalizePaperContextEntries(params.fullTextPaperContexts || []),
   );
   const historyPool = normalizePaperContextEntries(
     params.historyPaperContexts || [],
@@ -1168,11 +1175,14 @@ export async function resolveMultiContextPlan(params: {
   systemPrompt?: string;
   signal?: AbortSignal;
 }): Promise<MultiContextPlan> {
+  const fullTextPaperContexts = limitFullTextPaperContexts(
+    normalizePaperContextEntries(params.fullTextPaperContexts || []),
+  );
   const papers = await resolvePlannerPaperEntries({
     conversationMode: params.conversationMode,
     activeContextItem: params.activeContextItem,
     paperContexts: params.paperContexts,
-    fullTextPaperContexts: params.fullTextPaperContexts,
+    fullTextPaperContexts,
     historyPaperContexts: params.historyPaperContexts,
   });
   const collectionScope = await resolveCollectionScopePapers({
@@ -1222,7 +1232,7 @@ export async function resolveMultiContextPlan(params: {
       strategy: plan.strategy,
       contextText: plan.contextText,
       paperContexts: params.paperContexts,
-      fullTextPaperContexts: params.fullTextPaperContexts,
+      fullTextPaperContexts,
     }),
   });
 
