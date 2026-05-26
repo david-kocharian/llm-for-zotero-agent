@@ -167,16 +167,24 @@ function defaultCancelPendingRequest(conversationKey: number): void {
 }
 
 function clearSharedRuntimeCaches(
-  conversationKey: number,
+  target: ConversationDeletionTarget,
   deps: ConversationDeletionDeps,
 ): void {
+  const conversationKey = normalizePositiveInt(target.conversationKey);
+  if (!conversationKey) return;
   chatHistory.delete(conversationKey);
   loadedConversationKeys.delete(conversationKey);
   selectedModelCache.delete(conversationKey);
   selectedReasoningCache.delete(conversationKey);
   selectedReasoningProviderCache.delete(conversationKey);
   deps.resetSessionTokens?.(conversationKey);
-  deps.clearTransientComposeStateForItem?.(conversationKey);
+  const composeStateKey =
+    target.kind === "paper"
+      ? normalizePositiveInt(target.paperItemID)
+      : conversationKey;
+  if (composeStateKey) {
+    deps.clearTransientComposeStateForItem?.(composeStateKey);
+  }
   clearConversationSummaryFromCache(conversationKey);
 }
 
@@ -407,7 +415,7 @@ export async function finalizeConversationDeletion(
     result,
     "runtime_cache",
     "LLM: Failed to clear deleted conversation runtime caches",
-    () => clearSharedRuntimeCaches(conversationKey, deps),
+    () => clearSharedRuntimeCaches(normalizedTarget, deps),
     log,
   );
 

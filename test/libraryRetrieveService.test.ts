@@ -286,6 +286,62 @@ describe("LibraryRetrieveService", function () {
     assert.equal(result.answerContract.snippetCoverage, "sampled");
   });
 
+  it("does not return the same chunk as both exact and BM25 evidence", async function () {
+    const entries = [
+      makeItem(1, "Duplicate evidence phrase paper", "", {
+        hasPdf: true,
+      }),
+    ];
+    let candidateBuilderCalled = false;
+    const service = new LibraryRetrieveService(
+      makeGateway(entries) as any,
+      {
+        ensurePaperContext: async () =>
+          makePdfContext([
+            "Methods\nThe duplicate evidence phrase appears in this chunk.",
+          ]),
+      } as any,
+      async (paperContext): Promise<PaperContextCandidate[]> => {
+        candidateBuilderCalled = true;
+        return [
+          {
+            paperKey: `${paperContext.itemId}:${paperContext.contextItemId}`,
+            itemId: paperContext.itemId,
+            contextItemId: paperContext.contextItemId,
+            title: paperContext.title,
+            chunkIndex: 0,
+            chunkText:
+              "Methods\nThe duplicate evidence phrase appears in this chunk.",
+            chunkKind: "methods",
+            estimatedTokens: 10,
+            bm25Score: 1,
+            embeddingScore: 0,
+            hybridScore: 1,
+            evidenceScore: 1,
+          },
+        ];
+      },
+    );
+
+    const result = await service.retrieve({
+      query: "duplicate evidence phrase",
+      depth: "evidence",
+      perPaperTopK: 3,
+      maxTotalSnippets: 3,
+      request: {
+        conversationKey: 1,
+        mode: "agent",
+        userText: "Find duplicate evidence phrase",
+        libraryID: 1,
+      },
+    });
+
+    assert.isTrue(candidateBuilderCalled);
+    assert.lengthOf(result.snippets, 1);
+    assert.equal(result.snippets[0].matchMethod, "exact");
+    assert.equal(result.snippets[0].chunkIndex, 0);
+  });
+
   it("verify mode returns exact snippets without falling back to semantic candidates", async function () {
     const entries = [
       makeItem(1, "Calcium imaging paper", "A method paper.", {
@@ -323,6 +379,45 @@ describe("LibraryRetrieveService", function () {
     assert.lengthOf(result.snippets, 1);
     assert.equal(result.snippets[0].matchMethod, "exact");
     assert.include(result.methodsUsed, "exact");
+  });
+
+  it("searches explicit item scopes even when metadata and quicksearch do not match", async function () {
+    const entries = [
+      makeItem(7, "Unrelated title", "", {
+        hasPdf: true,
+      }),
+    ];
+    const service = new LibraryRetrieveService(
+      makeGateway(entries) as any,
+      {
+        ensurePaperContext: async () =>
+          makePdfContext([
+            "Results\nThe body contains the rare signature phrase only here.",
+          ]),
+      } as any,
+      async () => [],
+    );
+
+    const result = await service.retrieve({
+      query: "rare signature phrase",
+      depth: "verify",
+      scope: { libraryID: 1, itemIds: [7] },
+      request: {
+        conversationKey: 1,
+        mode: "agent",
+        userText: "Verify rare signature phrase in this item",
+        libraryID: 1,
+      },
+    });
+
+    assert.deepEqual(
+      result.candidates.map((candidate) => candidate.itemId),
+      ["7"],
+    );
+    assert.equal(result.resourcePool.queryCoverage.fullTextSearched, 1);
+    assert.lengthOf(result.snippets, 1);
+    assert.equal(result.snippets[0].itemId, "7");
+    assert.equal(result.snippets[0].matchMethod, "exact");
   });
 
   it("enumerate scans indexed text across the scoped pool while bounding snippet expansion", async function () {

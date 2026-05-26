@@ -102,6 +102,9 @@ describe("conversationDeletion", function () {
         paperItemID: 44,
       },
       {
+        clearTransientComposeStateForItem: (itemId) => {
+          calls.push(`compose:${itemId}`);
+        },
         clearAgentToolCaches: (conversationKey) => {
           calls.push(`tool:${conversationKey}`);
         },
@@ -113,6 +116,8 @@ describe("conversationDeletion", function () {
     );
 
     assert.isTrue(result.ok);
+    assert.include(calls, "compose:44");
+    assert.notInclude(calls, "compose:7102");
     assert.includeMembers(calls, [
       "clear-upstream:7102",
       "delete-paper:7102",

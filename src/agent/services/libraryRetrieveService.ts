@@ -149,6 +149,7 @@ export type LibraryRetrieveSnippet = {
   snippetId: string;
   itemId: string;
   contextItemId?: string;
+  chunkIndex?: number;
   title: string;
   sourceKind: LibraryRetrieveSourceKind;
   matchMethod: LibraryRetrieveMatchMethod;
@@ -679,6 +680,17 @@ function matchMethodFromCandidate(
   return "bm25";
 }
 
+function snippetChunkKey(snippet: LibraryRetrieveSnippet): string | null {
+  if (!snippet.contextItemId || snippet.chunkIndex === undefined) return null;
+  const chunkIndex = Number(snippet.chunkIndex);
+  if (!Number.isFinite(chunkIndex) || chunkIndex < 0) return null;
+  return `${snippet.itemId}:${snippet.contextItemId}:${Math.floor(chunkIndex)}`;
+}
+
+function candidateChunkKey(candidate: PaperContextCandidate): string {
+  return `${candidate.itemId}:${candidate.contextItemId}:${candidate.chunkIndex}`;
+}
+
 function resourceStates(
   record: ResourceRecord,
 ): LibraryRetrieveResourceState[] {
@@ -1076,7 +1088,10 @@ export class LibraryRetrieveService {
       input.intent === "enumerate" ||
       input.intent === "verify" ||
       input.intent === "summarize";
-    const candidateSource = shouldPreferMatchedLedger ? matchedRecords : sorted;
+    const candidateSource =
+      shouldPreferMatchedLedger && scope.type !== "items"
+        ? matchedRecords
+        : sorted;
     const candidateRecords =
       input.depth === "pool"
         ? []
@@ -1515,10 +1530,9 @@ export class LibraryRetrieveService {
         },
       );
       const seenChunks = new Set(
-        snippets.map(
-          (snippet) =>
-            `${paperContext.contextItemId}:${snippet.charStart}:${snippet.charEnd}`,
-        ),
+        snippets
+          .map((snippet) => snippetChunkKey(snippet))
+          .filter((key): key is string => Boolean(key)),
       );
       for (const candidate of candidates) {
         if (snippets.length >= params.maxSnippets) break;
@@ -1527,7 +1541,7 @@ export class LibraryRetrieveService {
           params.input.methods.includes("semantic"),
         );
         if (matchMethod === "semantic") params.methodsUsed.add("semantic");
-        const key = `${candidate.contextItemId}:${candidate.chunkIndex}`;
+        const key = candidateChunkKey(candidate);
         if (seenChunks.has(key)) continue;
         seenChunks.add(key);
         for (const query of candidate.matchedQueryVariants || []) {
@@ -1537,6 +1551,7 @@ export class LibraryRetrieveService {
           snippetId: `lr_${candidate.itemId}_${candidate.contextItemId}_${candidate.chunkIndex}_${matchMethod}`,
           itemId: String(candidate.itemId),
           contextItemId: String(candidate.contextItemId),
+          chunkIndex: candidate.chunkIndex,
           title: candidate.title,
           sourceKind,
           matchMethod,
@@ -1578,6 +1593,7 @@ export class LibraryRetrieveService {
         snippetId: `lr_${params.paperContext.itemId}_${params.paperContext.contextItemId}_${index}_exact`,
         itemId: String(params.paperContext.itemId),
         contextItemId: String(params.paperContext.contextItemId),
+        chunkIndex: index,
         title: params.paperContext.title,
         sourceKind: params.sourceKind,
         matchMethod: "exact",
