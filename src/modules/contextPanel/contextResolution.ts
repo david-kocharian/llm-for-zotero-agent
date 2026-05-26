@@ -1482,6 +1482,11 @@ export function applySelectedTextPreview(body: Element, itemId: number) {
       if (selectedSource === "note-edit") {
         return "Editing";
       }
+      if (selectedSource === "model") {
+        return selectedContexts.length > 1 && index > 0
+          ? `Model Response (${index + 1})`
+          : "Model Response";
+      }
       const pageLabel = formatSelectedTextContextPageLabel(selectedContext);
       if (selectedSource === "pdf" && pageLabel) {
         if (isGlobalConversation) {
