@@ -169,4 +169,66 @@ describe("patchSkillFrontmatter", function () {
     assert.include(customPatched, "contexts: paper-set");
     assert.notInclude(customPatched, "contexts: single-paper");
   });
+
+  it("updates known historical shipped contexts without touching the body", function () {
+    const onDisk = [
+      "---",
+      "id: foo",
+      "version: 2",
+      "description: already current",
+      "contexts: paper-set",
+      "match: /user pattern/i",
+      "---",
+      "",
+      "User customized body.",
+    ].join("\n");
+    const shipped = [
+      "---",
+      "id: foo",
+      "version: 2",
+      "description: already current",
+      "contexts: paper-set,library-corpus",
+      "match: /shipped pattern/i",
+      "---",
+      "",
+      "Shipped body.",
+    ].join("\n");
+
+    const patched = patchSkillFrontmatter(onDisk, shipped, {
+      historicalContexts: ["paper-set"],
+    }) as string;
+
+    assert.include(patched, "contexts: paper-set,library-corpus");
+    assert.include(patched, "match: /user pattern/i");
+    assert.notInclude(patched, "match: /shipped pattern/i");
+    assert.include(patched, "User customized body.");
+    assert.notInclude(patched, "Shipped body.");
+  });
+
+  it("preserves contexts that do not match known shipped history", function () {
+    const onDisk = [
+      "---",
+      "id: foo",
+      "version: 2",
+      "description: already current",
+      "contexts: any",
+      "---",
+      "User customized body.",
+    ].join("\n");
+    const shipped = [
+      "---",
+      "id: foo",
+      "version: 2",
+      "description: already current",
+      "contexts: paper-set,library-corpus",
+      "---",
+      "Shipped body.",
+    ].join("\n");
+
+    const patched = patchSkillFrontmatter(onDisk, shipped, {
+      historicalContexts: ["paper-set"],
+    });
+
+    assert.isNull(patched);
+  });
 });
