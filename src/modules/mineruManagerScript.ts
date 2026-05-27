@@ -133,9 +133,9 @@ export type MineruManagerVisibilityInput = Pick<
 >;
 
 export function shouldShowMineruManagerItem(
-  item: MineruManagerVisibilityInput,
+  _item: MineruManagerVisibilityInput,
 ): boolean {
-  return !item.excluded || item.availability !== "missing";
+  return true;
 }
 
 export type MineruManagerActionLabelInput = {

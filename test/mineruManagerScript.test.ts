@@ -19,8 +19,8 @@ function child(
 
 describe("mineruManagerScript", function () {
   describe("shouldShowMineruManagerItem", function () {
-    it("hides uncached rows skipped by parsing filters", function () {
-      assert.isFalse(
+    it("shows uncached rows skipped by parsing filters", function () {
+      assert.isTrue(
         shouldShowMineruManagerItem({
           excluded: true,
           availability: "missing",
