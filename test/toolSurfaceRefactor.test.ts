@@ -2,6 +2,7 @@ import { assert } from "chai";
 import { createBuiltInToolRegistry } from "../src/agent/tools";
 import {
   BUILTIN_SKILL_FILES,
+  getSkillContextEligibility,
   getMatchedSkillIds,
   parseSkill,
   setUserSkills,
@@ -1063,7 +1064,10 @@ describe("semantic tool surface", function () {
 
   it("compare-papers guidance prefers one targeted batched read for method comparisons", function () {
     const raw = BUILTIN_SKILL_FILES["compare-papers.md"];
+    assert.include(raw, "contexts: paper-set,library-corpus");
     assert.include(raw, "targeted first when the dimension is known");
+    assert.include(raw, "A selected Zotero collection/folder is also a valid comparison corpus");
+    assert.include(raw, "library_retrieve({ query:'methods methodology method section'");
     assert.include(
       raw,
       "paper_read({ mode:'targeted', query:'methods methodology method section', targets:[...] })",
@@ -1077,6 +1081,79 @@ describe("semantic tool surface", function () {
       raw,
       "Do not call visual/page tools, `file_io`, or `run_command`",
     );
+  });
+
+  it("matches compare-papers for collection-scoped comparison requests", function () {
+    setUserSkills([parseSkill(BUILTIN_SKILL_FILES["compare-papers.md"])]);
+
+    assert.include(
+      getMatchedSkillIds({
+        userText: "compare the methods of all papers in this folder",
+        selectedCollectionContexts: [
+          { collectionId: 4, name: "Computational_Psychiatry", libraryID: 1 },
+        ],
+      }),
+      "compare-papers",
+    );
+  });
+
+  it("allows compare-papers slash selection for selected collections", function () {
+    const skill = parseSkill(BUILTIN_SKILL_FILES["compare-papers.md"]);
+
+    assert.deepEqual(
+      getSkillContextEligibility(skill, {
+        userText: "",
+        selectedCollectionContexts: [
+          { collectionId: 4, name: "Computational_Psychiatry", libraryID: 1 },
+        ],
+      }),
+      { eligible: true },
+    );
+  });
+
+  it("matches evidence-based-qa for collection-scoped evidence requests", function () {
+    setUserSkills([parseSkill(BUILTIN_SKILL_FILES["evidence-based-qa.md"])]);
+
+    assert.include(
+      getMatchedSkillIds({
+        userText: "find evidence in these papers for this claim",
+        selectedCollectionContexts: [
+          { collectionId: 4, name: "Computational_Psychiatry", libraryID: 1 },
+        ],
+      }),
+      "evidence-based-qa",
+    );
+  });
+
+  it("allows evidence-based-qa slash selection for selected collections", function () {
+    const skill = parseSkill(BUILTIN_SKILL_FILES["evidence-based-qa.md"]);
+
+    assert.deepEqual(
+      getSkillContextEligibility(skill, {
+        userText: "",
+        selectedCollectionContexts: [
+          { collectionId: 4, name: "Computational_Psychiatry", libraryID: 1 },
+        ],
+      }),
+      { eligible: true },
+    );
+  });
+
+  it("explains multi-context skill eligibility requirements", function () {
+    const evidenceSkill = parseSkill(BUILTIN_SKILL_FILES["evidence-based-qa.md"]);
+    const compareSkill = parseSkill(BUILTIN_SKILL_FILES["compare-papers.md"]);
+
+    assert.deepEqual(
+      getSkillContextEligibility(evidenceSkill, { userText: "" }),
+      {
+        eligible: false,
+        reason: "Requires one paper or multiple papers or collection/library context",
+      },
+    );
+    assert.deepEqual(getSkillContextEligibility(compareSkill, { userText: "" }), {
+      eligible: false,
+      reason: "Requires multiple papers or collection/library context",
+    });
   });
 
   it("web_search returns cited URL results without fetching result pages", async function () {

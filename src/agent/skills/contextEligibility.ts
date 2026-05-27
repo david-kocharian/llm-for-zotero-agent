@@ -134,21 +134,24 @@ function reasonForContexts(
   ) {
     return "Targets collection/library context";
   }
-  if (contexts.length === 1) {
-    switch (contexts[0]) {
-      case "single-paper":
-        return "Requires one paper";
-      case "paper-set":
-        return "Requires multiple papers";
-      case "library-corpus":
-        return "Requires collection/library context";
-      case "note":
-        return "Requires note context";
-      case "any":
-        return "";
-    }
-  }
-  return "Requires matching context";
+  const requirements = contexts
+    .map((context) => {
+      switch (context) {
+        case "single-paper":
+          return "one paper";
+        case "paper-set":
+          return "multiple papers";
+        case "library-corpus":
+          return "collection/library context";
+        case "note":
+          return "note context";
+        case "any":
+          return "";
+      }
+    })
+    .filter(Boolean);
+  if (!requirements.length) return "";
+  return `Requires ${requirements.join(" or ")}`;
 }
 
 export function getSkillContextEligibility(

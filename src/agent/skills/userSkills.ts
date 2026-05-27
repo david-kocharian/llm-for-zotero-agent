@@ -139,10 +139,10 @@ const BUILTIN_BOOTSTRAP_RAW_HASHES: Partial<
   Record<string, ReadonlyArray<string>>
 > = {
   "library-analysis.md": ["ftq8b2"],
-  "compare-papers.md": ["1jvl4lu"],
+  "compare-papers.md": ["1jvl4lu", "1j5fq18"],
   "analyze-figures.md": ["msvqtf", "17o1bpl"],
   "simple-paper-qa.md": ["1r2ban6"],
-  "evidence-based-qa.md": ["1er2ubr"],
+  "evidence-based-qa.md": ["1er2ubr", "zjwar9"],
   "write-note.md": ["172xn8t"],
   "literature-review.md": ["kbrknh"],
   "import-cited-reference.md": ["19bomz1"],
