@@ -14,7 +14,10 @@ import { invalidatePaperSearchCache } from "./modules/contextPanel/paperSearch";
 import { initChatStore } from "./utils/chatStore";
 import { initClaudeCodeStore } from "./claudeCode/store";
 import { initCodexAppServerStore } from "./codexAppServer/store";
-import { auditConversationIntegrity } from "./shared/conversationIntegrity";
+import {
+  auditConversationIntegrity,
+  repairConversationCatalogSummaries,
+} from "./shared/conversationIntegrity";
 import { refreshConversationSearchIndex } from "./shared/conversationSearchIndex";
 import { markConversationIDTransitionMigrationApplied } from "./shared/conversationSchemaMigrations";
 import { ensureClaudeProjectBootstrapIfEnabled } from "./claudeCode/bootstrapGate";
@@ -75,6 +78,11 @@ async function onStartup() {
     ztoolkit.log("LLM: Failed to initialize Codex App Server store", err);
   }
   if (chatStoreReady && claudeStoreReady && codexStoreReady) {
+    try {
+      await repairConversationCatalogSummaries();
+    } catch (err) {
+      ztoolkit.log("LLM: Failed to repair conversation catalog summaries", err);
+    }
     try {
       await markConversationIDTransitionMigrationApplied();
     } catch (err) {

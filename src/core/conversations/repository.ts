@@ -1,6 +1,7 @@
 import {
   createClaudeGlobalConversation,
   createClaudePaperConversation,
+  deleteClaudeConversationLocalRows,
   deleteClaudeConversation,
   deleteClaudeTurnMessages,
   ensureClaudeGlobalConversation,
@@ -10,6 +11,7 @@ import {
   listAllClaudePaperConversationsByLibrary,
   listClaudeGlobalConversations,
   listClaudePaperConversations,
+  preflightDeleteClaudeConversationLocalRows,
   setClaudeConversationTitle,
   touchClaudeConversationTitle,
   upsertClaudeConversationSummary,
@@ -17,6 +19,7 @@ import {
 import {
   createCodexGlobalConversation,
   createCodexPaperConversation,
+  deleteCodexConversationLocalRows,
   deleteCodexConversation,
   deleteCodexTurnMessages,
   ensureCodexGlobalConversation,
@@ -26,6 +29,7 @@ import {
   listAllCodexPaperConversationsByLibrary,
   listCodexGlobalConversations,
   listCodexPaperConversations,
+  preflightDeleteCodexConversationLocalRows,
   setCodexConversationTitle,
   touchCodexConversationTitle,
   upsertCodexConversationSummary,
@@ -45,6 +49,7 @@ import {
   clearConversationTitle,
   createGlobalConversation,
   createPaperConversation,
+  deleteUpstreamConversationLocalRows,
   deleteGlobalConversation,
   deletePaperConversation,
   deleteTurnMessages as deleteUpstreamTurnMessages,
@@ -56,6 +61,7 @@ import {
   listAllPaperConversationsByLibrary,
   listGlobalConversations,
   listPaperConversations,
+  preflightDeleteUpstreamConversationLocalRows,
   setGlobalConversationTitle,
   setPaperConversationTitle,
   touchEmptyGlobalConversation,
@@ -696,5 +702,37 @@ export const conversationRepository = {
       return;
     }
     await deleteGlobalConversation(conversationKey);
+  },
+
+  async deleteLocalConversationRows(
+    target: ConversationCatalogMutationTarget,
+  ): Promise<void> {
+    const conversationKey = normalizePositiveInt(target.conversationKey);
+    if (!conversationKey) return;
+    if (target.system === "claude_code") {
+      await deleteClaudeConversationLocalRows(conversationKey);
+      return;
+    }
+    if (target.system === "codex") {
+      await deleteCodexConversationLocalRows(conversationKey);
+      return;
+    }
+    await deleteUpstreamConversationLocalRows(conversationKey, target.kind);
+  },
+
+  async preflightDeleteLocalConversationRows(
+    target: ConversationCatalogMutationTarget,
+  ): Promise<void> {
+    const conversationKey = normalizePositiveInt(target.conversationKey);
+    if (!conversationKey) return;
+    if (target.system === "claude_code") {
+      await preflightDeleteClaudeConversationLocalRows(conversationKey);
+      return;
+    }
+    if (target.system === "codex") {
+      await preflightDeleteCodexConversationLocalRows(conversationKey);
+      return;
+    }
+    await preflightDeleteUpstreamConversationLocalRows(conversationKey);
   },
 };

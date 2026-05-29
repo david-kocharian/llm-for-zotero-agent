@@ -22,7 +22,10 @@ describe("chatStore note contexts", function () {
     return query as { sql: string; params: unknown[] };
   }
 
-  it("persists selectedTextNoteContexts when appending a message", async function () {
+  function installAppendMessageDbFixture(): Array<{
+    sql: string;
+    params: unknown[];
+  }> {
     const queries: Array<{ sql: string; params: unknown[] }> = [];
     globalScope.Zotero = {
       ...(originalZotero || {}),
@@ -31,8 +34,15 @@ describe("chatStore note contexts", function () {
           queries.push({ sql, params: Array.isArray(params) ? params : [] });
           return [];
         },
+        executeTransaction: async (callback: () => Promise<unknown>) =>
+          callback(),
       },
     };
+    return queries;
+  }
+
+  it("persists selectedTextNoteContexts when appending a message", async function () {
+    const queries = installAppendMessageDbFixture();
 
     await appendMessage(42, {
       role: "user",
@@ -66,16 +76,7 @@ describe("chatStore note contexts", function () {
   });
 
   it("persists context usage fields when appending a message", async function () {
-    const queries: Array<{ sql: string; params: unknown[] }> = [];
-    globalScope.Zotero = {
-      ...(originalZotero || {}),
-      DB: {
-        queryAsync: async (sql: string, params?: unknown[]) => {
-          queries.push({ sql, params: Array.isArray(params) ? params : [] });
-          return [];
-        },
-      },
-    };
+    const queries = installAppendMessageDbFixture();
 
     await appendMessage(42, {
       role: "assistant",
@@ -92,16 +93,7 @@ describe("chatStore note contexts", function () {
   });
 
   it("persists an explicit empty model attachment split", async function () {
-    const queries: Array<{ sql: string; params: unknown[] }> = [];
-    globalScope.Zotero = {
-      ...(originalZotero || {}),
-      DB: {
-        queryAsync: async (sql: string, params?: unknown[]) => {
-          queries.push({ sql, params: Array.isArray(params) ? params : [] });
-          return [];
-        },
-      },
-    };
+    const queries = installAppendMessageDbFixture();
 
     await appendMessage(42, {
       role: "user",
@@ -126,16 +118,7 @@ describe("chatStore note contexts", function () {
   });
 
   it("persists selectedCollectionContexts when appending a message", async function () {
-    const queries: Array<{ sql: string; params: unknown[] }> = [];
-    globalScope.Zotero = {
-      ...(originalZotero || {}),
-      DB: {
-        queryAsync: async (sql: string, params?: unknown[]) => {
-          queries.push({ sql, params: Array.isArray(params) ? params : [] });
-          return [];
-        },
-      },
-    };
+    const queries = installAppendMessageDbFixture();
 
     await appendMessage(42, {
       role: "user",

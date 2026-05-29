@@ -1,5 +1,8 @@
 import { assert } from "chai";
-import { auditConversationIntegrity } from "../src/shared/conversationIntegrity";
+import {
+  auditConversationIntegrity,
+  repairConversationCatalogSummaries,
+} from "../src/shared/conversationIntegrity";
 
 function installConversationIntegrityDb(params: {
   tables?: string[];
@@ -113,6 +116,71 @@ describe("conversation integrity audit", function () {
             sql.includes("llm_for_zotero_paper_conversations"),
         ),
       );
+    } finally {
+      restore();
+    }
+  });
+
+  it("reports stale cached catalog summary fields", async function () {
+    const { restore } = installConversationIntegrityDb({
+      tables: [
+        "llm_for_zotero_global_conversations",
+        "llm_for_zotero_chat_messages",
+      ],
+      countForSql: (sql) => {
+        if (sql.includes("c.first_user_title")) return 5;
+        if (sql.includes("c.last_activity_at")) return 6;
+        if (sql.includes("c.user_turn_count")) return 7;
+        return 0;
+      },
+    });
+
+    try {
+      const report = await auditConversationIntegrity();
+
+      assert.isFalse(report.ok);
+      assert.deepInclude(report.issues, {
+        code: "catalog_summary_first_user_title_mismatch",
+        tableName: "llm_for_zotero_global_conversations",
+        system: "upstream",
+        rowCount: 5,
+      });
+      assert.deepInclude(report.issues, {
+        code: "catalog_summary_last_activity_mismatch",
+        tableName: "llm_for_zotero_global_conversations",
+        system: "upstream",
+        rowCount: 6,
+      });
+      assert.deepInclude(report.issues, {
+        code: "catalog_summary_user_turn_count_mismatch",
+        tableName: "llm_for_zotero_global_conversations",
+        system: "upstream",
+        rowCount: 7,
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it("repairs cached catalog summaries from live message rows", async function () {
+    const { queries, restore } = installConversationIntegrityDb({
+      tables: [
+        "llm_for_zotero_global_conversations",
+        "llm_for_zotero_chat_messages",
+      ],
+    });
+
+    try {
+      await repairConversationCatalogSummaries("upstream");
+
+      const repairQuery = queries.find((sql) =>
+        sql.includes("UPDATE llm_for_zotero_global_conversations AS c"),
+      );
+      assert.isOk(repairQuery);
+      assert.include(repairQuery || "", "SET first_user_title");
+      assert.include(repairQuery || "", "last_activity_at");
+      assert.include(repairQuery || "", "user_turn_count");
+      assert.include(repairQuery || "", "llm_for_zotero_chat_messages");
     } finally {
       restore();
     }

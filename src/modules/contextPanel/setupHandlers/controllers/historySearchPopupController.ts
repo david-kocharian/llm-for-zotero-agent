@@ -1,6 +1,7 @@
 import { createElement } from "../../../../utils/domHelpers";
 import {
   formatGlobalHistoryTimestamp,
+  getHistoryEntryLabelType,
   groupHistoryEntriesByDay,
   type ConversationHistoryEntry,
 } from "./conversationHistoryController";
@@ -15,6 +16,7 @@ import {
 type TranslateFn = (label: string) => string;
 
 export const HISTORY_SEARCH_POPUP_ITEM_TAG = "div";
+export const HISTORY_SEARCH_POPUP_DELETE_CLASS = "llm-standalone-search-delete";
 export const HISTORY_SEARCH_POPUP_THEME_DARK_CLASS =
   "llm-history-search-theme-dark";
 export const HISTORY_SEARCH_POPUP_THEME_LIGHT_CLASS =
@@ -38,7 +40,10 @@ export type HistorySearchPopupControllerDeps = {
     entries: ConversationHistoryEntry[];
     resultsByKey: Map<number, HistorySearchResult>;
   }>;
-  onSelect: (entry: ConversationHistoryEntry) => void | Promise<void>;
+  onSelect: (
+    entry: ConversationHistoryEntry,
+  ) => boolean | void | Promise<boolean | void>;
+  onDelete?: (entry: ConversationHistoryEntry) => void | Promise<void>;
   translate?: TranslateFn;
   log?: (...args: unknown[]) => void;
   resolveLabel?: (entry: ConversationHistoryEntry) => string;
@@ -54,6 +59,17 @@ export function sortHistorySearchPopupEntries(
     }
     return b.conversationKey - a.conversationKey;
   });
+}
+
+export function filterHistorySearchPopupVisibleEntries(
+  entries: readonly ConversationHistoryEntry[],
+  hiddenConversationKeys: ReadonlySet<number> = new Set<number>(),
+): ConversationHistoryEntry[] {
+  return entries.filter(
+    (entry) =>
+      !entry.isPendingDelete &&
+      !hiddenConversationKeys.has(entry.conversationKey),
+  );
 }
 
 export function mapHistorySearchPopupResults(
@@ -183,6 +199,7 @@ export function createHistorySearchPopupController(
   let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   let searchSeq = 0;
   let renderedEntriesByKey = new Map<number, ConversationHistoryEntry>();
+  const hiddenConversationKeys = new Set<number>();
 
   const syncThemeClass = () => {
     overlay.classList.remove(
@@ -191,15 +208,24 @@ export function createHistorySearchPopupController(
     );
     const win = doc.defaultView;
     const root = doc.documentElement;
+    const body = doc.body;
     const parentStyle = win?.getComputedStyle(deps.parent);
     const popupStyle = win?.getComputedStyle(popup);
+    const rootStyle = root ? win?.getComputedStyle(root) : null;
+    const bodyStyle = body ? win?.getComputedStyle(body) : null;
     const theme =
       resolveHistorySearchPopupThemeFromColors([
         popupStyle?.backgroundColor || "",
         parentStyle?.backgroundColor || "",
+        parentStyle?.getPropertyValue("--material-sidepane") || "",
+        parentStyle?.getPropertyValue("--material-background") || "",
+        rootStyle?.getPropertyValue("--material-sidepane") || "",
+        rootStyle?.getPropertyValue("--material-background") || "",
+        bodyStyle?.backgroundColor || "",
       ]) ||
       (deps.parent.closest(".window-is-dark") ||
       root?.classList.contains("window-is-dark") ||
+      body?.classList.contains("window-is-dark") ||
       root?.hasAttribute("lwtheme-brighttext")
         ? "dark"
         : "light");
@@ -221,6 +247,9 @@ export function createHistorySearchPopupController(
   const resolveLabel = (entry: ConversationHistoryEntry): string => {
     const value = deps.resolveLabel?.(entry);
     if (value) return value;
+    if (getHistoryEntryLabelType(entry) === "orphan") {
+      return translate("Orphan");
+    }
     return entry.kind === "paper"
       ? entry.sectionTitle || translate("Paper chat")
       : translate("Library chat");
@@ -229,6 +258,9 @@ export function createHistorySearchPopupController(
   const resolveScopeLabel = (entry: ConversationHistoryEntry): string => {
     const value = deps.resolveScopeLabel?.(entry);
     if (value) return value;
+    if (getHistoryEntryLabelType(entry) === "orphan") {
+      return translate("Orphan");
+    }
     return entry.kind === "paper"
       ? entry.sectionTitle || translate("Paper chat")
       : translate("Library chat");
@@ -286,7 +318,7 @@ export function createHistorySearchPopupController(
           "span",
           "llm-standalone-search-label",
         );
-        label.dataset.labelType = entry.kind === "paper" ? "paper" : "library";
+        label.dataset.labelType = getHistoryEntryLabelType(entry);
         const labelText = resolveLabel(entry);
         label.textContent = labelText;
 
@@ -308,6 +340,22 @@ export function createHistorySearchPopupController(
         }
 
         textWrap.append(label, title);
+        if (deps.onDelete && entry.deletable) {
+          const deleteButton = createElement(
+            doc,
+            "span",
+            HISTORY_SEARCH_POPUP_DELETE_CLASS,
+          ) as HTMLSpanElement;
+          deleteButton.setAttribute("role", "button");
+          deleteButton.setAttribute("tabindex", "0");
+          deleteButton.setAttribute(
+            "aria-label",
+            `${translate("Delete conversation")}: ${displayTitle}`,
+          );
+          deleteButton.title = translate("Delete conversation");
+          deleteButton.dataset.action = "delete";
+          textWrap.appendChild(deleteButton);
+        }
         item.appendChild(textWrap);
 
         const scopeLabel = resolveScopeLabel(entry);
@@ -344,9 +392,10 @@ export function createHistorySearchPopupController(
   const runSearch = async (query: string) => {
     const thisSeq = ++searchSeq;
     try {
-      const allEntries = sortHistorySearchPopupEntries(
-        await deps.loadEntries(),
-      ).filter((entry) => !entry.isPendingDelete);
+      const allEntries = filterHistorySearchPopupVisibleEntries(
+        sortHistorySearchPopupEntries(await deps.loadEntries()),
+        hiddenConversationKeys,
+      );
       if (thisSeq !== searchSeq || !controller.isOpen()) return;
 
       if (!query.trim()) {
@@ -358,7 +407,19 @@ export function createHistorySearchPopupController(
       if (deps.searchEntries) {
         const indexed = await deps.searchEntries(query);
         if (thisSeq !== searchSeq || !controller.isOpen()) return;
-        renderEntries(indexed.entries, query, indexed.resultsByKey);
+        const visibleIndexedEntries = filterHistorySearchPopupVisibleEntries(
+          indexed.entries,
+          hiddenConversationKeys,
+        );
+        const visibleIndexedKeys = new Set(
+          visibleIndexedEntries.map((entry) => entry.conversationKey),
+        );
+        const visibleResultsByKey = new Map(
+          Array.from(indexed.resultsByKey.entries()).filter(([key]) =>
+            visibleIndexedKeys.has(key),
+          ),
+        );
+        renderEntries(visibleIndexedEntries, query, visibleResultsByKey);
         return;
       }
       const documents = new Map<number, HistorySearchDocument>();
@@ -453,14 +514,54 @@ export function createHistorySearchPopupController(
     if (!Number.isFinite(conversationKey) || conversationKey <= 0) return false;
     const entry = renderedEntriesByKey.get(conversationKey);
     if (!entry) return false;
-    controller.close();
-    void Promise.resolve(deps.onSelect(entry)).catch((err) => {
-      log("LLM: history search popup selection failed", err);
+    void Promise.resolve(deps.onSelect(entry))
+      .then(() => {
+        controller.close();
+      })
+      .catch((err) => {
+        log("LLM: history search popup selection failed", err);
     });
     return true;
   };
 
+  const deleteResultFromTarget = (target: Element | null): boolean => {
+    if (!deps.onDelete) return false;
+    const deleteButton = target?.closest(
+      `.${HISTORY_SEARCH_POPUP_DELETE_CLASS}`,
+    ) as HTMLElement | null;
+    if (!deleteButton) return false;
+    const item = deleteButton.closest(
+      ".llm-standalone-search-item",
+    ) as HTMLDivElement | null;
+    if (!item) return false;
+    const conversationKey = Number.parseInt(
+      item.dataset.conversationKey || "",
+      10,
+    );
+    if (!Number.isFinite(conversationKey) || conversationKey <= 0) return false;
+    const entry = renderedEntriesByKey.get(conversationKey);
+    if (!entry || !entry.deletable) return false;
+    hiddenConversationKeys.add(conversationKey);
+    void runSearch(input.value);
+    void Promise.resolve(deps.onDelete(entry))
+      .then(() => {
+        hiddenConversationKeys.delete(conversationKey);
+        if (controller.isOpen()) void runSearch(input.value);
+      })
+      .catch((err) => {
+        hiddenConversationKeys.delete(conversationKey);
+        if (controller.isOpen()) void runSearch(input.value);
+        log("LLM: history search popup deletion failed", err);
+      });
+    return true;
+  };
+
   results.addEventListener("click", (event: Event) => {
+    if (deleteResultFromTarget(event.target as Element | null)) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
     if (!selectResultFromTarget(event.target as Element | null)) return;
     event.preventDefault();
     event.stopPropagation();
@@ -468,6 +569,11 @@ export function createHistorySearchPopupController(
   results.addEventListener("keydown", (event: Event) => {
     const keyboardEvent = event as KeyboardEvent;
     if (keyboardEvent.key !== "Enter" && keyboardEvent.key !== " ") return;
+    if (deleteResultFromTarget(event.target as Element | null)) {
+      keyboardEvent.preventDefault();
+      keyboardEvent.stopPropagation();
+      return;
+    }
     if (!selectResultFromTarget(event.target as Element | null)) return;
     keyboardEvent.preventDefault();
     keyboardEvent.stopPropagation();

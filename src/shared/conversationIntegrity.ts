@@ -9,6 +9,9 @@ export type ConversationIntegrityIssueCode =
   | "registry_invalid_scope"
   | "catalog_blank_conversation_id"
   | "catalog_missing_registry_row"
+  | "catalog_summary_first_user_title_mismatch"
+  | "catalog_summary_last_activity_mismatch"
+  | "catalog_summary_user_turn_count_mismatch"
   | "message_blank_conversation_id"
   | "message_missing_catalog_row";
 
@@ -73,6 +76,38 @@ const MESSAGE_TABLES: Array<{
   },
 ];
 
+const SUMMARY_TABLES: Array<{
+  system: ConversationSystem;
+  catalogTable: string;
+  messageTable: string;
+  activityFallbackSql: string;
+}> = [
+  {
+    system: "upstream",
+    catalogTable: "llm_for_zotero_global_conversations",
+    messageTable: "llm_for_zotero_chat_messages",
+    activityFallbackSql: "c.created_at",
+  },
+  {
+    system: "upstream",
+    catalogTable: "llm_for_zotero_paper_conversations",
+    messageTable: "llm_for_zotero_chat_messages",
+    activityFallbackSql: "c.created_at",
+  },
+  {
+    system: "claude_code",
+    catalogTable: "llm_for_zotero_claude_conversations",
+    messageTable: "llm_for_zotero_claude_messages",
+    activityFallbackSql: "c.updated_at, c.created_at",
+  },
+  {
+    system: "codex",
+    catalogTable: "llm_for_zotero_codex_conversations",
+    messageTable: "llm_for_zotero_codex_messages",
+    activityFallbackSql: "c.updated_at, c.created_at",
+  },
+];
+
 function getZoteroDb(): ZoteroDb | null {
   return (
     (globalThis as typeof globalThis & { Zotero?: { DB?: ZoteroDb } }).Zotero
@@ -90,6 +125,43 @@ async function tableExists(db: ZoteroDb, tableName: string): Promise<boolean> {
     [tableName],
   )) as Array<{ name?: unknown }> | undefined;
   return Boolean(rows?.length);
+}
+
+function messageJoinCondition(messageAlias: string, conversationAlias: string): string {
+  return `(${messageAlias}.conversation_id = ${conversationAlias}.conversation_id OR ((` +
+    `${messageAlias}.conversation_id IS NULL OR TRIM(${messageAlias}.conversation_id) = '') AND ` +
+    `${messageAlias}.conversation_key = ${conversationAlias}.conversation_key))`;
+}
+
+function firstUserTitleSql(messageTable: string): string {
+  return `(SELECT m0.text
+           FROM ${messageTable} m0
+           WHERE ${messageJoinCondition("m0", "c")}
+             AND m0.role = 'user'
+           ORDER BY m0.timestamp ASC, m0.id ASC
+           LIMIT 1)`;
+}
+
+function lastActivitySql(messageTable: string, activityFallbackSql: string): string {
+  return `COALESCE(
+           (
+             SELECT MAX(m.timestamp)
+             FROM ${messageTable} m
+             WHERE ${messageJoinCondition("m", "c")}
+           ),
+           ${activityFallbackSql}
+         )`;
+}
+
+function userTurnCountSql(messageTable: string): string {
+  return `COALESCE(
+           (
+             SELECT SUM(CASE WHEN m.role = 'user' THEN 1 ELSE 0 END)
+             FROM ${messageTable} m
+             WHERE ${messageJoinCondition("m", "c")}
+           ),
+           0
+         )`;
 }
 
 async function countRows(
@@ -182,6 +254,52 @@ export async function auditConversationIntegrity(): Promise<ConversationIntegrit
     }
   }
 
+  for (const store of SUMMARY_TABLES) {
+    const catalogExists = await tableExists(db, store.catalogTable);
+    const messageExists = await tableExists(db, store.messageTable);
+    if (!catalogExists || !messageExists) continue;
+    addIssue(issues, {
+      code: "catalog_summary_first_user_title_mismatch",
+      tableName: store.catalogTable,
+      system: store.system,
+      rowCount: await countRows(
+        db,
+        `SELECT COUNT(*) AS rowCount
+         FROM ${store.catalogTable} c
+         WHERE COALESCE(c.first_user_title, '') <> COALESCE(${firstUserTitleSql(
+           store.messageTable,
+         )}, '')`,
+      ),
+    });
+    addIssue(issues, {
+      code: "catalog_summary_last_activity_mismatch",
+      tableName: store.catalogTable,
+      system: store.system,
+      rowCount: await countRows(
+        db,
+        `SELECT COUNT(*) AS rowCount
+         FROM ${store.catalogTable} c
+         WHERE COALESCE(c.last_activity_at, 0) <> COALESCE(${lastActivitySql(
+           store.messageTable,
+           store.activityFallbackSql,
+         )}, 0)`,
+      ),
+    });
+    addIssue(issues, {
+      code: "catalog_summary_user_turn_count_mismatch",
+      tableName: store.catalogTable,
+      system: store.system,
+      rowCount: await countRows(
+        db,
+        `SELECT COUNT(*) AS rowCount
+         FROM ${store.catalogTable} c
+         WHERE COALESCE(c.user_turn_count, 0) <> ${userTurnCountSql(
+           store.messageTable,
+         )}`,
+      ),
+    });
+  }
+
   for (const store of MESSAGE_TABLES) {
     const messageExists = await tableExists(db, store.messageTable);
     if (!messageExists) continue;
@@ -235,4 +353,26 @@ export async function auditConversationIntegrity(): Promise<ConversationIntegrit
     ok: issues.length === 0,
     issues,
   };
+}
+
+export async function repairConversationCatalogSummaries(
+  system?: ConversationSystem,
+): Promise<void> {
+  const db = getZoteroDb();
+  if (!db?.queryAsync) return;
+  for (const store of SUMMARY_TABLES) {
+    if (system && store.system !== system) continue;
+    const catalogExists = await tableExists(db, store.catalogTable);
+    const messageExists = await tableExists(db, store.messageTable);
+    if (!catalogExists || !messageExists) continue;
+    await db.queryAsync(
+      `UPDATE ${store.catalogTable} AS c
+       SET first_user_title = ${firstUserTitleSql(store.messageTable)},
+           last_activity_at = ${lastActivitySql(
+             store.messageTable,
+             store.activityFallbackSql,
+           )},
+           user_turn_count = ${userTurnCountSql(store.messageTable)}`,
+    );
+  }
 }

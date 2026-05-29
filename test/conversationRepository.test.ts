@@ -74,6 +74,7 @@ describe("conversationRepository", function () {
       sql.includes("FROM llm_for_zotero_global_conversations gc"),
     );
     assert.notInclude(listQuery?.sql || "", "HAVING");
+    assert.notInclude(listQuery?.sql || "", "llm_for_zotero_chat_messages");
   });
 
   it("routes catalog title updates by conversation system", async function () {
@@ -262,6 +263,10 @@ describe("conversationRepository", function () {
       sql.includes("SET created_at = ?"),
     );
     assert.isOk(update);
-    assert.deepEqual(update?.params?.slice(0, 2), [1234, conversationKey]);
+    assert.deepEqual(update?.params?.slice(0, 3), [
+      1234,
+      1234,
+      conversationKey,
+    ]);
   });
 });

@@ -1,4 +1,8 @@
 import type { ConversationSystem } from "./types";
+import {
+  repairRecoverableCatalogMessageConversationIDs,
+} from "./conversationMessageIdentityRepair";
+import type { PaperContextJsonColumns } from "./conversationRegistry";
 
 type ZoteroDb = {
   queryAsync?: (sql: string, params?: unknown[]) => Promise<unknown>;
@@ -6,6 +10,8 @@ type ZoteroDb = {
 
 export const CONVERSATION_SEARCH_INDEX_TABLE =
   "llm_for_zotero_conversation_search_index";
+
+export const CONVERSATION_SEARCH_BODY_CHAR_LIMIT = 200_000;
 
 const SEARCH_INDEX_LIBRARY_INDEX =
   "llm_for_zotero_conversation_search_index_library_idx";
@@ -31,6 +37,21 @@ export type ConversationSearchIndexMatch = {
   bodyText: string;
   lastActivityAt: number;
   userTurnCount: number;
+};
+
+export type ConversationSearchIndexStatus =
+  | "ready"
+  | "empty"
+  | "stale"
+  | "truncated"
+  | "unavailable";
+
+export type ConversationSearchIndexResult = {
+  matches: ConversationSearchIndexMatch[];
+  status: ConversationSearchIndexStatus;
+  indexedRowCount: number;
+  catalogRowCount: number;
+  truncatedRowCount: number;
 };
 
 function getZoteroDb(): ZoteroDb | null {
@@ -64,9 +85,10 @@ function normalizeKind(value: unknown): "global" | "paper" | null {
   return value === "global" || value === "paper" ? value : null;
 }
 
-function normalizeLimit(value: unknown, fallback = 100): number {
+function normalizeOptionalLimit(value: unknown): number | null {
+  if (value === undefined || value === null) return null;
   const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
   return Math.max(1, Math.min(500, Math.floor(parsed)));
 }
 
@@ -150,6 +172,19 @@ async function refreshCatalogIntoSearchIndex(params: {
   ) {
     return;
   }
+  await repairRecoverableCatalogMessageConversationIDs({
+    queryAsync: db.queryAsync.bind(db),
+    catalogTable: params.catalogTable,
+    messageTable: params.messageTable,
+    system: params.system,
+    kindSql: params.kindSql,
+    paperItemIDSql: params.paperItemIDSql,
+    filterSql: params.filterSql,
+    filterParams: params.filterParams,
+    getPaperContextRows: (conversationKey) =>
+      getMessagePaperContextRows(params.messageTable, conversationKey),
+    storeLabel: `${params.system} search index`,
+  });
   const firstUserMessageSql = FIRST_USER_MESSAGE_SQL.replace(
     /\{messageTable\}/g,
     params.messageTable,
@@ -164,7 +199,7 @@ async function refreshCatalogIntoSearchIndex(params: {
             c.library_id,
             ${params.paperItemIDSql},
             COALESCE(NULLIF(TRIM(c.title), ''), ${firstUserMessageSql}, ''),
-            COALESCE(GROUP_CONCAT(m.text, char(10)), ''),
+            SUBSTR(COALESCE(GROUP_CONCAT(SUBSTR(m.text, 1, ?), char(10)), ''), 1, ?),
             ${params.activitySql},
             COALESCE(SUM(CASE WHEN m.role = 'user' THEN 1 ELSE 0 END), 0),
             ?
@@ -175,8 +210,37 @@ async function refreshCatalogIntoSearchIndex(params: {
        AND TRIM(c.conversation_id) <> ''
        ${params.filterSql ? `AND (${params.filterSql})` : ""}
      GROUP BY ${params.groupBySql}`,
-    [params.system, Date.now(), ...(params.filterParams || [])],
+    [
+      params.system,
+      CONVERSATION_SEARCH_BODY_CHAR_LIMIT,
+      CONVERSATION_SEARCH_BODY_CHAR_LIMIT,
+      Date.now(),
+      ...(params.filterParams || []),
+    ],
   );
+}
+
+async function getMessagePaperContextRows(
+  messageTable: string,
+  conversationKey: number,
+): Promise<PaperContextJsonColumns[]> {
+  const db = getZoteroDb();
+  if (!db?.queryAsync) return [];
+  return ((await db.queryAsync(
+    `SELECT paper_contexts_json AS paperContextsJson,
+            full_text_paper_contexts_json AS fullTextPaperContextsJson,
+            selected_text_paper_contexts_json AS selectedTextPaperContextsJson,
+            citation_paper_contexts_json AS citationPaperContextsJson
+     FROM ${messageTable}
+     WHERE conversation_key = ?
+       AND (
+         paper_contexts_json IS NOT NULL OR
+         full_text_paper_contexts_json IS NOT NULL OR
+         selected_text_paper_contexts_json IS NOT NULL OR
+         citation_paper_contexts_json IS NOT NULL
+       )`,
+    [conversationKey],
+  )) || []) as PaperContextJsonColumns[];
 }
 
 function buildCatalogConversationFilter(params: {
@@ -387,6 +451,100 @@ export async function refreshConversationSearchIndex(): Promise<boolean> {
   return true;
 }
 
+async function getIndexedSearchCoverage(params: {
+  system: ConversationSystem;
+  libraryID: number;
+}): Promise<{
+  indexedRowCount: number;
+  catalogRowCount: number;
+  missingIndexedRowCount: number;
+  truncatedRowCount: number;
+}> {
+  const db = getZoteroDb();
+  if (!db?.queryAsync) {
+    return {
+      indexedRowCount: 0,
+      catalogRowCount: 0,
+      missingIndexedRowCount: 0,
+      truncatedRowCount: 0,
+    };
+  }
+  const indexedRows = (await db.queryAsync(
+    `SELECT COUNT(*) AS indexedRowCount,
+            SUM(CASE WHEN LENGTH(COALESCE(body_text, '')) >= ? THEN 1 ELSE 0 END) AS truncatedRowCount
+     FROM ${CONVERSATION_SEARCH_INDEX_TABLE}
+     WHERE system = ?
+       AND library_id = ?
+       AND user_turn_count > 0`,
+    [CONVERSATION_SEARCH_BODY_CHAR_LIMIT, params.system, params.libraryID],
+  )) as Array<{
+    indexedRowCount?: unknown;
+    truncatedRowCount?: unknown;
+  }> | undefined;
+  const indexedRowCount = normalizePositiveInt(
+    indexedRows?.[0]?.indexedRowCount,
+  );
+  const truncatedRowCount = normalizePositiveInt(
+    indexedRows?.[0]?.truncatedRowCount,
+  );
+
+  const catalogTables =
+    params.system === "upstream"
+      ? [
+          "llm_for_zotero_global_conversations",
+          "llm_for_zotero_paper_conversations",
+        ]
+      : [
+          params.system === "claude_code"
+            ? "llm_for_zotero_claude_conversations"
+            : "llm_for_zotero_codex_conversations",
+        ];
+  const existingCatalogs: string[] = [];
+  for (const tableName of catalogTables) {
+    if (await tableExists(db, tableName)) existingCatalogs.push(tableName);
+  }
+  if (!existingCatalogs.length) {
+    return {
+      indexedRowCount,
+      catalogRowCount: 0,
+      missingIndexedRowCount: 0,
+      truncatedRowCount,
+    };
+  }
+  const catalogUnion = existingCatalogs
+    .map(
+      (tableName) =>
+        `SELECT conversation_id
+         FROM ${tableName}
+         WHERE library_id = ?
+           AND conversation_id IS NOT NULL
+           AND TRIM(conversation_id) <> ''
+           AND COALESCE(user_turn_count, 0) > 0`,
+    )
+    .join("\nUNION ALL\n");
+  const catalogParams = existingCatalogs.map(() => params.libraryID);
+  const catalogRows = (await db.queryAsync(
+    `SELECT COUNT(*) AS catalogRowCount,
+            SUM(CASE WHEN si.conversation_id IS NULL THEN 1 ELSE 0 END) AS missingIndexedRowCount
+     FROM (${catalogUnion}) c
+     LEFT JOIN ${CONVERSATION_SEARCH_INDEX_TABLE} si
+       ON si.conversation_id = c.conversation_id
+      AND si.system = ?`,
+    [...catalogParams, params.system],
+  )) as Array<{
+    catalogRowCount?: unknown;
+    missingIndexedRowCount?: unknown;
+  }> | undefined;
+  return {
+    indexedRowCount,
+    catalogRowCount: normalizePositiveInt(catalogRows?.[0]?.catalogRowCount),
+    missingIndexedRowCount: normalizePositiveInt(
+      catalogRows?.[0]?.missingIndexedRowCount,
+    ),
+    truncatedRowCount,
+  };
+}
+
 function normalizeMatch(row: Record<string, unknown>): ConversationSearchIndexMatch | null {
   const conversationID = normalizeText(row.conversationID, 512);
   const conversationKey = normalizePositiveInt(row.conversationKey);
@@ -425,27 +583,63 @@ export async function searchConversationIndex(params: {
   limit?: number;
   refresh?: boolean;
 }): Promise<ConversationSearchIndexMatch[]> {
+  return (await searchConversationIndexWithStatus(params)).matches;
+}
+
+export async function searchConversationIndexWithStatus(params: {
+  system: ConversationSystem;
+  libraryID: number;
+  query: string;
+  limit?: number;
+  refresh?: boolean;
+}): Promise<ConversationSearchIndexResult> {
   const system = normalizeSystem(params.system);
   const libraryID = normalizePositiveInt(params.libraryID);
   const tokens = tokenizeSearchQuery(params.query);
-  if (!system || !libraryID || !tokens.length) return [];
+  if (!system || !libraryID || !tokens.length) {
+    return {
+      matches: [],
+      status: "unavailable",
+      indexedRowCount: 0,
+      catalogRowCount: 0,
+      truncatedRowCount: 0,
+    };
+  }
   const initialized = await initConversationSearchIndexStore();
-  if (!initialized) return [];
-  if (params.refresh !== false) {
+  if (!initialized) {
+    return {
+      matches: [],
+      status: "unavailable",
+      indexedRowCount: 0,
+      catalogRowCount: 0,
+      truncatedRowCount: 0,
+    };
+  }
+  if (params.refresh === true) {
     await refreshConversationSearchIndexForSystem(system);
   }
   const db = getZoteroDb();
-  if (!db?.queryAsync) return [];
+  if (!db?.queryAsync) {
+    return {
+      matches: [],
+      status: "unavailable",
+      indexedRowCount: 0,
+      catalogRowCount: 0,
+      truncatedRowCount: 0,
+    };
+  }
+  const coverage = await getIndexedSearchCoverage({ system, libraryID });
   const tokenClauses: string[] = [];
   const queryParams: unknown[] = [system, libraryID];
   for (const token of tokens) {
     const pattern = `%${escapeLikeToken(token)}%`;
     tokenClauses.push(
-      "(LOWER(COALESCE(title, '')) LIKE ? ESCAPE '\\' OR LOWER(COALESCE(body_text, '')) LIKE ? ESCAPE '\\')",
+      "(LOWER(COALESCE(title, '')) LIKE ? ESCAPE '\\' OR LOWER(COALESCE(body_text, '')) LIKE ? ESCAPE '\\' OR LOWER(CASE WHEN kind = 'global' THEN 'library chat' ELSE 'paper chat' END) LIKE ? ESCAPE '\\')",
     );
-    queryParams.push(pattern, pattern);
+    queryParams.push(pattern, pattern, pattern);
   }
-  queryParams.push(normalizeLimit(params.limit, 100));
+  const limit = normalizeOptionalLimit(params.limit);
+  if (limit) queryParams.push(limit);
   const rows = (await db.queryAsync(
     `SELECT conversation_id AS conversationID,
             legacy_conversation_key AS conversationKey,
@@ -463,10 +657,28 @@ export async function searchConversationIndex(params: {
        AND user_turn_count > 0
        AND ${tokenClauses.join("\n       AND ")}
      ORDER BY last_activity_at DESC, legacy_conversation_key DESC
-     LIMIT ?`,
+     ${limit ? "LIMIT ?" : ""}`,
     queryParams,
   )) as Array<Record<string, unknown>> | undefined;
-  return (rows || [])
+  const matches = (rows || [])
     .map((row) => normalizeMatch(row))
     .filter((row): row is ConversationSearchIndexMatch => Boolean(row));
+  const hasMissingIndexedRows =
+    coverage.catalogRowCount > coverage.indexedRowCount ||
+    coverage.missingIndexedRowCount > 0;
+  const status: ConversationSearchIndexStatus =
+    coverage.indexedRowCount <= 0 && coverage.catalogRowCount > 0
+      ? "empty"
+      : hasMissingIndexedRows
+        ? "stale"
+        : coverage.truncatedRowCount > 0
+          ? "truncated"
+          : "ready";
+  return {
+    matches,
+    status,
+    indexedRowCount: coverage.indexedRowCount,
+    catalogRowCount: coverage.catalogRowCount,
+    truncatedRowCount: coverage.truncatedRowCount,
+  };
 }

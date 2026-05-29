@@ -59,8 +59,10 @@ import {
   formatGlobalHistoryTimestamp,
   GLOBAL_HISTORY_UNDO_WINDOW_MS,
   groupHistoryEntriesByDay,
+  isOrphanHistoryEntry,
   normalizeHistoryTitle,
-  resolveHistoryEntryPaperItem,
+  resolveHistoryEntryPaperBaseItem,
+  resolveHistoryEntrySourceState,
   type ConversationHistoryEntry,
 } from "./setupHandlers/controllers/conversationHistoryController";
 import {
@@ -135,7 +137,10 @@ import {
   buildCodexPaperStateKey,
 } from "../../codexAppServer/state";
 import { loadAllCodexConversationHistory } from "../../codexAppServer/historyLoader";
-import { finalizeConversationDeletion } from "./conversationDeletion";
+import {
+  finalizeConversationDeletion,
+  getConversationDeletionFailureMessage,
+} from "./conversationDeletion";
 import {
   clearActiveConversationForPendingDeletion,
   shouldRestoreActiveConversationOnDeletionUndo,
@@ -1878,7 +1883,10 @@ export function openStandaloneChat(options?: {
       const resolvePaperLabel = (paperItemID: number | undefined): string => {
         if (!paperItemID) return t("Library chat");
         try {
-          const paperItem = Zotero.Items.get(paperItemID);
+          const paperItem = resolveHistoryEntryPaperBaseItem(
+            { paperItemID },
+            (id) => Zotero.Items.get(id) as Zotero.Item | null,
+          );
           if (!paperItem) return t("Paper chat");
           let firstCreator = "";
           let year = "";
@@ -1903,10 +1911,15 @@ export function openStandaloneChat(options?: {
 
       const resolvePaperSearchScopeLabel = (
         paperItemID: number | undefined,
+        sourceState: ConversationHistoryEntry["sourceState"] = "active",
       ): string => {
+        if (sourceState === "orphan") return t("Orphan");
         if (!paperItemID) return t("Library chat");
         try {
-          const paperItem = Zotero.Items.get(paperItemID);
+          const paperItem = resolveHistoryEntryPaperBaseItem(
+            { paperItemID },
+            (id) => Zotero.Items.get(id) as Zotero.Item | null,
+          );
           const title = String(paperItem?.getField?.("title") || "").trim();
           return title || resolvePaperLabel(paperItemID);
         } catch {
@@ -1919,14 +1932,23 @@ export function openStandaloneChat(options?: {
       ): ConversationHistoryEntry => {
         const isPaper = entry.mode === "paper";
         const title = normalizeHistoryTitle(entry.title) || t("Untitled chat");
+        const sourceState = resolveHistoryEntrySourceState(
+          {
+            kind: isPaper ? "paper" : "global",
+            paperItemID: entry.paperItemID,
+          },
+          (id) => Zotero.Items.get(id) as Zotero.Item | null,
+        );
         return {
           kind: isPaper ? "paper" : "global",
+          sourceState,
           section: isPaper ? "paper" : "open",
           sectionTitle: isPaper
-            ? resolvePaperSearchScopeLabel(entry.paperItemID)
+            ? resolvePaperSearchScopeLabel(entry.paperItemID, sourceState)
             : t("Library chat"),
           conversationID: entry.conversationID,
           conversationKey: entry.conversationKey,
+          libraryID: entry.libraryID || getCurrentLibraryScopeID(),
           title,
           timestampText:
             formatGlobalHistoryTimestamp(entry.lastActivityAt) ||
@@ -1935,8 +1957,11 @@ export function openStandaloneChat(options?: {
           isDraft: false,
           isPendingDelete: false,
           lastActivityAt: entry.lastActivityAt,
+          userTurnCount: entry.userTurnCount,
           paperItemID: entry.paperItemID,
           sessionVersion: entry.sessionVersion,
+          providerSessionId: entry.providerSessionId,
+          scopedConversationKey: entry.scopedConversationKey,
         };
       };
 
@@ -1951,9 +1976,13 @@ export function openStandaloneChat(options?: {
             .map((entry) => ({
               conversationKey: entry.conversationKey,
               conversationID: entry.conversationID,
+              libraryID,
               lastActivityAt: entry.lastActivityAt,
               title: entry.title,
+              userTurnCount: entry.userTurnCount,
               paperItemID: entry.paperItemID,
+              providerSessionId: entry.providerSessionId,
+              scopedConversationKey: entry.scopedConversationKey,
               mode: entry.kind === "paper" ? "paper" : "open",
             }));
         } else if (isCodexConversationSystem()) {
@@ -1961,9 +1990,13 @@ export function openStandaloneChat(options?: {
             .map((entry) => ({
               conversationKey: entry.conversationKey,
               conversationID: entry.conversationID,
+              libraryID,
               lastActivityAt: entry.lastActivityAt,
               title: entry.title,
+              userTurnCount: entry.userTurnCount,
               paperItemID: entry.paperItemID,
+              providerSessionId: entry.providerSessionId,
+              scopedConversationKey: entry.scopedConversationKey,
               mode: entry.kind === "paper" ? "paper" : "open",
             }));
         } else {
@@ -1971,15 +2004,22 @@ export function openStandaloneChat(options?: {
             (entry) => ({
               conversationKey: entry.conversationKey,
               conversationID: entry.conversationID,
+              libraryID,
               lastActivityAt: entry.lastActivityAt,
               title: entry.title,
+              userTurnCount: entry.userTurnCount,
               sessionVersion: entry.sessionVersion,
               paperItemID: entry.paperItemID,
               mode: entry.mode,
             }),
           );
         }
-        return entries.map(toStandaloneHistoryEntry);
+        return entries
+          .map(toStandaloneHistoryEntry)
+          .filter(
+            (entry) =>
+              !pendingStandaloneDeletionKeys.has(entry.conversationKey),
+          );
       };
 
       const loadStandaloneSearchDocument = async (
@@ -2000,31 +2040,55 @@ export function openStandaloneChat(options?: {
 
       const selectStandaloneSearchEntry = async (
         entry: ConversationHistoryEntry,
-      ) => {
+      ): Promise<boolean> => {
         try {
-          if (entry.kind === "paper" && Number(entry.paperItemID || 0) > 0) {
-            const paperItem = resolveHistoryEntryPaperItem(
-              { paperItemID: entry.paperItemID },
+          if (entry.kind === "paper") {
+            if (isOrphanHistoryEntry(entry)) {
+              const statusEl = contentArea.querySelector(
+                "#llm-status",
+              ) as HTMLElement | null;
+              if (statusEl) {
+                setStatus(
+                  statusEl,
+                  t("This chat's source item was deleted"),
+                  "warning",
+                );
+              }
+              return false;
+            }
+            const paperItem = resolveHistoryEntryPaperBaseItem(
+              entry,
               (id) => Zotero.Items.get(id) as Zotero.Item | null,
             );
-            if (paperItem) {
-              const sessionVersion = Number(entry.sessionVersion || 0);
-              const sv = sessionVersion > 0 ? sessionVersion : 1;
-              const portalItem = buildStandalonePortalItem({
-                mode: "paper",
-                conversationKey: entry.conversationKey,
-                paperItem,
-                sessionVersion: sv,
-              });
-              if (!portalItem) return;
-              standaloneMode = "paper";
-              currentPaperItem = paperItem;
-              currentBasePaperItem = paperItem;
-              paperTab.classList.add("active");
-              openTab.classList.remove("active");
-              syncPaperTabLabel();
-              mountChatPanel(portalItem);
+            if (!paperItem) {
+              const statusEl = contentArea.querySelector(
+                "#llm-status",
+              ) as HTMLElement | null;
+              if (statusEl) {
+                setStatus(
+                  statusEl,
+                  t("This chat's source item was deleted"),
+                  "warning",
+                );
+              }
+              return false;
             }
+            const sessionVersion = Number(entry.sessionVersion || 0);
+            const sv = sessionVersion > 0 ? sessionVersion : 1;
+            const portalItem = buildStandalonePortalItem({
+              mode: "paper",
+              conversationKey: entry.conversationKey,
+              paperItem,
+              sessionVersion: sv,
+            });
+            if (!portalItem) return false;
+            standaloneMode = "paper";
+            currentPaperItem = paperItem;
+            currentBasePaperItem = paperItem;
+            paperTab.classList.add("active");
+            openTab.classList.remove("active");
+            syncPaperTabLabel();
+            mountChatPanel(portalItem);
           } else {
             standaloneMode = "open";
             paperTab.classList.remove("active");
@@ -2033,11 +2097,13 @@ export function openStandaloneChat(options?: {
               mode: "open",
               conversationKey: entry.conversationKey,
             });
-            if (!portalItem) return;
+            if (!portalItem) return false;
             mountChatPanel(portalItem);
           }
+          return true;
         } catch (err) {
           ztoolkit.log("LLM: standalone search navigate failed", err);
+          return false;
         }
       };
 
@@ -2046,15 +2112,22 @@ export function openStandaloneChat(options?: {
         loadEntries: loadAllStandaloneSearchEntries,
         loadDocument: loadStandaloneSearchDocument,
         onSelect: selectStandaloneSearchEntry,
+        onDelete: async (entry) => {
+          await queueStandaloneHistoryDeletion(
+            toStandaloneDeletionEntry(entry),
+          );
+        },
         translate: t,
         log: (...args) => ztoolkit.log("LLM: standalone search popup", args),
         resolveLabel: (entry) =>
-          entry.kind === "paper"
+          isOrphanHistoryEntry(entry)
+            ? t("Orphan")
+            : entry.kind === "paper"
             ? resolvePaperLabel(entry.paperItemID)
             : t("Library chat"),
         resolveScopeLabel: (entry) =>
           entry.kind === "paper"
-            ? resolvePaperSearchScopeLabel(entry.paperItemID)
+            ? resolvePaperSearchScopeLabel(entry.paperItemID, entry.sourceState)
             : t("Library chat"),
       });
 
@@ -2626,9 +2699,7 @@ export function openStandaloneChat(options?: {
             await switchStandaloneToConversationEntry(entry);
           }
           setStandaloneDeletionStatus(
-            result.blocked
-              ? t("Failed to delete conversation. Codex thread was not archived.")
-              : t("Failed to fully delete conversation. Check logs."),
+            t(getConversationDeletionFailureMessage(result)),
             "error",
           );
         }
@@ -2652,6 +2723,118 @@ export function openStandaloneChat(options?: {
         void undoPendingStandaloneHistoryDeletion();
       });
 
+      const toStandaloneDeletionEntry = (
+        entry: ConversationHistoryEntry,
+      ): SidebarConv => ({
+        conversationID: entry.conversationID,
+        conversationKey: entry.conversationKey,
+        kind: entry.kind,
+        conversationSystem: currentConversationSystem,
+        libraryID: entry.libraryID || getCurrentLibraryScopeID(),
+        lastActivityAt: entry.lastActivityAt,
+        title: entry.title,
+        userTurnCount: entry.userTurnCount,
+        sessionVersion: entry.sessionVersion,
+        paperItemID: entry.paperItemID,
+        providerSessionId: entry.providerSessionId,
+        scopedConversationKey: entry.scopedConversationKey,
+        mode: entry.kind === "paper" ? "paper" : "open",
+      });
+
+      const hydrateStandaloneHistoryDeletionEntry = async (
+        entry: SidebarConv,
+      ): Promise<SidebarConv> => {
+        const conversationKey = Number(entry.conversationKey || 0);
+        const kind =
+          entry.kind || (entry.mode === "paper" ? "paper" : "global");
+        const conversationSystem =
+          entry.conversationSystem || currentConversationSystem;
+        if (!conversationKey) {
+          return { ...entry, kind, conversationSystem };
+        }
+        try {
+          const summary = await conversationRepository.getCatalogEntry({
+            system: conversationSystem,
+            kind,
+            conversationKey,
+          });
+          if (!summary || summary.kind !== kind) {
+            return {
+              ...entry,
+              kind,
+              conversationSystem,
+              libraryID: entry.libraryID || getCurrentLibraryScopeID(),
+            };
+          }
+          return toSidebarConversation(summary);
+        } catch (err) {
+          ztoolkit.log(
+            "LLM: Failed to hydrate standalone history row before deletion",
+            { conversationKey, error: err },
+          );
+          return {
+            ...entry,
+            kind,
+            conversationSystem,
+            libraryID: entry.libraryID || getCurrentLibraryScopeID(),
+          };
+        }
+      };
+
+      const queueStandaloneHistoryDeletion = async (rawEntry: SidebarConv) => {
+        const entry = await hydrateStandaloneHistoryDeletionEntry(rawEntry);
+        const key = Number(entry.conversationKey || 0);
+        if (!key) return;
+        const isActive = key === activeConversationKey;
+        if (pendingStandaloneHistoryDeletion) {
+          if (pendingStandaloneHistoryDeletion.entry.conversationKey === key) {
+            return;
+          }
+          await finalizePendingStandaloneHistoryDeletion("superseded");
+        }
+
+        const deletionConversationSystem =
+          entry.conversationSystem || currentConversationSystem;
+        try {
+          if (isActive) {
+            const didClearActiveConversation =
+              await clearStandaloneActiveConversationForPendingDeletion(entry);
+            if (!didClearActiveConversation) {
+              setStandaloneDeletionStatus(
+                t("Cannot delete active conversation right now"),
+                "error",
+              );
+              return;
+            }
+          }
+          pendingStandaloneDeletionKeys.add(key);
+          pendingStandaloneHistoryDeletion = {
+            entry,
+            conversationSystem: deletionConversationSystem,
+            wasActive: isActive,
+            expiresAt: Date.now() + GLOBAL_HISTORY_UNDO_WINDOW_MS,
+            timeoutId: null,
+          };
+          pendingStandaloneHistoryDeletion.timeoutId = newWin.setTimeout(() => {
+            void finalizePendingStandaloneHistoryDeletion("timeout");
+          }, GLOBAL_HISTORY_UNDO_WINDOW_MS);
+          showStandaloneHistoryUndoToast(entry.title);
+          await renderSidebar();
+          setStandaloneDeletionStatus(
+            t("Conversation deleted. Undo available."),
+            "ready",
+          );
+        } catch (err) {
+          ztoolkit.log("LLM: standalone delete conversation failed", err);
+          pendingStandaloneDeletionKeys.delete(key);
+          clearPendingStandaloneHistoryDeletion(true);
+          if (isActive) {
+            await switchStandaloneToConversationEntry(entry).catch(() => {});
+          }
+          await renderSidebar().catch(() => {});
+        }
+      };
+
       // Sidebar click handler — delete conversation
       sidebarList.addEventListener("click", async (e: Event) => {
         const deleteTarget = (e.target as HTMLElement).closest(
@@ -2666,58 +2849,13 @@ export function openStandaloneChat(options?: {
           if (!row) return;
           const key = Number(row.dataset.conversationKey);
           if (!key) return;
-          const isActive = key === activeConversationKey;
           const entry = standaloneSidebarEntriesByKey.get(key);
           if (!entry) return;
-          if (pendingStandaloneHistoryDeletion) {
-            if (
-              pendingStandaloneHistoryDeletion.entry.conversationKey === key
-            ) {
-              return;
-            }
-            await finalizePendingStandaloneHistoryDeletion("superseded");
-          }
-
-          const deletionConversationSystem =
-            entry.conversationSystem || currentConversationSystem;
-          try {
-            if (isActive) {
-              const didClearActiveConversation =
-                await clearStandaloneActiveConversationForPendingDeletion(entry);
-              if (!didClearActiveConversation) {
-                setStandaloneDeletionStatus(
-                  t("Cannot delete active conversation right now"),
-                  "error",
-                );
-                return;
-              }
-            }
-            pendingStandaloneDeletionKeys.add(key);
-            pendingStandaloneHistoryDeletion = {
-              entry,
-              conversationSystem: deletionConversationSystem,
-              wasActive: isActive,
-              expiresAt: Date.now() + GLOBAL_HISTORY_UNDO_WINDOW_MS,
-              timeoutId: null,
-            };
-            pendingStandaloneHistoryDeletion.timeoutId = newWin.setTimeout(() => {
-              void finalizePendingStandaloneHistoryDeletion("timeout");
-            }, GLOBAL_HISTORY_UNDO_WINDOW_MS);
-            showStandaloneHistoryUndoToast(entry.title);
-            await renderSidebar();
-            setStandaloneDeletionStatus(
-              t("Conversation deleted. Undo available."),
-              "ready",
-            );
-          } catch (err) {
-            ztoolkit.log("LLM: standalone delete conversation failed", err);
-            pendingStandaloneDeletionKeys.delete(key);
-            clearPendingStandaloneHistoryDeletion(true);
-            if (isActive) {
-              await switchStandaloneToConversationEntry(entry).catch(() => {});
-            }
-            await renderSidebar().catch(() => {});
-          }
+          await queueStandaloneHistoryDeletion({
+            ...entry,
+            conversationKey: key,
+            lastActivityAt: entry.lastActivityAt,
+          });
           return;
         }
       });

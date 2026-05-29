@@ -58,6 +58,10 @@ import {
   type PaperContextJsonColumns,
 } from "../shared/conversationRegistry";
 import {
+  repairRecoverableCatalogMessageConversationIDs,
+  repairRecoverableMessageConversationIDs,
+} from "../shared/conversationMessageIdentityRepair";
+import {
   deleteConversationSearchIndexRow,
   refreshConversationSearchIndexForConversation,
 } from "../shared/conversationSearchIndex";
@@ -69,6 +73,8 @@ const CODEX_MESSAGES_ID_INDEX =
 const CODEX_CONVERSATIONS_TABLE = "llm_for_zotero_codex_conversations";
 const CODEX_CONVERSATIONS_KIND_INDEX =
   "llm_for_zotero_codex_conversations_kind_idx";
+const CODEX_CONVERSATIONS_ACTIVITY_INDEX =
+  "llm_for_zotero_codex_conversations_activity_idx";
 const CODEX_CONVERSATIONS_ID_INDEX =
   "llm_for_zotero_codex_conversations_id_idx";
 const CLAUDE_MESSAGES_TABLE = "llm_for_zotero_claude_messages";
@@ -101,13 +107,8 @@ const CODEX_MESSAGE_SELECT_COLUMNS_SQL = `id,
             context_tokens AS contextTokens,
             context_window AS contextWindow`;
 const CODEX_CONVERSATION_ACTIVITY_TIMESTAMP_SQL_FOR_ALIAS_C = `MAX(
+  COALESCE(c.last_activity_at, 0),
   COALESCE(c.updated_at, 0),
-  COALESCE(
-    (SELECT MAX(m.timestamp)
-     FROM ${CODEX_MESSAGES_TABLE} m
-     WHERE (m.conversation_id = c.conversation_id OR ((m.conversation_id IS NULL OR TRIM(m.conversation_id) = '') AND m.conversation_key = c.conversation_key))),
-    0
-  ),
   COALESCE(c.created_at, 0)
 )`;
 
@@ -183,13 +184,15 @@ async function resolveRegisteredConversationID(
   return registered?.conversationID || null;
 }
 
-async function resolveMessageConversationSelector(
-  conversationKey: number,
-): Promise<{
+type MessageConversationSelector = {
   whereSql: string;
   params: unknown[];
   registered?: ConversationRegistryRow | null;
-}> {
+};
+
+async function resolveMessageConversationSelector(
+  conversationKey: number,
+): Promise<MessageConversationSelector> {
   const registered = await getRegisteredConversationScope(conversationKey);
   const conversationID = registered?.conversationID || null;
   return conversationID
@@ -211,98 +214,39 @@ function messageJoinCondition(
     `${messageAlias}.conversation_key = ${conversationAlias}.conversation_key))`;
 }
 
-function normalizeStoredConversationID(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
+function canonicalMessageConversationSelector(
+  registered: ConversationRegistryRow,
+): MessageConversationSelector {
+  return {
+    whereSql: "conversation_id = ?",
+    params: [registered.conversationID],
+    registered,
+  };
 }
 
-function canonicalIDConflictsWithRegistered(
-  conversationID: string,
-  registered: ConversationRegistryRow,
-): boolean {
-  const match = /^lfz:[^:]+:(upstream|claude_code|codex):(global|paper):lib-(\d+):paper-(\d+):legacy-(\d+)$/.exec(
-    conversationID,
-  );
-  if (!match) return false;
-  const [, system, kind, libraryID, paperItemID, legacyKey] = match;
-  return (
-    system !== registered.system ||
-    kind !== registered.kind ||
-    Number(libraryID) !== registered.libraryID ||
-    Number(paperItemID) !== (registered.paperItemID || 0) ||
-    Number(legacyKey) !== registered.conversationKey
-  );
-}
-
-async function repairRecoverableMessageConversationIDs(
-  registered: ConversationRegistryRow,
-): Promise<void> {
-  if (!registered.valid || !registered.conversationID) return;
-  const rows = (await Zotero.DB.queryAsync(
-    `SELECT DISTINCT conversation_id AS conversationID
-     FROM ${CODEX_MESSAGES_TABLE}
-     WHERE conversation_key = ?`,
-    [registered.conversationKey],
-  )) as Array<{ conversationID?: unknown }> | undefined;
-  if (!rows?.length) return;
-  const hasBlankID = rows.some(
-    (row) => !normalizeStoredConversationID(row.conversationID),
-  );
-  const staleIDs = Array.from(
-    new Set(
-      rows
-        .map((row) => normalizeStoredConversationID(row.conversationID))
-        .filter((id) => id && id !== registered.conversationID),
-    ),
-  );
-  if (!hasBlankID && staleIDs.length === 0) return;
-  if (staleIDs.length > 1) {
-    logCodexScopeWarning(
-      `Refused to repair Codex conversation ${registered.conversationKey}: multiple stale conversation ids found.`,
-    );
-    return;
-  }
-  if (
-    staleIDs[0] &&
-    canonicalIDConflictsWithRegistered(staleIDs[0], registered)
-  ) {
-    logCodexScopeWarning(
-      `Refused to repair Codex conversation ${registered.conversationKey}: stale conversation id belongs to a different scope.`,
-    );
-    return;
-  }
-  if (registered.kind === "paper") {
-    const inferredPaperItemID = inferSinglePaperItemIdFromContextRows(
-      await getCodexMessagePaperContextRows(registered.conversationKey),
-    );
-    if (inferredPaperItemID === "ambiguous") {
-      logCodexScopeWarning(
-        `Refused to repair Codex conversation ${registered.conversationKey}: ambiguous paper context evidence.`,
+async function resolveRepairingMessageConversationSelector(
+  conversationKey: number,
+  options: { destructive?: boolean } = {},
+): Promise<MessageConversationSelector> {
+  let selector = await resolveMessageConversationSelector(conversationKey);
+  if (!selector.registered?.conversationID) return selector;
+  const repair = await repairRecoverableMessageConversationIDs({
+    queryAsync: Zotero.DB.queryAsync.bind(Zotero.DB),
+    tableName: CODEX_MESSAGES_TABLE,
+    registered: selector.registered,
+    getPaperContextRows: getCodexMessagePaperContextRows,
+    storeLabel: "Codex",
+    log: logCodexScopeWarning,
+  });
+  if (repair.status === "refused") {
+    if (options.destructive) {
+      throw new Error(
+        `Refused destructive Codex conversation operation for ${conversationKey}: ${repair.reason || "ambiguous stale message ids found"}.`,
       );
-      return;
     }
-    if (
-      inferredPaperItemID &&
-      inferredPaperItemID !== (registered.paperItemID || 0)
-    ) {
-      logCodexScopeWarning(
-        `Refused to repair Codex conversation ${registered.conversationKey}: message context points to paper ${inferredPaperItemID}, not ${registered.paperItemID || ""}.`,
-      );
-      return;
-    }
+    selector = canonicalMessageConversationSelector(selector.registered);
   }
-  const staleID = staleIDs[0] || "";
-  await Zotero.DB.queryAsync(
-    `UPDATE ${CODEX_MESSAGES_TABLE}
-     SET conversation_id = ?
-     WHERE conversation_key = ?
-       AND (
-         conversation_id IS NULL OR TRIM(conversation_id) = ''
-         ${staleID ? "OR conversation_id = ?" : ""}
-       )`,
-    staleID
-      ? [registered.conversationID, registered.conversationKey, staleID]
-      : [registered.conversationID, registered.conversationKey],
-  );
+  return selector;
 }
 
 async function touchCodexConversationActivity(
@@ -317,9 +261,19 @@ async function touchCodexConversationActivity(
      SET updated_at = CASE
        WHEN COALESCE(updated_at, 0) > ? THEN updated_at
        ELSE ?
+     END,
+         last_activity_at = CASE
+       WHEN COALESCE(last_activity_at, 0) > ? THEN last_activity_at
+       ELSE ?
      END
      WHERE conversation_key = ?`,
-    [normalizedTimestamp, normalizedTimestamp, normalizedKey],
+    [
+      normalizedTimestamp,
+      normalizedTimestamp,
+      normalizedTimestamp,
+      normalizedTimestamp,
+      normalizedKey,
+    ],
   );
 }
 
@@ -536,6 +490,9 @@ async function ensureCodexConversationCatalogColumns(
     ["paper_item_id", "paper_item_id INTEGER"],
     ["created_at", "created_at INTEGER"],
     ["updated_at", "updated_at INTEGER"],
+    ["last_activity_at", "last_activity_at INTEGER"],
+    ["user_turn_count", "user_turn_count INTEGER NOT NULL DEFAULT 0"],
+    ["first_user_title", "first_user_title TEXT"],
     ["title", "title TEXT"],
     ["provider_session_id", "provider_session_id TEXT"],
     ["scoped_conversation_key", "scoped_conversation_key TEXT"],
@@ -582,6 +539,51 @@ async function backfillCodexConversationTimestamps(): Promise<void> {
      )
      WHERE updated_at IS NULL`,
     [now],
+  );
+}
+
+async function refreshCodexConversationCatalogSummary(
+  conversationKey?: number,
+): Promise<void> {
+  const normalizedKey =
+    conversationKey === undefined
+      ? null
+      : normalizeConversationKey(conversationKey);
+  if (conversationKey !== undefined && !normalizedKey) return;
+  await repairRecoverableCodexCatalogMessageConversationIDs(
+    normalizedKey || undefined,
+  );
+  const whereSql = normalizedKey ? "WHERE conversation_key = ?" : "";
+  const params = normalizedKey ? [normalizedKey] : [];
+  await Zotero.DB.queryAsync(
+    `UPDATE ${CODEX_CONVERSATIONS_TABLE}
+     SET first_user_title = (
+           SELECT m0.text
+           FROM ${CODEX_MESSAGES_TABLE} m0
+           WHERE ${messageJoinCondition("m0", CODEX_CONVERSATIONS_TABLE)}
+             AND m0.role = 'user'
+           ORDER BY m0.timestamp ASC, m0.id ASC
+           LIMIT 1
+         ),
+         last_activity_at = COALESCE(
+           (
+             SELECT MAX(m.timestamp)
+             FROM ${CODEX_MESSAGES_TABLE} m
+             WHERE ${messageJoinCondition("m", CODEX_CONVERSATIONS_TABLE)}
+           ),
+           updated_at,
+           created_at
+         ),
+         user_turn_count = COALESCE(
+           (
+             SELECT SUM(CASE WHEN m.role = 'user' THEN 1 ELSE 0 END)
+             FROM ${CODEX_MESSAGES_TABLE} m
+             WHERE ${messageJoinCondition("m", CODEX_CONVERSATIONS_TABLE)}
+           ),
+           0
+         )
+     ${whereSql}`,
+    params,
   );
 }
 
@@ -727,6 +729,36 @@ async function getCodexMessagePaperContextRows(
   )) || []) as PaperContextJsonColumns[];
 }
 
+async function repairRecoverableCodexCatalogMessageConversationIDs(
+  conversationKey?: number,
+): Promise<{
+  checked: number;
+  repaired: number;
+  refused: number;
+}> {
+  const normalizedKey =
+    conversationKey === undefined
+      ? null
+      : normalizeConversationKey(conversationKey);
+  if (conversationKey !== undefined && !normalizedKey) {
+    return { checked: 0, repaired: 0, refused: 0 };
+  }
+  return await repairRecoverableCatalogMessageConversationIDs({
+    queryAsync: Zotero.DB.queryAsync.bind(Zotero.DB),
+    catalogTable: CODEX_CONVERSATIONS_TABLE,
+    messageTable: CODEX_MESSAGES_TABLE,
+    system: "codex",
+    kindSql: "c.kind",
+    paperItemIDSql: "c.paper_item_id",
+    getPaperContextRows: getCodexMessagePaperContextRows,
+    storeLabel: "Codex",
+    log: logCodexScopeWarning,
+    ...(normalizedKey
+      ? { filterSql: "c.conversation_key = ?", filterParams: [normalizedKey] }
+      : {}),
+  });
+}
+
 async function backfillCodexConversationIDs(): Promise<void> {
   const rows = (await Zotero.DB.queryAsync(
     `SELECT conversation_key AS conversationKey,
@@ -779,7 +811,7 @@ export async function repairCodexConversationIdentityRegistry(): Promise<void> {
             c.paper_item_id AS paperItemID,
             c.created_at AS createdAt,
             ${CODEX_CONVERSATION_ACTIVITY_TIMESTAMP_SQL_FOR_ALIAS_C} AS updatedAt,
-            c.title AS title,
+            COALESCE(NULLIF(TRIM(c.title), ''), NULLIF(TRIM(c.first_user_title), '')) AS title,
             c.provider_session_id AS providerSessionId,
             c.scoped_conversation_key AS scopedConversationKey,
             c.scope_type AS scopeType,
@@ -995,6 +1027,9 @@ export async function initCodexAppServerStore(): Promise<void> {
         paper_item_id INTEGER,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
+        last_activity_at INTEGER,
+        user_turn_count INTEGER NOT NULL DEFAULT 0,
+        first_user_title TEXT,
         title TEXT,
         provider_session_id TEXT,
         scoped_conversation_key TEXT,
@@ -1016,6 +1051,10 @@ export async function initCodexAppServerStore(): Promise<void> {
        ON ${CODEX_CONVERSATIONS_TABLE} (library_id, kind, paper_item_id, updated_at DESC, conversation_key DESC)`,
     );
     await Zotero.DB.queryAsync(
+      `CREATE INDEX IF NOT EXISTS ${CODEX_CONVERSATIONS_ACTIVITY_INDEX}
+       ON ${CODEX_CONVERSATIONS_TABLE} (library_id, kind, paper_item_id, last_activity_at DESC, updated_at DESC, conversation_key DESC)`,
+    );
+    await Zotero.DB.queryAsync(
       `CREATE UNIQUE INDEX IF NOT EXISTS ${CODEX_CONVERSATIONS_ID_INDEX}
        ON ${CODEX_CONVERSATIONS_TABLE} (conversation_id)`,
     );
@@ -1023,6 +1062,7 @@ export async function initCodexAppServerStore(): Promise<void> {
     await migrateLegacyCodexConversationKeys();
     await backfillCodexConversationIDs();
     await repairCodexConversationIdentityRegistry();
+    await refreshCodexConversationCatalogSummary();
   });
   cleanupRememberedConversationKeyPrefs();
 }
@@ -1089,50 +1129,53 @@ export async function appendCodexMessage(
     : Date.now();
   const conversationID = await resolveRegisteredConversationID(normalizedKey);
 
-  await Zotero.DB.queryAsync(
-    `INSERT INTO ${CODEX_MESSAGES_TABLE}
-      (conversation_id, conversation_key, role, text, timestamp, run_mode, agent_run_id, selected_text, selected_texts_json, selected_text_sources_json, selected_text_paper_contexts_json, selected_text_note_contexts_json, paper_contexts_json, full_text_paper_contexts_json, citation_paper_contexts_json, quote_citations_json, screenshot_images, attachments_json, model_name, model_entry_id, model_provider_label, webchat_run_state, webchat_completion_reason, reasoning_summary, reasoning_details, compact_marker, context_tokens, context_window)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      conversationID,
-      normalizedKey,
-      message.role,
-      message.text || "",
-      messageTimestamp,
-      message.runMode || null,
-      message.agentRunId || null,
-      selectedTexts[0] || message.selectedText || null,
-      selectedTexts.length ? JSON.stringify(selectedTexts) : null,
-      selectedTextSources,
-      selectedTextPaperContexts.some((entry) => Boolean(entry))
-        ? JSON.stringify(selectedTextPaperContexts)
-        : null,
-      selectedTextNoteContexts.some((entry) => Boolean(entry))
-        ? JSON.stringify(selectedTextNoteContexts)
-        : null,
-      paperContexts.length ? JSON.stringify(paperContexts) : null,
-      fullTextPaperContexts.length ? JSON.stringify(fullTextPaperContexts) : null,
-      citationPaperContexts.length ? JSON.stringify(citationPaperContexts) : null,
-      quoteCitations.length ? JSON.stringify(quoteCitations) : null,
-      screenshotImages.length ? JSON.stringify(screenshotImages) : null,
-      attachments.length ? JSON.stringify(attachments) : null,
-      message.modelName || null,
-      message.modelEntryId || null,
-      message.modelProviderLabel || null,
-      message.webchatRunState || null,
-      message.webchatCompletionReason || null,
-      message.reasoningSummary || null,
-      message.reasoningDetails || null,
-      message.compactMarker ? 1 : 0,
-      Number.isFinite(Number(message.contextTokens))
-        ? Math.floor(Number(message.contextTokens))
-        : null,
-      Number.isFinite(Number(message.contextWindow))
-        ? Math.floor(Number(message.contextWindow))
-        : null,
-    ],
-  );
-  await touchCodexConversationActivity(normalizedKey, messageTimestamp);
+  await Zotero.DB.executeTransaction(async () => {
+    await Zotero.DB.queryAsync(
+      `INSERT INTO ${CODEX_MESSAGES_TABLE}
+        (conversation_id, conversation_key, role, text, timestamp, run_mode, agent_run_id, selected_text, selected_texts_json, selected_text_sources_json, selected_text_paper_contexts_json, selected_text_note_contexts_json, paper_contexts_json, full_text_paper_contexts_json, citation_paper_contexts_json, quote_citations_json, screenshot_images, attachments_json, model_name, model_entry_id, model_provider_label, webchat_run_state, webchat_completion_reason, reasoning_summary, reasoning_details, compact_marker, context_tokens, context_window)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        conversationID,
+        normalizedKey,
+        message.role,
+        message.text || "",
+        messageTimestamp,
+        message.runMode || null,
+        message.agentRunId || null,
+        selectedTexts[0] || message.selectedText || null,
+        selectedTexts.length ? JSON.stringify(selectedTexts) : null,
+        selectedTextSources,
+        selectedTextPaperContexts.some((entry) => Boolean(entry))
+          ? JSON.stringify(selectedTextPaperContexts)
+          : null,
+        selectedTextNoteContexts.some((entry) => Boolean(entry))
+          ? JSON.stringify(selectedTextNoteContexts)
+          : null,
+        paperContexts.length ? JSON.stringify(paperContexts) : null,
+        fullTextPaperContexts.length ? JSON.stringify(fullTextPaperContexts) : null,
+        citationPaperContexts.length ? JSON.stringify(citationPaperContexts) : null,
+        quoteCitations.length ? JSON.stringify(quoteCitations) : null,
+        screenshotImages.length ? JSON.stringify(screenshotImages) : null,
+        attachments.length ? JSON.stringify(attachments) : null,
+        message.modelName || null,
+        message.modelEntryId || null,
+        message.modelProviderLabel || null,
+        message.webchatRunState || null,
+        message.webchatCompletionReason || null,
+        message.reasoningSummary || null,
+        message.reasoningDetails || null,
+        message.compactMarker ? 1 : 0,
+        Number.isFinite(Number(message.contextTokens))
+          ? Math.floor(Number(message.contextTokens))
+          : null,
+        Number.isFinite(Number(message.contextWindow))
+          ? Math.floor(Number(message.contextWindow))
+          : null,
+      ],
+    );
+    await touchCodexConversationActivity(normalizedKey, messageTimestamp);
+    await refreshCodexConversationCatalogSummary(normalizedKey);
+  });
   await refreshCodexConversationSearchIndex(normalizedKey);
 }
 
@@ -1142,7 +1185,7 @@ export async function loadCodexConversation(
 ): Promise<StoredChatMessage[]> {
   const normalizedKey = normalizeConversationKey(conversationKey);
   if (!normalizedKey || !isCodexStoreConversationKey(normalizedKey)) return [];
-  const selector = await resolveMessageConversationSelector(normalizedKey);
+  const selector = await resolveRepairingMessageConversationSelector(normalizedKey);
   const normalizedLimit = normalizeLimit(limit, CODEX_HISTORY_LIMIT);
   let rows = (await Zotero.DB.queryAsync(
     buildLatestStoredMessagesQuery({
@@ -1152,18 +1195,6 @@ export async function loadCodexConversation(
     }),
     [...selector.params, normalizedLimit],
   )) as Array<Record<string, unknown>> | undefined;
-
-  if (!rows?.length && selector.registered?.conversationID) {
-    await repairRecoverableMessageConversationIDs(selector.registered);
-    rows = (await Zotero.DB.queryAsync(
-      buildLatestStoredMessagesQuery({
-        tableName: CODEX_MESSAGES_TABLE,
-        selectColumnsSql: CODEX_MESSAGE_SELECT_COLUMNS_SQL,
-        whereSql: selector.whereSql,
-      }),
-      [...selector.params, normalizedLimit],
-    )) as typeof rows;
-  }
 
   if (!rows?.length) return [];
 
@@ -1351,11 +1382,16 @@ export async function loadCodexConversation(
 export async function clearCodexConversation(conversationKey: number): Promise<void> {
   const normalizedKey = normalizeConversationKey(conversationKey);
   if (!normalizedKey || !isCodexStoreConversationKey(normalizedKey)) return;
-  const selector = await resolveMessageConversationSelector(normalizedKey);
-  await Zotero.DB.queryAsync(
-    `DELETE FROM ${CODEX_MESSAGES_TABLE} WHERE ${selector.whereSql}`,
-    selector.params,
-  );
+  const selector = await resolveRepairingMessageConversationSelector(normalizedKey, {
+    destructive: true,
+  });
+  await Zotero.DB.executeTransaction(async () => {
+    await Zotero.DB.queryAsync(
+      `DELETE FROM ${CODEX_MESSAGES_TABLE} WHERE ${selector.whereSql}`,
+      selector.params,
+    );
+    await refreshCodexConversationCatalogSummary(normalizedKey);
+  });
   await refreshCodexConversationSearchIndex(normalizedKey);
 }
 
@@ -1374,7 +1410,9 @@ export async function deleteCodexTurnMessages(
     : 0;
   if (normalizedUserTimestamp <= 0 || normalizedAssistantTimestamp <= 0) return;
 
-  const selector = await resolveMessageConversationSelector(normalizedKey);
+  const selector = await resolveRepairingMessageConversationSelector(normalizedKey, {
+    destructive: true,
+  });
   await Zotero.DB.executeTransaction(async () => {
     await Zotero.DB.queryAsync(
       `DELETE FROM ${CODEX_MESSAGES_TABLE}
@@ -1402,6 +1440,7 @@ export async function deleteCodexTurnMessages(
        )`,
       [...selector.params, normalizedAssistantTimestamp],
     );
+    await refreshCodexConversationCatalogSummary(normalizedKey);
   });
   await refreshCodexConversationSearchIndex(normalizedKey);
 }
@@ -1412,18 +1451,23 @@ export async function pruneCodexConversation(
 ): Promise<void> {
   const normalizedKey = normalizeConversationKey(conversationKey);
   if (!normalizedKey || !isCodexStoreConversationKey(normalizedKey)) return;
-  const selector = await resolveMessageConversationSelector(normalizedKey);
-  await Zotero.DB.queryAsync(
-    `DELETE FROM ${CODEX_MESSAGES_TABLE}
-     WHERE id IN (
-       SELECT id
-       FROM ${CODEX_MESSAGES_TABLE}
-       WHERE ${selector.whereSql}
-       ORDER BY ${storedMessageDisplayOrderSql({ direction: "desc" })}
-       LIMIT -1 OFFSET ?
-    )`,
-    [...selector.params, normalizeLimit(keep, CODEX_HISTORY_LIMIT)],
-  );
+  const selector = await resolveRepairingMessageConversationSelector(normalizedKey, {
+    destructive: true,
+  });
+  await Zotero.DB.executeTransaction(async () => {
+    await Zotero.DB.queryAsync(
+      `DELETE FROM ${CODEX_MESSAGES_TABLE}
+       WHERE id IN (
+         SELECT id
+         FROM ${CODEX_MESSAGES_TABLE}
+         WHERE ${selector.whereSql}
+         ORDER BY ${storedMessageDisplayOrderSql({ direction: "desc" })}
+         LIMIT -1 OFFSET ?
+      )`,
+      [...selector.params, normalizeLimit(keep, CODEX_HISTORY_LIMIT)],
+    );
+    await refreshCodexConversationCatalogSummary(normalizedKey);
+  });
   await refreshCodexConversationSearchIndex(normalizedKey);
 }
 
@@ -1465,57 +1509,60 @@ export async function updateLatestCodexUserMessage(
   const messageTimestamp = Number.isFinite(message.timestamp)
     ? Math.floor(message.timestamp)
     : Date.now();
-  const selector = await resolveMessageConversationSelector(normalizedKey);
-  await Zotero.DB.queryAsync(
-    `UPDATE ${CODEX_MESSAGES_TABLE}
-     SET text = ?,
-         timestamp = ?,
-         run_mode = ?,
-         agent_run_id = ?,
-         selected_text = ?,
-         selected_texts_json = ?,
-         selected_text_sources_json = ?,
-         selected_text_paper_contexts_json = ?,
-         selected_text_note_contexts_json = ?,
-         paper_contexts_json = ?,
-         full_text_paper_contexts_json = ?,
-         citation_paper_contexts_json = ?,
-         screenshot_images = ?,
-         attachments_json = ?
-     WHERE id = (
-       SELECT id
-       FROM ${CODEX_MESSAGES_TABLE}
-       WHERE ${selector.whereSql} AND role = 'user'
-       ORDER BY timestamp DESC, id DESC
-       LIMIT 1
-     )`,
-    [
-      message.text || "",
-      messageTimestamp,
-      message.runMode || null,
-      message.agentRunId || null,
-      selectedTexts[0] || null,
-      selectedTexts.length ? JSON.stringify(selectedTexts) : null,
-      serializeSelectedTextSources(message.selectedTextSources, selectedTexts.length),
-      selectedTextPaperContexts.some((entry) => Boolean(entry))
-        ? JSON.stringify(selectedTextPaperContexts)
-        : null,
-      selectedTextNoteContexts.some((entry) => Boolean(entry))
-        ? JSON.stringify(selectedTextNoteContexts)
-        : null,
-      message.paperContexts?.length ? JSON.stringify(normalizePaperContextRefs(message.paperContexts)) : null,
-      message.fullTextPaperContexts?.length
-        ? JSON.stringify(normalizePaperContextRefs(message.fullTextPaperContexts))
-        : null,
-      message.citationPaperContexts?.length
-        ? JSON.stringify(normalizePaperContextRefs(message.citationPaperContexts))
-        : null,
-      message.screenshotImages?.length ? JSON.stringify(message.screenshotImages) : null,
-      message.attachments?.length ? JSON.stringify(message.attachments) : null,
-      ...selector.params,
-    ],
-  );
-  await touchCodexConversationActivity(normalizedKey, messageTimestamp);
+  const selector = await resolveRepairingMessageConversationSelector(normalizedKey);
+  await Zotero.DB.executeTransaction(async () => {
+    await Zotero.DB.queryAsync(
+      `UPDATE ${CODEX_MESSAGES_TABLE}
+       SET text = ?,
+           timestamp = ?,
+           run_mode = ?,
+           agent_run_id = ?,
+           selected_text = ?,
+           selected_texts_json = ?,
+           selected_text_sources_json = ?,
+           selected_text_paper_contexts_json = ?,
+           selected_text_note_contexts_json = ?,
+           paper_contexts_json = ?,
+           full_text_paper_contexts_json = ?,
+           citation_paper_contexts_json = ?,
+           screenshot_images = ?,
+           attachments_json = ?
+       WHERE id = (
+         SELECT id
+         FROM ${CODEX_MESSAGES_TABLE}
+         WHERE ${selector.whereSql} AND role = 'user'
+         ORDER BY timestamp DESC, id DESC
+         LIMIT 1
+       )`,
+      [
+        message.text || "",
+        messageTimestamp,
+        message.runMode || null,
+        message.agentRunId || null,
+        selectedTexts[0] || null,
+        selectedTexts.length ? JSON.stringify(selectedTexts) : null,
+        serializeSelectedTextSources(message.selectedTextSources, selectedTexts.length),
+        selectedTextPaperContexts.some((entry) => Boolean(entry))
+          ? JSON.stringify(selectedTextPaperContexts)
+          : null,
+        selectedTextNoteContexts.some((entry) => Boolean(entry))
+          ? JSON.stringify(selectedTextNoteContexts)
+          : null,
+        message.paperContexts?.length ? JSON.stringify(normalizePaperContextRefs(message.paperContexts)) : null,
+        message.fullTextPaperContexts?.length
+          ? JSON.stringify(normalizePaperContextRefs(message.fullTextPaperContexts))
+          : null,
+        message.citationPaperContexts?.length
+          ? JSON.stringify(normalizePaperContextRefs(message.citationPaperContexts))
+          : null,
+        message.screenshotImages?.length ? JSON.stringify(message.screenshotImages) : null,
+        message.attachments?.length ? JSON.stringify(message.attachments) : null,
+        ...selector.params,
+      ],
+    );
+    await touchCodexConversationActivity(normalizedKey, messageTimestamp);
+    await refreshCodexConversationCatalogSummary(normalizedKey);
+  });
   await refreshCodexConversationSearchIndex(normalizedKey);
 }
 
@@ -1546,55 +1593,58 @@ export async function updateLatestCodexAssistantMessage(
     ? Math.floor(message.timestamp)
     : Date.now();
   const quoteCitations = normalizeQuoteCitations(message.quoteCitations);
-  const selector = await resolveMessageConversationSelector(normalizedKey);
-  await Zotero.DB.queryAsync(
-    `UPDATE ${CODEX_MESSAGES_TABLE}
-     SET text = ?,
-         timestamp = ?,
-         run_mode = ?,
-         agent_run_id = ?,
-         model_name = ?,
-         model_entry_id = ?,
-         model_provider_label = ?,
-         webchat_run_state = ?,
-         webchat_completion_reason = ?,
-         reasoning_summary = ?,
-         reasoning_details = ?,
-         compact_marker = ?,
-         quote_citations_json = ?,
-         context_tokens = COALESCE(?, context_tokens),
-         context_window = COALESCE(?, context_window)
-     WHERE id = (
-       SELECT id
-       FROM ${CODEX_MESSAGES_TABLE}
-       WHERE ${selector.whereSql} AND role = 'assistant'
-       ORDER BY timestamp DESC, id DESC
-       LIMIT 1
-     )`,
-    [
-      message.text || "",
-      messageTimestamp,
-      message.runMode || null,
-      message.agentRunId || null,
-      message.modelName || null,
-      message.modelEntryId || null,
-      message.modelProviderLabel || null,
-      message.webchatRunState || null,
-      message.webchatCompletionReason || null,
-      message.reasoningSummary || null,
-      message.reasoningDetails || null,
-      message.compactMarker ? 1 : 0,
-      quoteCitations.length ? JSON.stringify(quoteCitations) : null,
-      Number.isFinite(Number(message.contextTokens)) && Number(message.contextTokens) > 0
-        ? Math.floor(Number(message.contextTokens))
-        : null,
-      Number.isFinite(Number(message.contextWindow)) && Number(message.contextWindow) > 0
-        ? Math.floor(Number(message.contextWindow))
-        : null,
-      ...selector.params,
-    ],
-  );
-  await touchCodexConversationActivity(normalizedKey, messageTimestamp);
+  const selector = await resolveRepairingMessageConversationSelector(normalizedKey);
+  await Zotero.DB.executeTransaction(async () => {
+    await Zotero.DB.queryAsync(
+      `UPDATE ${CODEX_MESSAGES_TABLE}
+       SET text = ?,
+           timestamp = ?,
+           run_mode = ?,
+           agent_run_id = ?,
+           model_name = ?,
+           model_entry_id = ?,
+           model_provider_label = ?,
+           webchat_run_state = ?,
+           webchat_completion_reason = ?,
+           reasoning_summary = ?,
+           reasoning_details = ?,
+           compact_marker = ?,
+           quote_citations_json = ?,
+           context_tokens = COALESCE(?, context_tokens),
+           context_window = COALESCE(?, context_window)
+       WHERE id = (
+         SELECT id
+         FROM ${CODEX_MESSAGES_TABLE}
+         WHERE ${selector.whereSql} AND role = 'assistant'
+         ORDER BY timestamp DESC, id DESC
+         LIMIT 1
+       )`,
+      [
+        message.text || "",
+        messageTimestamp,
+        message.runMode || null,
+        message.agentRunId || null,
+        message.modelName || null,
+        message.modelEntryId || null,
+        message.modelProviderLabel || null,
+        message.webchatRunState || null,
+        message.webchatCompletionReason || null,
+        message.reasoningSummary || null,
+        message.reasoningDetails || null,
+        message.compactMarker ? 1 : 0,
+        quoteCitations.length ? JSON.stringify(quoteCitations) : null,
+        Number.isFinite(Number(message.contextTokens)) && Number(message.contextTokens) > 0
+          ? Math.floor(Number(message.contextTokens))
+          : null,
+        Number.isFinite(Number(message.contextWindow)) && Number(message.contextWindow) > 0
+          ? Math.floor(Number(message.contextWindow))
+          : null,
+        ...selector.params,
+      ],
+    );
+    await touchCodexConversationActivity(normalizedKey, messageTimestamp);
+    await refreshCodexConversationCatalogSummary(normalizedKey);
+  });
   await refreshCodexConversationSearchIndex(normalizedKey);
 }
 
@@ -1910,7 +1960,7 @@ export async function getCodexConversationSummary(
             c.paper_item_id AS paperItemID,
             c.created_at AS createdAt,
             ${CODEX_CONVERSATION_ACTIVITY_TIMESTAMP_SQL_FOR_ALIAS_C} AS updatedAt,
-            c.title AS title,
+            COALESCE(NULLIF(TRIM(c.title), ''), NULLIF(TRIM(c.first_user_title), '')) AS title,
             c.provider_session_id AS providerSessionId,
             c.scoped_conversation_key AS scopedConversationKey,
             c.scope_type AS scopeType,
@@ -1919,13 +1969,7 @@ export async function getCodexConversationSummary(
             c.cwd AS cwd,
             c.model_name AS modelName,
             c.effort AS effort,
-            COALESCE(
-              (SELECT COUNT(*)
-               FROM ${CODEX_MESSAGES_TABLE} m
-               WHERE ${messageJoinCondition("m", "c")}
-                 AND m.role = 'user'),
-              0
-            ) AS userTurnCount
+            COALESCE(c.user_turn_count, 0) AS userTurnCount
      FROM ${CODEX_CONVERSATIONS_TABLE} c
      WHERE c.conversation_key = ?
      LIMIT 1`,
@@ -1996,45 +2040,50 @@ export async function upsertCodexConversationSummary(params: {
     title,
   });
   if (!registryOk) return false;
-  await Zotero.DB.queryAsync(
-    `INSERT INTO ${CODEX_CONVERSATIONS_TABLE}
-      (conversation_id, conversation_key, library_id, kind, paper_item_id, created_at, updated_at, title, provider_session_id, scoped_conversation_key, scope_type, scope_id, scope_label, cwd, model_name, effort)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(conversation_key) DO UPDATE SET
-       conversation_id = excluded.conversation_id,
-       library_id = excluded.library_id,
-       kind = excluded.kind,
-       paper_item_id = excluded.paper_item_id,
-       created_at = COALESCE(${CODEX_CONVERSATIONS_TABLE}.created_at, excluded.created_at),
-       updated_at = excluded.updated_at,
-       title = COALESCE(excluded.title, ${CODEX_CONVERSATIONS_TABLE}.title),
-       provider_session_id = COALESCE(excluded.provider_session_id, ${CODEX_CONVERSATIONS_TABLE}.provider_session_id),
-       scoped_conversation_key = COALESCE(excluded.scoped_conversation_key, ${CODEX_CONVERSATIONS_TABLE}.scoped_conversation_key),
-       scope_type = COALESCE(excluded.scope_type, ${CODEX_CONVERSATIONS_TABLE}.scope_type),
-       scope_id = COALESCE(excluded.scope_id, ${CODEX_CONVERSATIONS_TABLE}.scope_id),
-       scope_label = COALESCE(excluded.scope_label, ${CODEX_CONVERSATIONS_TABLE}.scope_label),
-       cwd = COALESCE(excluded.cwd, ${CODEX_CONVERSATIONS_TABLE}.cwd),
-       model_name = COALESCE(excluded.model_name, ${CODEX_CONVERSATIONS_TABLE}.model_name),
-       effort = COALESCE(excluded.effort, ${CODEX_CONVERSATIONS_TABLE}.effort)`,
-    [
-      conversationID,
-      conversationKey,
-      libraryID,
-      params.kind,
-      paperItemID || null,
-      createdAt,
-      updatedAt,
-      title,
-      params.providerSessionId?.trim() || null,
-      params.scopedConversationKey?.trim() || null,
-      params.scopeType?.trim() || null,
-      params.scopeId?.trim() || null,
-      params.scopeLabel?.trim() || null,
-      params.cwd?.trim() || null,
-      params.model?.trim() || null,
-      params.effort?.trim() || null,
-    ],
-  );
+  await Zotero.DB.executeTransaction(async () => {
+    await Zotero.DB.queryAsync(
+      `INSERT INTO ${CODEX_CONVERSATIONS_TABLE}
+        (conversation_id, conversation_key, library_id, kind, paper_item_id, created_at, updated_at, last_activity_at, user_turn_count, first_user_title, title, provider_session_id, scoped_conversation_key, scope_type, scope_id, scope_label, cwd, model_name, effort)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(conversation_key) DO UPDATE SET
+         conversation_id = excluded.conversation_id,
+         library_id = excluded.library_id,
+         kind = excluded.kind,
+         paper_item_id = excluded.paper_item_id,
+         created_at = COALESCE(${CODEX_CONVERSATIONS_TABLE}.created_at, excluded.created_at),
+         updated_at = excluded.updated_at,
+         last_activity_at = COALESCE(excluded.last_activity_at, ${CODEX_CONVERSATIONS_TABLE}.last_activity_at, excluded.updated_at),
+         title = COALESCE(excluded.title, ${CODEX_CONVERSATIONS_TABLE}.title),
+         provider_session_id = COALESCE(excluded.provider_session_id, ${CODEX_CONVERSATIONS_TABLE}.provider_session_id),
+         scoped_conversation_key = COALESCE(excluded.scoped_conversation_key, ${CODEX_CONVERSATIONS_TABLE}.scoped_conversation_key),
+         scope_type = COALESCE(excluded.scope_type, ${CODEX_CONVERSATIONS_TABLE}.scope_type),
+         scope_id = COALESCE(excluded.scope_id, ${CODEX_CONVERSATIONS_TABLE}.scope_id),
+         scope_label = COALESCE(excluded.scope_label, ${CODEX_CONVERSATIONS_TABLE}.scope_label),
+         cwd = COALESCE(excluded.cwd, ${CODEX_CONVERSATIONS_TABLE}.cwd),
+         model_name = COALESCE(excluded.model_name, ${CODEX_CONVERSATIONS_TABLE}.model_name),
+         effort = COALESCE(excluded.effort, ${CODEX_CONVERSATIONS_TABLE}.effort)`,
+      [
+        conversationID,
+        conversationKey,
+        libraryID,
+        params.kind,
+        paperItemID || null,
+        createdAt,
+        updatedAt,
+        updatedAt,
+        title,
+        params.providerSessionId?.trim() || null,
+        params.scopedConversationKey?.trim() || null,
+        params.scopeType?.trim() || null,
+        params.scopeId?.trim() || null,
+        params.scopeLabel?.trim() || null,
+        params.cwd?.trim() || null,
+        params.model?.trim() || null,
+        params.effort?.trim() || null,
+      ],
+    );
+    await refreshCodexConversationCatalogSummary(conversationKey);
+  });
   await refreshCodexConversationSearchIndex(conversationKey);
   return true;
 }
@@ -2056,7 +2105,7 @@ async function listCodexConversations(params: {
               c.paper_item_id AS paperItemID,
               c.created_at AS createdAt,
               ${CODEX_CONVERSATION_ACTIVITY_TIMESTAMP_SQL_FOR_ALIAS_C} AS updatedAt,
-              c.title AS title,
+              COALESCE(NULLIF(TRIM(c.title), ''), NULLIF(TRIM(c.first_user_title), '')) AS title,
               c.provider_session_id AS providerSessionId,
               c.scoped_conversation_key AS scopedConversationKey,
               c.scope_type AS scopeType,
@@ -2065,13 +2114,7 @@ async function listCodexConversations(params: {
               c.cwd AS cwd,
               c.model_name AS modelName,
               c.effort AS effort,
-              COALESCE(
-                (SELECT COUNT(*)
-                 FROM ${CODEX_MESSAGES_TABLE} m
-                 WHERE ${messageJoinCondition("m", "c")}
-                   AND m.role = 'user'),
-                0
-              ) AS userTurnCount
+              COALESCE(c.user_turn_count, 0) AS userTurnCount
        FROM ${CODEX_CONVERSATIONS_TABLE} c
        WHERE c.library_id = ?
          AND c.kind = 'paper'
@@ -2085,7 +2128,7 @@ async function listCodexConversations(params: {
               c.paper_item_id AS paperItemID,
               c.created_at AS createdAt,
               ${CODEX_CONVERSATION_ACTIVITY_TIMESTAMP_SQL_FOR_ALIAS_C} AS updatedAt,
-              c.title AS title,
+              COALESCE(NULLIF(TRIM(c.title), ''), NULLIF(TRIM(c.first_user_title), '')) AS title,
               c.provider_session_id AS providerSessionId,
               c.scoped_conversation_key AS scopedConversationKey,
               c.scope_type AS scopeType,
@@ -2094,13 +2137,7 @@ async function listCodexConversations(params: {
               c.cwd AS cwd,
               c.model_name AS modelName,
               c.effort AS effort,
-              COALESCE(
-                (SELECT COUNT(*)
-                 FROM ${CODEX_MESSAGES_TABLE} m
-                 WHERE ${messageJoinCondition("m", "c")}
-                   AND m.role = 'user'),
-                0
-              ) AS userTurnCount
+              COALESCE(c.user_turn_count, 0) AS userTurnCount
        FROM ${CODEX_CONVERSATIONS_TABLE} c
        WHERE c.library_id = ?
          AND c.kind = 'global'
@@ -2152,7 +2189,7 @@ export async function listAllCodexPaperConversationsByLibrary(
             c.paper_item_id AS paperItemID,
             c.created_at AS createdAt,
             ${CODEX_CONVERSATION_ACTIVITY_TIMESTAMP_SQL_FOR_ALIAS_C} AS updatedAt,
-            c.title AS title,
+            COALESCE(NULLIF(TRIM(c.title), ''), NULLIF(TRIM(c.first_user_title), '')) AS title,
             c.provider_session_id AS providerSessionId,
             c.scoped_conversation_key AS scopedConversationKey,
             c.scope_type AS scopeType,
@@ -2161,23 +2198,11 @@ export async function listAllCodexPaperConversationsByLibrary(
             c.cwd AS cwd,
             c.model_name AS modelName,
             c.effort AS effort,
-            COALESCE(
-              (SELECT COUNT(*)
-               FROM ${CODEX_MESSAGES_TABLE} m
-               WHERE ${messageJoinCondition("m", "c")}
-                 AND m.role = 'user'),
-              0
-            ) AS userTurnCount
+            COALESCE(c.user_turn_count, 0) AS userTurnCount
      FROM ${CODEX_CONVERSATIONS_TABLE} c
      WHERE c.library_id = ?
        AND c.kind = 'paper'
-       AND COALESCE(
-         (SELECT COUNT(*)
-          FROM ${CODEX_MESSAGES_TABLE} m
-          WHERE ${messageJoinCondition("m", "c")}
-            AND m.role = 'user'),
-         0
-       ) > 0
+       AND COALESCE(c.user_turn_count, 0) > 0
      ORDER BY updatedAt DESC, c.conversation_key DESC
      LIMIT ?`,
     [normalizedLibraryID, normalizedLimit],
@@ -2357,5 +2382,47 @@ export async function deleteCodexConversation(
      WHERE conversation_key = ?`,
     [normalizedKey],
   );
+  await deleteCodexConversationSearchIndex(normalizedKey);
+}
+
+export async function preflightDeleteCodexConversationLocalRows(
+  conversationKey: number,
+): Promise<void> {
+  const normalizedKey = normalizeConversationKey(conversationKey);
+  if (!normalizedKey || !isCodexStoreConversationKey(normalizedKey)) return;
+  const repair = await repairRecoverableCodexCatalogMessageConversationIDs(
+    normalizedKey,
+  );
+  if (repair.refused > 0) {
+    throw new Error(
+      `Refused to delete Codex conversation ${normalizedKey}: ambiguous stale message ids found.`,
+    );
+  }
+  await resolveRepairingMessageConversationSelector(normalizedKey, {
+    destructive: true,
+  });
+}
+
+export async function deleteCodexConversationLocalRows(
+  conversationKey: number,
+): Promise<void> {
+  const normalizedKey = normalizeConversationKey(conversationKey);
+  if (!normalizedKey || !isCodexStoreConversationKey(normalizedKey)) return;
+  await preflightDeleteCodexConversationLocalRows(normalizedKey);
+  const selector = await resolveRepairingMessageConversationSelector(normalizedKey, {
+    destructive: true,
+  });
+  await Zotero.DB.executeTransaction(async () => {
+    await Zotero.DB.queryAsync(
+      `DELETE FROM ${CODEX_MESSAGES_TABLE}
+       WHERE ${selector.whereSql}`,
+      selector.params,
+    );
+    await Zotero.DB.queryAsync(
+      `DELETE FROM ${CODEX_CONVERSATIONS_TABLE}
+       WHERE conversation_key = ?`,
+      [normalizedKey],
+    );
+  });
   await deleteCodexConversationSearchIndex(normalizedKey);
 }

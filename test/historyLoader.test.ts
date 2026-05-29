@@ -457,7 +457,7 @@ describe("historyLoader", function () {
           }
           if (
             sql.includes("FROM llm_for_zotero_global_conversations gc") &&
-            sql.includes("HAVING SUM(CASE WHEN m.role = 'user' THEN 1 ELSE 0 END) = 0")
+            sql.includes("COALESCE(gc.user_turn_count, 0) = 0")
           ) {
             return conversations
               .filter((row) => row.libraryID === Number(normalizedParams[0]))
@@ -524,7 +524,7 @@ describe("historyLoader", function () {
             sql.includes("NOT EXISTS")
           ) {
             const row = conversations.find(
-              (entry) => entry.conversationKey === Number(normalizedParams[1]),
+              (entry) => entry.conversationKey === Number(normalizedParams[2]),
             );
             if (row) row.createdAt = Number(normalizedParams[0]);
             return [];
@@ -583,7 +583,7 @@ describe("historyLoader", function () {
             sql.includes("NOT EXISTS")
           ) {
             const row = conversations.find(
-              (entry) => entry.conversationKey === Number(normalizedParams[1]),
+              (entry) => entry.conversationKey === Number(normalizedParams[2]),
             );
             if (row) row.createdAt = Number(normalizedParams[0]);
             return [];

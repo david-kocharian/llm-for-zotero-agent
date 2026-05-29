@@ -2,7 +2,7 @@ import { createElement } from "../../../../utils/domHelpers";
 import { t } from "../../../../utils/i18n";
 import type { ConversationSystem } from "../../../../shared/types";
 import {
-  searchConversationIndex,
+  searchConversationIndexWithStatus,
   type ConversationSearchIndexMatch,
 } from "../../../../shared/conversationSearchIndex";
 import {
@@ -109,7 +109,10 @@ import {
   buildPaperStateKey,
 } from "../../prefHelpers";
 import { getCoreAgentRuntime } from "../../../../agent";
-import { finalizeConversationDeletion } from "../../conversationDeletion";
+import {
+  finalizeConversationDeletion,
+  getConversationDeletionFailureMessage,
+} from "../../conversationDeletion";
 import {
   clearActiveConversationForPendingDeletion,
   shouldRestoreActiveConversationOnDeletionUndo,
@@ -117,12 +120,17 @@ import {
 import {
   formatGlobalHistoryTimestamp,
   formatHistoryRowDisplayTitle,
+  formatHistoryPaperScopeLabel,
+  getHistoryEntryLabelType,
   groupHistoryEntriesByDay,
+  isOrphanHistoryEntry,
   maybeSelectPaperHistoryTarget,
   normalizeHistoryPaperItemID,
   normalizeConversationTitleSeed,
   normalizeHistoryTitle,
-  resolveHistoryEntryPaperItem,
+  resolveHistoryEntryPaperBaseItem,
+  resolveHistoryEntryPaperDisplayMetadata,
+  resolveHistoryEntrySourceState,
   resolvePaperHistoryNavigationDecision,
   GLOBAL_HISTORY_UNDO_WINDOW_MS,
   type ConversationHistoryEntry,
@@ -359,6 +367,7 @@ export function createHistoryLifecycleController(
     conversationKey: number;
   } | null = null;
   const resetHistorySearchState = () => {
+    cancelHistorySearchDebounce();
     historySearchLoadSeq += 1;
     historySearchQuery = "";
     historySearchExpanded = false;
@@ -437,6 +446,7 @@ export function createHistoryLifecycleController(
   let explicitNewChatInFlight = false;
 
   let historySearchQuery = "";
+  let historySearchDebounceTimer: number | null = null;
   let historySearchExpanded = false;
   let historySearchLoading = false;
   let historySearchEntries: ConversationHistoryEntry[] = [];
@@ -605,51 +615,33 @@ export function createHistoryLifecycleController(
   };
 
   const resolveHistoryPaperLabel = (paperItemID?: number): string => {
-    const normalizedPaperItemID =
-      Number.isFinite(Number(paperItemID)) && Number(paperItemID) > 0
-        ? Math.floor(Number(paperItemID))
-        : 0;
-    if (!normalizedPaperItemID) return "Paper chat";
-    try {
-      const paperItem = Zotero.Items.get(normalizedPaperItemID) || null;
-      const title = String(paperItem?.getField?.("title") || "").trim();
-      return title || "Paper chat";
-    } catch (_err) {
-      return "Paper chat";
-    }
+    const metadata = resolveHistoryEntryPaperDisplayMetadata(
+      { paperItemID },
+      (id) => Zotero.Items.get(id) as Zotero.Item | null,
+    );
+    return metadata?.title || "Paper chat";
+  };
+
+  const resolveHistoryScopeLabel = (
+    entry: ConversationHistoryEntry,
+  ): string => {
+    if (isOrphanHistoryEntry(entry)) return t("Orphan");
+    return entry.kind === "paper"
+      ? resolveHistoryPaperLabel(entry.paperItemID)
+      : t("Library chat");
   };
 
   const resolveHistoryScopeChipLabel = (
     entry: ConversationHistoryEntry,
   ): string => {
-    if (entry.kind !== "paper") return "Library chat";
-    const paperItemID = Number(entry.paperItemID || 0);
-    if (!Number.isFinite(paperItemID) || paperItemID <= 0) {
-      return "Paper chat";
-    }
-    try {
-      const paperItem = Zotero.Items.get(Math.floor(paperItemID)) || null;
-      let firstCreator = "";
-      let year = "";
-      try {
-        firstCreator = String(
-          paperItem?.getField?.("firstCreator") || "",
-        ).trim();
-      } catch (_err) {
-        firstCreator = "";
-      }
-      try {
-        year = String(paperItem?.getField?.("year") || "").trim();
-      } catch (_err) {
-        year = "";
-      }
-      if (firstCreator && year) return `${firstCreator}, ${year}`;
-      if (firstCreator) return firstCreator;
-      if (year) return year;
-      return "Paper chat";
-    } catch (_err) {
-      return "Paper chat";
-    }
+    if (isOrphanHistoryEntry(entry)) return t("Orphan");
+    if (entry.kind !== "paper") return t("Library chat");
+    return formatHistoryPaperScopeLabel(
+      resolveHistoryEntryPaperDisplayMetadata(entry, (id) =>
+        Zotero.Items.get(id) as Zotero.Item | null,
+      ),
+      t("Paper chat"),
+    );
   };
 
   const createHistorySearchEntry = (params: {
@@ -679,12 +671,19 @@ export function createHistoryLifecycleController(
       Number(params.paperItemID) > 0
         ? Math.floor(Number(params.paperItemID))
         : undefined;
+    const sourceState = resolveHistoryEntrySourceState(
+      { kind: params.kind, paperItemID },
+      (id) => Zotero.Items.get(id) as Zotero.Item | null,
+    );
     return {
       kind: params.kind,
+      sourceState,
       section: params.kind === "paper" ? "paper" : "open",
       sectionTitle:
         params.kind === "paper"
-          ? resolveHistoryPaperLabel(paperItemID)
+          ? sourceState === "orphan"
+            ? "Orphan"
+            : resolveHistoryPaperLabel(paperItemID)
           : "Library chat",
       conversationID: params.conversationID,
       conversationKey: Math.floor(conversationKey),
@@ -694,7 +693,11 @@ export function createHistoryLifecycleController(
       timestampText: isDraft
         ? "Draft"
         : formatGlobalHistoryTimestamp(normalizedLastActivity) ||
-          (params.kind === "paper" ? "Paper chat" : "Library chat"),
+          (params.kind === "paper"
+            ? sourceState === "orphan"
+              ? "Orphan"
+              : "Paper chat"
+            : "Library chat"),
       deletable: true,
       isDraft,
       isPendingDelete: false,
@@ -705,6 +708,7 @@ export function createHistoryLifecycleController(
           ? Math.floor(Number(params.userTurnCount))
           : undefined,
       paperItemID,
+      catalogPaperItemID: paperItemID,
       sessionVersion:
         params.kind === "paper" &&
         Number.isFinite(Number(params.sessionVersion)) &&
@@ -824,16 +828,21 @@ export function createHistoryLifecycleController(
     entries: ConversationHistoryEntry[];
     resultsByKey: Map<number, HistorySearchResult>;
   }> => {
-    const matches = await searchConversationIndex({
+    const indexed = await searchConversationIndexWithStatus({
       system: getConversationSystem(),
       libraryID,
       query,
-      limit: Math.max(GLOBAL_HISTORY_LIMIT, 100),
-      refresh: true,
+      refresh: false,
     });
+    if (
+      indexed.status !== "ready" ||
+      (indexed.matches.length === 0 && indexed.catalogRowCount > 0)
+    ) {
+      return await searchLoadedConversationHistory(libraryID, query);
+    }
     const entries: ConversationHistoryEntry[] = [];
     const documents = new Map<number, HistorySearchDocument>();
-    for (const match of matches) {
+    for (const match of indexed.matches) {
       const entry = createHistorySearchEntryFromIndexMatch(match);
       if (!entry || pendingHistoryDeletionKeys.has(entry.conversationKey)) {
         continue;
@@ -845,6 +854,40 @@ export function createHistoryLifecycleController(
       documents.set(entry.conversationKey, document);
       entries.push(entry);
     }
+    const rawResults = buildHistorySearchResults(
+      entries,
+      normalizeHistorySearchQuery(query),
+      documents,
+    );
+    const resultsByKey = new Map<number, HistorySearchResult>();
+    for (const result of rawResults) {
+      resultsByKey.set(result.entry.conversationKey, result);
+    }
+    return {
+      entries: rawResults.map((result) => result.entry),
+      resultsByKey,
+    };
+  };
+
+  const searchLoadedConversationHistory = async (
+    libraryID: number,
+    query: string,
+  ): Promise<{
+    entries: ConversationHistoryEntry[];
+    resultsByKey: Map<number, HistorySearchResult>;
+  }> => {
+    const entries = (await loadSearchableConversationHistory(libraryID)).filter(
+      (entry) => !pendingHistoryDeletionKeys.has(entry.conversationKey),
+    );
+    const documents = new Map<number, HistorySearchDocument>();
+    await Promise.all(
+      entries.map(async (entry) => {
+        documents.set(
+          entry.conversationKey,
+          await ensureHistorySearchDocument(entry),
+        );
+      }),
+    );
     const rawResults = buildHistorySearchResults(
       entries,
       normalizeHistorySearchQuery(query),
@@ -989,14 +1032,6 @@ export function createHistoryLifecycleController(
       task,
     });
     return task;
-  };
-
-  const ensureHistorySearchDocuments = async (
-    entries: ConversationHistoryEntry[],
-  ) => {
-    await Promise.all(
-      entries.map((entry) => ensureHistorySearchDocument(entry)),
-    );
   };
 
   const renderGlobalHistoryMenu = () => {
@@ -1196,8 +1231,7 @@ export function createHistoryLifecycleController(
             "llm-history-item-scope-chip",
             { textContent: resolveHistoryScopeChipLabel(entry) },
           ) as HTMLSpanElement;
-          scopeChip.dataset.labelType =
-            entry.kind === "paper" ? "paper" : "library";
+          scopeChip.dataset.labelType = getHistoryEntryLabelType(entry);
           titleRow.appendChild(scopeChip);
         }
 
@@ -1237,9 +1271,7 @@ export function createHistoryLifecycleController(
 
         if (searchActive) {
           const metaParts = [
-            entry.kind === "paper"
-              ? entry.sectionTitle || "Paper chat"
-              : "Library chat",
+            resolveHistoryScopeLabel(entry),
             entry.timestampText,
           ].filter((part) => Boolean(String(part || "").trim()));
           if (metaParts.length) {
@@ -1307,6 +1339,7 @@ export function createHistoryLifecycleController(
 
   const collapseHistorySearch = () => {
     if (!historySearchExpanded && !historySearchQuery) return;
+    cancelHistorySearchDebounce();
     historySearchLoadSeq += 1;
     historySearchExpanded = false;
     historySearchQuery = "";
@@ -1373,28 +1406,15 @@ export function createHistoryLifecycleController(
       return;
     } catch (err) {
       ztoolkit.log("LLM: DB-backed conversation history search failed", err);
-      historySearchResultsByKey = new Map();
     }
 
-    let entries: ConversationHistoryEntry[] = [];
     try {
-      entries = libraryID
-        ? await loadSearchableConversationHistory(libraryID)
-        : [];
-    } catch (err) {
-      ztoolkit.log("LLM: Failed to load searchable conversation history", err);
-      entries = [];
-    }
-    if (requestId !== historySearchLoadSeq) return;
-    historySearchEntries = entries.filter(
-      (entry) => !pendingHistoryDeletionKeys.has(entry.conversationKey),
-    );
-    historySearchResultsByKey = new Map();
-
-    const missingEntries = historySearchEntries.filter(
-      (entry) => !hasUsableHistorySearchDocument(entry),
-    );
-    if (!missingEntries.length) {
+      const loaded = libraryID
+        ? await searchLoadedConversationHistory(libraryID, historySearchQuery)
+        : { entries: [], resultsByKey: new Map<number, HistorySearchResult>() };
+      if (requestId !== historySearchLoadSeq) return;
+      historySearchEntries = loaded.entries;
+      historySearchResultsByKey = loaded.resultsByKey;
       historySearchLoading = false;
       renderGlobalHistoryMenu();
       if (
@@ -1406,9 +1426,12 @@ export function createHistoryLifecycleController(
       }
       restoreHistorySearchInputFocus();
       return;
+    } catch (err) {
+      ztoolkit.log("LLM: Failed to load searchable conversation history", err);
     }
-    await ensureHistorySearchDocuments(missingEntries);
     if (requestId !== historySearchLoadSeq) return;
+    historySearchEntries = [];
+    historySearchResultsByKey = new Map();
     historySearchLoading = false;
     renderGlobalHistoryMenu();
     if (
@@ -1420,6 +1443,28 @@ export function createHistoryLifecycleController(
     }
     restoreHistorySearchInputFocus();
   };
+
+  function cancelHistorySearchDebounce(): void {
+    const win = deps.body.ownerDocument.defaultView;
+    if (!win || historySearchDebounceTimer === null) return;
+    win.clearTimeout(historySearchDebounceTimer);
+    historySearchDebounceTimer = null;
+  }
+
+  function scheduleHistorySearchMenuRefresh(): void {
+    const win = deps.body.ownerDocument.defaultView;
+    if (!win) {
+      void refreshHistorySearchMenu();
+      return;
+    }
+    if (historySearchDebounceTimer !== null) {
+      win.clearTimeout(historySearchDebounceTimer);
+    }
+    historySearchDebounceTimer = win.setTimeout(() => {
+      historySearchDebounceTimer = null;
+      void refreshHistorySearchMenu();
+    }, 200);
+  }
 
   const refreshGlobalHistoryHeader = async () => {
     if (!historyBar || !titleStatic || !item) {
@@ -1508,6 +1553,7 @@ export function createHistoryLifecycleController(
               const isDraft = Boolean(summary.isDraft);
               paperEntries.push({
                 kind: "paper",
+                sourceState: "active",
                 section: "paper",
                 sectionTitle: "Paper Chat",
                 conversationID: summary.conversationID,
@@ -1574,6 +1620,7 @@ export function createHistoryLifecycleController(
               const isDraft = Boolean(summary.isDraft);
               paperEntries.push({
                 kind: "paper",
+                sourceState: "active",
                 section: "paper",
                 sectionTitle: "Paper Chat",
                 conversationID: summary.conversationID,
@@ -1628,6 +1675,7 @@ export function createHistoryLifecycleController(
               const isDraft = Boolean(summary.isDraft);
               paperEntries.push({
                 kind: "paper",
+                sourceState: "active",
                 section: "paper",
                 sectionTitle: "Paper Chat",
                 conversationID: summary.conversationID,
@@ -1735,6 +1783,7 @@ export function createHistoryLifecycleController(
           const isDraft = Boolean(entry.isDraft);
           globalEntries.push({
             kind: "global",
+            sourceState: "active",
             section: "open",
             sectionTitle: "Library Chat",
             conversationID: entry.conversationID,
@@ -1814,6 +1863,7 @@ export function createHistoryLifecycleController(
           const isDraft = Boolean(entry.isDraft);
           globalEntries.push({
             kind: "global",
+            sourceState: "active",
             section: "open",
             sectionTitle: "Library Chat",
             conversationID: entry.conversationID,
@@ -1894,6 +1944,7 @@ export function createHistoryLifecycleController(
           );
           globalEntries.push({
             kind: "global",
+            sourceState: "active",
             section: "open",
             sectionTitle: "Library Chat",
             conversationID: entry.conversationID,
@@ -2030,20 +2081,26 @@ export function createHistoryLifecycleController(
 
   const switchPaperConversation = async (
     nextConversationKey?: number,
-    options?: { paperItem?: Zotero.Item | null },
-  ) => {
-    if (!item || isNoteSession()) return;
+    options?: {
+      paperItem?: Zotero.Item | null;
+      allowedCatalogPaperItemID?: number;
+    },
+  ): Promise<boolean> => {
+    if (!item || isNoteSession()) return false;
     persistDraftInputForCurrentConversation();
     const paperItem = options?.paperItem || resolveCurrentPaperBaseItem();
-    if (!paperItem) return;
+    if (!paperItem) return false;
     setBasePaperItem(paperItem);
     const libraryID = getCurrentLibraryID();
-    if (!libraryID) return;
+    if (!libraryID) return false;
     const paperItemID = Number(paperItem.id || 0);
-    if (!Number.isFinite(paperItemID) || paperItemID <= 0) return;
+    if (!Number.isFinite(paperItemID) || paperItemID <= 0) return false;
 
     const system = getConversationSystem();
     const requestedConversationKey = Number(nextConversationKey || 0);
+    const allowedCatalogPaperItemID = normalizeHistoryPaperItemID(
+      options?.allowedCatalogPaperItemID,
+    );
     const loadPaperCatalogEntry = async (
       conversationKey: number,
     ): Promise<ConversationCatalogEntry | null> => {
@@ -2055,10 +2112,13 @@ export function createHistoryLifecycleController(
         kind: "paper",
         conversationKey: Math.floor(conversationKey),
       });
+      const entryPaperItemID = normalizeHistoryPaperItemID(entry?.paperItemID);
       if (
         !entry ||
         entry.kind !== "paper" ||
-        Number(entry.paperItemID || 0) !== paperItemID
+        !entryPaperItemID ||
+        (entryPaperItemID !== paperItemID &&
+          entryPaperItemID !== allowedCatalogPaperItemID)
       ) {
         return null;
       }
@@ -2106,7 +2166,7 @@ export function createHistoryLifecycleController(
         paperItemID,
       });
     }
-    if (!targetSummary) return;
+    if (!targetSummary) return false;
 
     const resolvedConversationKey = Math.floor(targetSummary.conversationKey);
     if (system === "claude_code") {
@@ -2172,6 +2232,7 @@ export function createHistoryLifecycleController(
     updateModelButton();
     updateReasoningButton();
     void refreshGlobalHistoryHeader();
+    return true;
   };
 
   const switchToHistoryTarget = async (
@@ -2188,7 +2249,7 @@ export function createHistoryLifecycleController(
   const resolvePaperItemFromHistoryEntry = (
     entry: ConversationHistoryEntry,
   ): Zotero.Item | null => {
-    return resolveHistoryEntryPaperItem(entry, (paperItemID) =>
+    return resolveHistoryEntryPaperBaseItem(entry, (paperItemID) =>
       Zotero.Items.get(paperItemID) as Zotero.Item | null,
     );
   };
@@ -2221,24 +2282,38 @@ export function createHistoryLifecycleController(
 
   const switchToHistoryEntry = async (
     entry: ConversationHistoryEntry,
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     if (entry.kind === "paper") {
+      if (isOrphanHistoryEntry(entry)) {
+        if (status) {
+          setStatus(
+            status,
+            t("This chat's source item was deleted"),
+            "warning",
+          );
+        }
+        return false;
+      }
+      const paperItem = resolvePaperItemFromHistoryEntry(entry);
+      if (!paperItem) {
+        if (status) {
+          setStatus(
+            status,
+            t("This chat's source item was deleted"),
+            "warning",
+          );
+        }
+        return false;
+      }
       const navigationDecision = resolvePaperHistoryNavigationDecision({
-        entryPaperItemID: entry.paperItemID,
+        entryPaperItemID: paperItem.id,
         currentPaperItemID: getCurrentHistoryPaperItemID(),
       });
       if (navigationDecision === "missing-target-paper") {
         if (status) {
           setStatus(status, t("Could not find this paper"), "error");
         }
-        return;
-      }
-      const paperItem = resolvePaperItemFromHistoryEntry(entry);
-      if (!paperItem) {
-        if (status) {
-          setStatus(status, t("Could not find this paper"), "error");
-        }
-        return;
+        return false;
       }
       if (navigationDecision === "select-target-paper") {
         const selected = await maybeSelectHistoryEntryPaperItem(
@@ -2249,20 +2324,35 @@ export function createHistoryLifecycleController(
           if (status) {
             setStatus(status, t("Could not focus this paper"), "error");
           }
-          return;
+          return false;
         }
       }
-      await switchPaperConversation(entry.conversationKey, { paperItem });
-      return;
+      const loaded = await switchPaperConversation(entry.conversationKey, {
+        paperItem,
+        allowedCatalogPaperItemID:
+          normalizeHistoryPaperItemID(entry.catalogPaperItemID) ||
+          normalizeHistoryPaperItemID(entry.paperItemID) ||
+          undefined,
+      });
+      if (!loaded && status) {
+        setStatus(status, t("Could not load this conversation"), "error");
+      }
+      return loaded;
     }
     await switchGlobalConversation(entry.conversationKey);
+    return true;
   };
 
   const historySearchPopupController = createHistorySearchPopupController({
     parent: panelRoot || (body as HTMLElement),
     loadEntries: async () => {
       const libraryID = getCurrentLibraryID();
-      return libraryID ? await loadSearchableConversationHistory(libraryID) : [];
+      const entries = libraryID
+        ? await loadSearchableConversationHistory(libraryID)
+        : [];
+      return entries.filter(
+        (entry) => !pendingHistoryDeletionKeys.has(entry.conversationKey),
+      );
     },
     loadDocument: (entry) => ensureHistorySearchDocument(entry),
     searchEntries: async (query) => {
@@ -2277,42 +2367,21 @@ export function createHistoryLifecycleController(
         return await searchIndexedConversationHistory(libraryID, query);
       } catch (err) {
         ztoolkit.log("LLM: DB-backed history search popup failed", err);
-        const entries = await loadSearchableConversationHistory(libraryID);
-        const documents = new Map<number, HistorySearchDocument>();
-        await Promise.all(
-          entries.map(async (entry) => {
-            documents.set(
-              entry.conversationKey,
-              await ensureHistorySearchDocument(entry),
-            );
-          }),
-        );
-        const rawResults = buildHistorySearchResults(
-          entries,
-          normalizeHistorySearchQuery(query),
-          documents,
-        );
-        const resultsByKey = new Map<number, HistorySearchResult>();
-        for (const result of rawResults) {
-          resultsByKey.set(result.entry.conversationKey, result);
-        }
-        return {
-          entries: rawResults.map((result) => result.entry),
-          resultsByKey,
-        };
+        return await searchLoadedConversationHistory(libraryID, query);
       }
     },
     onSelect: async (entry) => {
-      await switchToHistoryEntry(entry);
-      if (status) setStatus(status, t("Conversation loaded"), "ready");
+      const loaded = await switchToHistoryEntry(entry);
+      if (loaded && status) setStatus(status, t("Conversation loaded"), "ready");
+      return loaded;
+    },
+    onDelete: async (entry) => {
+      await queueHistoryDeletion(entry);
     },
     translate: t,
     log: (...args) => ztoolkit.log("LLM: history search popup", args),
     resolveLabel: (entry) => resolveHistoryScopeChipLabel(entry),
-    resolveScopeLabel: (entry) =>
-      entry.kind === "paper"
-        ? resolveHistoryPaperLabel(entry.paperItemID)
-        : t("Library chat"),
+    resolveScopeLabel: (entry) => resolveHistoryScopeLabel(entry),
   });
 
   const clearPendingDeletionCaches = (conversationKey: number) => {
@@ -2355,9 +2424,7 @@ export function createHistoryLifecycleController(
     if (!result.ok && status) {
       setStatus(
         status,
-        result.blocked
-          ? t("Failed to delete conversation. Codex thread was not archived.")
-          : t("Failed to fully delete conversation. Check logs."),
+        t(getConversationDeletionFailureMessage(result)),
         "error",
       );
     }
@@ -2641,6 +2708,16 @@ export function createHistoryLifecycleController(
   const renameHistoryEntry = async (
     entry: ConversationHistoryEntry,
   ): Promise<void> => {
+    if (isOrphanHistoryEntry(entry)) {
+      if (status) {
+        setStatus(
+          status,
+          t("This chat's source item was deleted"),
+          "warning",
+        );
+      }
+      return;
+    }
     if (isRequestPending(entry.conversationKey)) {
       if (status) {
         setStatus(
@@ -2670,10 +2747,45 @@ export function createHistoryLifecycleController(
     }
   };
 
+  const hydrateHistoryEntryForDeletion = async (
+    entry: ConversationHistoryEntry,
+  ): Promise<ConversationHistoryEntry> => {
+    try {
+      const summary = await conversationRepository.getCatalogEntry({
+        system: getConversationSystem(),
+        kind: entry.kind,
+        conversationKey: entry.conversationKey,
+      });
+      if (!summary || summary.kind !== entry.kind) return entry;
+      return {
+        ...entry,
+        conversationID: summary.conversationID || entry.conversationID,
+        libraryID: summary.libraryID || entry.libraryID,
+        title: entry.title || summary.title || "",
+        userTurnCount: summary.userTurnCount ?? entry.userTurnCount,
+        paperItemID: summary.paperItemID || entry.paperItemID,
+        catalogPaperItemID: summary.paperItemID || entry.catalogPaperItemID,
+        sessionVersion: summary.sessionVersion || entry.sessionVersion,
+        providerSessionId:
+          summary.providerSessionId || entry.providerSessionId,
+        scopedConversationKey:
+          summary.scopedConversationKey || entry.scopedConversationKey,
+      };
+    } catch (err) {
+      ztoolkit.log("LLM: Failed to hydrate history row before deletion", {
+        conversationKey: entry.conversationKey,
+        error: err,
+      });
+      return entry;
+    }
+  };
+
   const queueHistoryDeletion = async (entry: ConversationHistoryEntry) => {
     if (!item) return;
     if (!entry.deletable) return;
-    const libraryID = getCurrentLibraryID();
+    const targetEntry = await hydrateHistoryEntryForDeletion(entry);
+    const libraryID =
+      normalizeHistoryPaperItemID(targetEntry.libraryID) || getCurrentLibraryID();
     if (!libraryID) {
       if (status)
         setStatus(status, t("No active library for deletion"), "error");
@@ -2681,7 +2793,9 @@ export function createHistoryLifecycleController(
     }
 
     if (pendingHistoryDeletion) {
-      if (pendingHistoryDeletion.conversationKey === entry.conversationKey) {
+      if (
+        pendingHistoryDeletion.conversationKey === targetEntry.conversationKey
+      ) {
         return;
       }
       await finalizePendingHistoryDeletion("superseded");
@@ -2690,19 +2804,19 @@ export function createHistoryLifecycleController(
       await finalizePendingTurnDeletion("superseded");
     }
 
-    const wasActive = isHistoryEntryActive(entry);
+    const wasActive = isHistoryEntryActive(targetEntry);
     if (wasActive) {
       const didClearActiveConversation =
-        await clearActiveConversationForPendingDeletion(entry.kind, {
+        await clearActiveConversationForPendingDeletion(targetEntry.kind, {
           createFreshGlobalConversation: () =>
             createAndSwitchGlobalConversation({
               forceFresh: true,
-              excludeConversationKey: entry.conversationKey,
+              excludeConversationKey: targetEntry.conversationKey,
             }),
           createFreshPaperConversation: () =>
             createAndSwitchPaperConversation({
               forceFresh: true,
-              excludeConversationKey: entry.conversationKey,
+              excludeConversationKey: targetEntry.conversationKey,
             }),
           log: (message, ...args) => ztoolkit.log(message, ...args),
         });
@@ -2718,17 +2832,17 @@ export function createHistoryLifecycleController(
       }
     }
 
-    pendingHistoryDeletionKeys.add(entry.conversationKey);
-    invalidateHistorySearchDocument(entry.conversationKey);
+    pendingHistoryDeletionKeys.add(targetEntry.conversationKey);
+    invalidateHistorySearchDocument(targetEntry.conversationKey);
     const pending: PendingHistoryDeletion = {
-      kind: entry.kind,
-      conversationID: entry.conversationID,
-      conversationKey: entry.conversationKey,
+      kind: targetEntry.kind,
+      conversationID: targetEntry.conversationID,
+      conversationKey: targetEntry.conversationKey,
       libraryID,
       conversationSystem: getConversationSystem(),
-      paperItemID: entry.paperItemID,
-      providerSessionId: entry.providerSessionId,
-      title: entry.title,
+      paperItemID: targetEntry.paperItemID,
+      providerSessionId: targetEntry.providerSessionId,
+      title: targetEntry.title,
       wasActive,
       expiresAt: Date.now() + GLOBAL_HISTORY_UNDO_WINDOW_MS,
       timeoutId: null,
@@ -2739,13 +2853,13 @@ export function createHistoryLifecycleController(
     pendingHistoryDeletion = pending;
 
     ztoolkit.log("LLM: Queued history deletion", {
-      kind: entry.kind,
-      conversationKey: entry.conversationKey,
+      kind: targetEntry.kind,
+      conversationKey: targetEntry.conversationKey,
       libraryID,
       wasActive,
       expiresAt: pending.expiresAt,
     });
-    showHistoryUndoToast(entry.title);
+    showHistoryUndoToast(targetEntry.title);
     await refreshGlobalHistoryHeader();
     if (status)
       setStatus(status, t("Conversation deleted. Undo available."), "ready");
@@ -3089,7 +3203,7 @@ export function createHistoryLifecycleController(
       kind: entry.kind,
       conversationKey: entry.conversationKey,
     };
-    const renameDisabled = entry.isPendingDelete;
+    const renameDisabled = entry.isPendingDelete || isOrphanHistoryEntry(entry);
     historyRowRenameBtn.disabled = renameDisabled;
     historyRowRenameBtn.setAttribute(
       "aria-disabled",
@@ -3307,7 +3421,12 @@ export function createHistoryLifecycleController(
       )
         return;
       historySearchQuery = target.value || "";
-      void refreshHistorySearchMenu();
+      if (!normalizeHistorySearchQuery(historySearchQuery)) {
+        cancelHistorySearchDebounce();
+        void refreshHistorySearchMenu();
+        return;
+      }
+      scheduleHistorySearchMenuRefresh();
     });
     historyMenu.addEventListener("keydown", (e: Event) => {
       const keyboardEvent = e as KeyboardEvent;
@@ -3391,14 +3510,17 @@ export function createHistoryLifecycleController(
         row.dataset.historyKind === "paper" ? "paper" : "global";
       const entry = findHistoryEntryByKey(historyKind, parsedConversationKey);
       void (async () => {
+        let loaded = true;
         if (entry) {
-          await switchToHistoryEntry(entry);
+          loaded = await switchToHistoryEntry(entry);
         } else if (historyKind === "paper") {
           await switchPaperConversation(parsedConversationKey);
         } else {
           await switchGlobalConversation(parsedConversationKey);
         }
-        if (status) setStatus(status, t("Conversation loaded"), "ready");
+        if (loaded && status) {
+          setStatus(status, t("Conversation loaded"), "ready");
+        }
       })();
     });
 

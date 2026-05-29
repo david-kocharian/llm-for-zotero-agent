@@ -5,7 +5,11 @@ import {
   CODEX_GLOBAL_CONVERSATION_KEY_BASE,
   CODEX_PAPER_CONVERSATION_KEY_BASE,
 } from "../src/shared/conversationKeySpace";
-import { appendMessage } from "../src/utils/chatStore";
+import {
+  appendMessage,
+  deleteUpstreamConversationLocalRows,
+  loadConversation,
+} from "../src/utils/chatStore";
 import {
   appendClaudeMessage,
   initClaudeCodeStore,
@@ -16,6 +20,7 @@ import {
 } from "../src/claudeCode/store";
 import {
   appendCodexMessage,
+  deleteCodexConversationLocalRows,
   initCodexAppServerStore,
   loadCodexConversation,
   listCodexPaperConversations,
@@ -415,9 +420,18 @@ describe("conversation store key validation", function () {
     }
   });
 
-  it("repairs safe stale Codex and Claude message ids before loading", async function () {
+  it("repairs safe stale upstream, Codex, and Claude message ids before loading", async function () {
+    const upstreamConversationKey = 79;
     const codexConversationKey = CODEX_PAPER_CONVERSATION_KEY_BASE + 78;
     const claudeConversationKey = CLAUDE_PAPER_CONVERSATION_KEY_BASE + 78;
+    const upstreamConversationID = buildConversationID({
+      conversationKey: upstreamConversationKey,
+      system: "upstream",
+      kind: "paper",
+      libraryID: 1,
+      paperItemID: 79,
+      profileSignature: "profile-dev",
+    });
     const codexConversationID = buildConversationID({
       conversationKey: codexConversationKey,
       system: "codex",
@@ -450,6 +464,15 @@ describe("conversation store key validation", function () {
       paperItemID: 78,
       profileSignature: "profile-old",
     });
+    const staleUpstreamConversationID = buildConversationID({
+      conversationKey: upstreamConversationKey,
+      system: "upstream",
+      kind: "paper",
+      libraryID: 1,
+      paperItemID: 79,
+      profileSignature: "profile-old",
+    });
+    let repairedUpstream = false;
     let repairedCodex = false;
     let repairedClaude = false;
     const { queries, restore } = installQueryRecorder(async (sql, params) => {
@@ -459,6 +482,20 @@ describe("conversation store key validation", function () {
         sql.includes("WHERE legacy_conversation_key = ?")
       ) {
         const conversationKey = Number(queryParams[0]);
+        if (conversationKey === upstreamConversationKey) {
+          return [
+            {
+              conversationID: upstreamConversationID,
+              conversationKey,
+              system: "upstream",
+              kind: "paper",
+              profileSignature: "profile-dev",
+              libraryID: 1,
+              paperItemID: 79,
+              valid: 1,
+            },
+          ];
+        }
         if (conversationKey === codexConversationKey) {
           return [
             {
@@ -490,23 +527,47 @@ describe("conversation store key validation", function () {
       }
       if (
         sql.includes("SELECT DISTINCT conversation_id AS conversationID") &&
+        sql.includes("FROM llm_for_zotero_chat_messages")
+      ) {
+        return [
+          { conversationID: upstreamConversationID },
+          { conversationID: staleUpstreamConversationID },
+        ];
+      }
+      if (
+        sql.includes("SELECT DISTINCT conversation_id AS conversationID") &&
         sql.includes("FROM llm_for_zotero_codex_messages")
       ) {
-        return [{ conversationID: staleCodexConversationID }];
+        return [
+          { conversationID: codexConversationID },
+          { conversationID: staleCodexConversationID },
+        ];
       }
       if (
         sql.includes("SELECT DISTINCT conversation_id AS conversationID") &&
         sql.includes("FROM llm_for_zotero_claude_messages")
       ) {
-        return [{ conversationID: staleClaudeConversationID }];
+        return [
+          { conversationID: claudeConversationID },
+          { conversationID: staleClaudeConversationID },
+        ];
       }
       if (
         sql.includes("paper_contexts_json AS paperContextsJson") &&
-        (sql.includes("FROM llm_for_zotero_codex_messages") ||
+        (sql.includes("FROM llm_for_zotero_chat_messages") ||
+          sql.includes("FROM llm_for_zotero_codex_messages") ||
           sql.includes("FROM llm_for_zotero_claude_messages")) &&
         !sql.includes("ORDER BY timestamp ASC")
       ) {
-        return [{ paperContextsJson: JSON.stringify([{ itemId: 78 }]) }];
+        const itemId = sql.includes("llm_for_zotero_chat_messages") ? 79 : 78;
+        return [{ paperContextsJson: JSON.stringify([{ itemId }]) }];
+      }
+      if (
+        sql.includes("UPDATE llm_for_zotero_chat_messages") &&
+        sql.includes("SET conversation_id = ?")
+      ) {
+        repairedUpstream = true;
+        return [];
       }
       if (
         sql.includes("UPDATE llm_for_zotero_codex_messages") &&
@@ -521,6 +582,14 @@ describe("conversation store key validation", function () {
       ) {
         repairedClaude = true;
         return [];
+      }
+      if (
+        sql.includes("FROM llm_for_zotero_chat_messages") &&
+        sql.includes("ORDER BY timestamp ASC")
+      ) {
+        return repairedUpstream
+          ? [{ role: "user", text: "Recovered upstream row", timestamp: 100 }]
+          : [];
       }
       if (
         sql.includes("FROM llm_for_zotero_codex_messages") &&
@@ -541,11 +610,21 @@ describe("conversation store key validation", function () {
       return [];
     });
     try {
+      const upstreamMessages = await loadConversation(upstreamConversationKey);
       const codexMessages = await loadCodexConversation(codexConversationKey);
       const claudeMessages = await loadClaudeConversation(claudeConversationKey);
 
+      assert.equal(upstreamMessages[0]?.text, "Recovered upstream row");
       assert.equal(codexMessages[0]?.text, "Recovered Codex row");
       assert.equal(claudeMessages[0]?.text, "Recovered Claude row");
+      assert.isTrue(
+        queries.some(
+          (query) =>
+            query.sql.includes("UPDATE llm_for_zotero_chat_messages") &&
+            query.params[0] === upstreamConversationID &&
+            query.params[2] === staleUpstreamConversationID,
+        ),
+      );
       assert.isTrue(
         queries.some(
           (query) =>
@@ -560,6 +639,377 @@ describe("conversation store key validation", function () {
             query.sql.includes("UPDATE llm_for_zotero_claude_messages") &&
             query.params[0] === claudeConversationID &&
             query.params[2] === staleClaudeConversationID,
+        ),
+      );
+    } finally {
+      restore();
+    }
+  });
+
+  it("refuses to merge stale message ids that belong to a different scope", async function () {
+    const upstreamConversationKey = 80;
+    const codexConversationKey = CODEX_PAPER_CONVERSATION_KEY_BASE + 80;
+    const claudeConversationKey = CLAUDE_PAPER_CONVERSATION_KEY_BASE + 80;
+    const upstreamConversationID = buildConversationID({
+      conversationKey: upstreamConversationKey,
+      system: "upstream",
+      kind: "paper",
+      libraryID: 1,
+      paperItemID: 80,
+      profileSignature: "profile-dev",
+    });
+    const codexConversationID = buildConversationID({
+      conversationKey: codexConversationKey,
+      system: "codex",
+      kind: "paper",
+      libraryID: 1,
+      paperItemID: 80,
+      profileSignature: "profile-dev",
+    });
+    const claudeConversationID = buildConversationID({
+      conversationKey: claudeConversationKey,
+      system: "claude_code",
+      kind: "paper",
+      libraryID: 1,
+      paperItemID: 80,
+      profileSignature: "profile-dev",
+    });
+    const staleUpstreamConversationID = buildConversationID({
+      conversationKey: upstreamConversationKey,
+      system: "upstream",
+      kind: "paper",
+      libraryID: 1,
+      paperItemID: 999,
+      profileSignature: "profile-dev",
+    });
+    const staleCodexConversationID = buildConversationID({
+      conversationKey: codexConversationKey,
+      system: "codex",
+      kind: "paper",
+      libraryID: 1,
+      paperItemID: 999,
+      profileSignature: "profile-dev",
+    });
+    const staleClaudeConversationID = buildConversationID({
+      conversationKey: claudeConversationKey,
+      system: "claude_code",
+      kind: "paper",
+      libraryID: 1,
+      paperItemID: 999,
+      profileSignature: "profile-dev",
+    });
+    const { queries, restore } = installQueryRecorder(async (sql, params) => {
+      const queryParams = Array.isArray(params) ? params : [];
+      if (
+        sql.includes("FROM llm_for_zotero_conversation_registry") &&
+        sql.includes("WHERE legacy_conversation_key = ?")
+      ) {
+        const conversationKey = Number(queryParams[0]);
+        if (conversationKey === upstreamConversationKey) {
+          return [
+            {
+              conversationID: upstreamConversationID,
+              conversationKey,
+              system: "upstream",
+              kind: "paper",
+              profileSignature: "profile-dev",
+              libraryID: 1,
+              paperItemID: 80,
+              valid: 1,
+            },
+          ];
+        }
+        if (conversationKey === codexConversationKey) {
+          return [
+            {
+              conversationID: codexConversationID,
+              conversationKey,
+              system: "codex",
+              kind: "paper",
+              profileSignature: "profile-dev",
+              libraryID: 1,
+              paperItemID: 80,
+              valid: 1,
+            },
+          ];
+        }
+        if (conversationKey === claudeConversationKey) {
+          return [
+            {
+              conversationID: claudeConversationID,
+              conversationKey,
+              system: "claude_code",
+              kind: "paper",
+              profileSignature: "profile-dev",
+              libraryID: 1,
+              paperItemID: 80,
+              valid: 1,
+            },
+          ];
+        }
+      }
+      if (
+        sql.includes("SELECT DISTINCT conversation_id AS conversationID") &&
+        sql.includes("FROM llm_for_zotero_chat_messages")
+      ) {
+        return [{ conversationID: staleUpstreamConversationID }];
+      }
+      if (
+        sql.includes("SELECT DISTINCT conversation_id AS conversationID") &&
+        sql.includes("FROM llm_for_zotero_codex_messages")
+      ) {
+        return [{ conversationID: staleCodexConversationID }];
+      }
+      if (
+        sql.includes("SELECT DISTINCT conversation_id AS conversationID") &&
+        sql.includes("FROM llm_for_zotero_claude_messages")
+      ) {
+        return [{ conversationID: staleClaudeConversationID }];
+      }
+      if (sql.includes("ORDER BY timestamp ASC")) {
+        return [{ role: "user", text: "Canonical row", timestamp: 100 }];
+      }
+      return [];
+    });
+    try {
+      await loadConversation(upstreamConversationKey);
+      await loadCodexConversation(codexConversationKey);
+      await loadClaudeConversation(claudeConversationKey);
+
+      assert.isFalse(
+        queries.some(
+          (query) =>
+            query.sql.includes("UPDATE llm_for_zotero_chat_messages") ||
+            query.sql.includes("UPDATE llm_for_zotero_codex_messages") ||
+            query.sql.includes("UPDATE llm_for_zotero_claude_messages"),
+        ),
+      );
+      const loadQueries = queries.filter((query) =>
+        query.sql.includes("ORDER BY timestamp ASC"),
+      );
+      assert.lengthOf(loadQueries, 3);
+      assert.isTrue(
+        loadQueries.every(
+          (query) =>
+            query.sql.includes("WHERE conversation_id = ?") &&
+            !query.sql.includes("conversation_key = ?"),
+        ),
+      );
+    } finally {
+      restore();
+    }
+  });
+
+  it("repairs safe stale message ids before refreshing catalog summaries", async function () {
+    const conversationKey = 1009;
+    const conversationID = buildConversationID({
+      conversationKey,
+      system: "upstream",
+      kind: "global",
+      libraryID: 2,
+    });
+    const staleConversationID = "legacy-upstream-stale-summary";
+    const { queries, restore } = installQueryRecorder(async (sql, params) => {
+      if (
+        sql.includes("FROM llm_for_zotero_conversation_registry") &&
+        sql.includes("WHERE legacy_conversation_key = ?")
+      ) {
+        return [
+          {
+            conversationID,
+            conversationKey,
+            system: "upstream",
+            kind: "global",
+            profileSignature: "profile-test",
+            libraryID: 2,
+            paperItemID: null,
+            valid: 1,
+          },
+        ];
+      }
+      if (
+        sql.includes("FROM llm_for_zotero_global_conversations c") &&
+        sql.includes("c.conversation_id AS conversationID")
+      ) {
+        return [
+          {
+            conversationID,
+            conversationKey,
+            libraryID: 2,
+            kind: "global",
+            paperItemID: null,
+          },
+        ];
+      }
+      if (
+        sql.includes("FROM llm_for_zotero_paper_conversations c") &&
+        sql.includes("c.conversation_id AS conversationID")
+      ) {
+        return [];
+      }
+      if (
+        sql.includes("SELECT DISTINCT conversation_id AS conversationID") &&
+        sql.includes("FROM llm_for_zotero_chat_messages") &&
+        params?.[0] === conversationKey
+      ) {
+        return [
+          { conversationID },
+          { conversationID: staleConversationID },
+        ];
+      }
+      return [];
+    });
+    try {
+      await appendMessage(conversationKey, sampleMessage);
+
+      const repairIndex = queries.findIndex(
+        (query) =>
+          query.sql.includes("UPDATE llm_for_zotero_chat_messages") &&
+          query.sql.includes("SET conversation_id = ?") &&
+          query.sql.includes("OR conversation_id = ?"),
+      );
+      const summaryIndex = queries.findIndex((query) =>
+        query.sql.includes("UPDATE llm_for_zotero_global_conversations"),
+      );
+      assert.isAtLeast(repairIndex, 0);
+      assert.isAtLeast(summaryIndex, 0);
+      assert.isBelow(repairIndex, summaryIndex);
+    } finally {
+      restore();
+    }
+  });
+
+  it("repairs safe stale message ids before local deletion and refuses ambiguous stale deletion", async function () {
+    const upstreamKey = 1010;
+    const upstreamConversationID = buildConversationID({
+      conversationKey: upstreamKey,
+      system: "upstream",
+      kind: "global",
+      libraryID: 2,
+    });
+    const codexKey = CODEX_GLOBAL_CONVERSATION_KEY_BASE + 10;
+    const codexConversationID = buildConversationID({
+      conversationKey: codexKey,
+      system: "codex",
+      kind: "global",
+      libraryID: 2,
+    });
+    const { queries, restore } = installQueryRecorder(async (sql, params) => {
+      if (
+        sql.includes("FROM llm_for_zotero_conversation_registry") &&
+        sql.includes("WHERE legacy_conversation_key = ?")
+      ) {
+        if (params?.[0] === upstreamKey) {
+          return [
+            {
+              conversationID: upstreamConversationID,
+              conversationKey: upstreamKey,
+              system: "upstream",
+              kind: "global",
+              profileSignature: "profile-test",
+              libraryID: 2,
+              paperItemID: null,
+              valid: 1,
+            },
+          ];
+        }
+        if (params?.[0] === codexKey) {
+          return [
+            {
+              conversationID: codexConversationID,
+              conversationKey: codexKey,
+              system: "codex",
+              kind: "global",
+              profileSignature: "profile-test",
+              libraryID: 2,
+              paperItemID: null,
+              valid: 1,
+            },
+          ];
+        }
+      }
+      if (
+        sql.includes("FROM llm_for_zotero_global_conversations c") &&
+        sql.includes("c.conversation_id AS conversationID")
+      ) {
+        return [
+          {
+            conversationID: upstreamConversationID,
+            conversationKey: upstreamKey,
+            libraryID: 2,
+            kind: "global",
+            paperItemID: null,
+          },
+        ];
+      }
+      if (
+        sql.includes("FROM llm_for_zotero_paper_conversations c") &&
+        sql.includes("c.conversation_id AS conversationID")
+      ) {
+        return [];
+      }
+      if (
+        sql.includes("FROM llm_for_zotero_codex_conversations c") &&
+        sql.includes("c.conversation_id AS conversationID")
+      ) {
+        return [
+          {
+            conversationID: codexConversationID,
+            conversationKey: codexKey,
+            libraryID: 2,
+            kind: "global",
+            paperItemID: null,
+          },
+        ];
+      }
+      if (
+        sql.includes("SELECT DISTINCT conversation_id AS conversationID") &&
+        sql.includes("FROM llm_for_zotero_chat_messages")
+      ) {
+        return [
+          { conversationID: upstreamConversationID },
+          { conversationID: "legacy-upstream-stale-delete" },
+        ];
+      }
+      if (
+        sql.includes("SELECT DISTINCT conversation_id AS conversationID") &&
+        sql.includes("FROM llm_for_zotero_codex_messages")
+      ) {
+        return [
+          { conversationID: codexConversationID },
+          { conversationID: "stale-one" },
+          { conversationID: "stale-two" },
+        ];
+      }
+      return [];
+    });
+    try {
+      await deleteUpstreamConversationLocalRows(upstreamKey, "global");
+      let codexDeleteError = "";
+      try {
+        await deleteCodexConversationLocalRows(codexKey);
+      } catch (err) {
+        codexDeleteError = err instanceof Error ? err.message : String(err);
+      }
+      assert.match(codexDeleteError, /Refused to delete Codex conversation/);
+
+      const repairIndex = queries.findIndex(
+        (query) =>
+          query.sql.includes("UPDATE llm_for_zotero_chat_messages") &&
+          query.sql.includes("SET conversation_id = ?") &&
+          query.sql.includes("OR conversation_id = ?"),
+      );
+      const deleteIndex = queries.findIndex(
+        (query) =>
+          query.sql.includes("DELETE FROM llm_for_zotero_chat_messages") &&
+          query.sql.includes("conversation_id = ?"),
+      );
+      assert.isAtLeast(repairIndex, 0);
+      assert.isAtLeast(deleteIndex, 0);
+      assert.isBelow(repairIndex, deleteIndex);
+      assert.isFalse(
+        queries.some((query) =>
+          query.sql.includes("DELETE FROM llm_for_zotero_codex_messages"),
         ),
       );
     } finally {
@@ -751,7 +1201,7 @@ describe("Claude conversation identity repair", function () {
     const { queries, restore } = installQueryRecorder(async (sql) => {
       if (
         sql.includes("FROM llm_for_zotero_claude_conversations c") &&
-        sql.includes("ORDER BY c.updated_at DESC")
+        sql.includes("ORDER BY updatedAt DESC")
       ) {
         return [
           strictConversationSummaryRow({
@@ -787,7 +1237,7 @@ describe("Claude conversation identity repair", function () {
       const catalogQuery = queries.find(
         (query) =>
           query.sql.includes("FROM llm_for_zotero_claude_conversations c") &&
-          query.sql.includes("ORDER BY c.updated_at DESC"),
+          query.sql.includes("ORDER BY updatedAt DESC"),
       );
       assert.include(catalogQuery?.sql || "", "AS userTurnCount");
       assert.include(catalogQuery?.sql || "", "provider_session_id AS providerSessionId");

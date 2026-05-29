@@ -26,6 +26,7 @@ const zhCN: Record<string, string> = {
   "Note editing": "笔记编辑",
   "Library chat": "文献库对话",
   "Paper chat": "论文对话",
+  Orphan: "孤立对话",
   "Switch to paper chat": "切换到论文对话",
   "Switch to library chat": "切换到文献库对话",
   Settings: "设置",
@@ -104,7 +105,10 @@ const zhCN: Record<string, string> = {
   "Saved chat history to new note": "已将对话历史保存为新笔记",
   "Failed to save chat history": "保存对话历史失败",
   "Could not open plugin settings": "无法打开插件设置",
+  "Could not find this paper": "无法找到此论文",
   "Could not focus this paper": "无法聚焦到此论文",
+  "Could not load this conversation": "无法加载此对话",
+  "This chat's source item was deleted": "此对话的来源条目已被删除",
   "Failed to fully delete turn. Check logs.":
     "未能完全删除对话轮次，请查看日志。",
   "Turn deleted": "已删除对话轮次",
@@ -200,6 +204,10 @@ const zhCN: Record<string, string> = {
   "(MinerU)": "（MinerU）",
   "Failed to fully delete conversation. Check logs.":
     "未能完全删除对话，请查看日志。",
+  "Failed to delete conversation. Codex thread was not archived.":
+    "未能删除对话。Codex 线程尚未归档。",
+  "Failed to delete conversation because its saved identity is inconsistent. Check logs.":
+    "由于保存的对话身份不一致，未能删除对话。请查看日志。",
 
   // ── Constants / count labels ────────────────────────────────────────────
   "Add Text": "添加文本",

@@ -29,6 +29,20 @@ export type ConversationRegistryRow = Required<
   invalidReason?: string;
 };
 
+export type ConversationScopeValidationReason =
+  | "invalid_target"
+  | "missing_registry"
+  | "invalid_registry"
+  | "conversation_id_mismatch"
+  | "scope_mismatch";
+
+export type ConversationScopeValidationDetails = {
+  valid: boolean;
+  reason?: ConversationScopeValidationReason;
+  target?: ConversationRegistryRow;
+  registered?: ConversationRegistryRow | null;
+};
+
 export type PaperContextJsonColumns = {
   paperContextsJson?: unknown;
   fullTextPaperContextsJson?: unknown;
@@ -505,21 +519,66 @@ export async function repairRegisteredConversationScope(
 export async function validateConversationScope(
   params: ConversationRegistryScope,
 ): Promise<boolean> {
+  return (await getConversationScopeValidationDetails(params)).valid;
+}
+
+export async function getConversationScopeValidationDetails(
+  params: ConversationRegistryScope,
+): Promise<ConversationScopeValidationDetails> {
   const normalized = normalizeScope(params);
-  if (!normalized) return false;
+  if (!normalized) {
+    return { valid: false, reason: "invalid_target" };
+  }
+  const target: ConversationRegistryRow = {
+    conversationID: normalized.conversationID,
+    conversationKey: normalized.conversationKey,
+    system: normalized.system,
+    kind: normalized.kind,
+    profileSignature: normalized.profileSignature,
+    libraryID: normalized.libraryID,
+    paperItemID: normalized.paperItemID,
+    valid: normalized.valid,
+  };
   const db = getZoteroDb();
   const existing = await getRegisteredConversationScope(
     normalized.conversationKey,
   );
   if (!existing) {
-    if (!db?.queryAsync) return true;
-    return normalized.system === "upstream";
+    if (!db?.queryAsync || normalized.system === "upstream") {
+      return { valid: true, target, registered: null };
+    }
+    return {
+      valid: false,
+      reason: "missing_registry",
+      target,
+      registered: null,
+    };
   }
-  return (
-    existing.valid &&
-    existing.conversationID === normalized.conversationID &&
-    sameRegistryScope(existing, normalized)
-  );
+  if (!existing.valid) {
+    return {
+      valid: false,
+      reason: "invalid_registry",
+      target,
+      registered: existing,
+    };
+  }
+  if (existing.conversationID !== normalized.conversationID) {
+    return {
+      valid: false,
+      reason: "conversation_id_mismatch",
+      target,
+      registered: existing,
+    };
+  }
+  if (!sameRegistryScope(existing, normalized)) {
+    return {
+      valid: false,
+      reason: "scope_mismatch",
+      target,
+      registered: existing,
+    };
+  }
+  return { valid: true, target, registered: existing };
 }
 
 function collectPaperIdsFromValue(value: unknown, out: Set<number>): void {

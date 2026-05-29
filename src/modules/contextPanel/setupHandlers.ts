@@ -1007,7 +1007,7 @@ export function setupHandlers(
   ) => Promise<void> = async () => {};
   let switchPaperConversation: (
     nextConversationKey?: number,
-  ) => Promise<void> = async () => {};
+  ) => Promise<boolean | void> = async () => {};
   let createAndSwitchGlobalConversation: (
     forceFresh?: boolean,
   ) => Promise<boolean | void> = async () => {};
