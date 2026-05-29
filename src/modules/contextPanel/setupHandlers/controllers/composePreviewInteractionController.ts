@@ -21,6 +21,7 @@ import {
   isManagedBlobPath,
   removeAttachmentFile,
 } from "../../attachmentStorage";
+import { isPdfContextAttachment } from "../../contextAttachmentSupport";
 import { buildPaperKey } from "../../pdfContext";
 import {
   clearSelectedPaperState,
@@ -603,10 +604,7 @@ export function attachComposePreviewInteractionController(
 
     const currentItem = getItem();
     const currentPanelItemId = asFinitePositiveItemId(
-      currentItem?.isAttachment?.() &&
-        currentItem.attachmentContentType === "application/pdf"
-        ? currentItem.id
-        : 0,
+      isPdfContextAttachment(currentItem) ? currentItem?.id : 0,
     );
     if (currentPanelItemId) return currentPanelItemId;
 
@@ -615,7 +613,7 @@ export function attachComposePreviewInteractionController(
     const attachments = basePaper.getAttachments?.() || [];
     for (const attachmentId of attachments) {
       const attachment = Zotero.Items.get(attachmentId) || null;
-      if (attachment?.attachmentContentType === "application/pdf") {
+      if (isPdfContextAttachment(attachment)) {
         return attachment.id;
       }
     }

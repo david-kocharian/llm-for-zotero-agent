@@ -35,8 +35,11 @@ import {
   ensurePDFTextCached,
   ensureNoteTextCached,
   buildEvidencePack,
-  resolveTextAttachmentSourceMode,
 } from "./pdfContext";
+import {
+  isPdfContextAttachment,
+  isSupportedContextAttachment,
+} from "./contextAttachmentSupport";
 import { mergeQuoteCitations } from "./quoteCitations";
 import { pdfTextCache } from "./state";
 import { sanitizeText } from "./textUtils";
@@ -165,11 +168,7 @@ function getFirstPdfChildAttachment(
   const attachments = item.getAttachments();
   for (const attachmentId of attachments) {
     const attachment = Zotero.Items.get(attachmentId);
-    if (
-      attachment &&
-      attachment.isAttachment() &&
-      attachment.attachmentContentType === "application/pdf"
-    ) {
+    if (isPdfContextAttachment(attachment)) {
       return attachment;
     }
   }
@@ -178,12 +177,7 @@ function getFirstPdfChildAttachment(
 
 function resolveContextItem(ref: PaperContextRef): Zotero.Item | null {
   const direct = Zotero.Items.get(ref.contextItemId);
-  if (
-    direct &&
-    direct.isAttachment() &&
-    (direct.attachmentContentType === "application/pdf" ||
-      resolveTextAttachmentSourceMode(direct))
-  ) {
+  if (isSupportedContextAttachment(direct)) {
     return direct;
   }
   if (direct && (direct as any).isNote?.()) {
@@ -212,52 +206,7 @@ function buildPaperRefFromContextItem(
   if ((contextItem as any)?.isNote?.()) {
     return resolvePaperContextRefFromNote(contextItem);
   }
-  const pdfRef = resolvePaperContextRefFromAttachment(contextItem);
-  if (pdfRef) return pdfRef;
-  const textMode = resolveTextAttachmentSourceMode(contextItem);
-  if (!contextItem?.isAttachment?.() || !textMode) return null;
-  const parentItem = contextItem.parentID
-    ? Zotero.Items.get(contextItem.parentID) || null
-    : null;
-  if (!parentItem?.isRegularItem?.()) return null;
-  const attachmentTitle =
-    sanitizeText(
-      String(
-        contextItem.getField("title") ||
-          (contextItem as unknown as { attachmentFilename?: string })
-            .attachmentFilename ||
-          "",
-      ),
-    ) || undefined;
-  return {
-    itemId: Math.floor(Number(parentItem.id)),
-    contextItemId: Math.floor(Number(contextItem.id)),
-    contentSourceMode: textMode,
-    title:
-      sanitizeText(String(parentItem.getField("title") || "")) ||
-      `Paper ${parentItem.id}`,
-    attachmentTitle,
-    citationKey:
-      sanitizeText(String(parentItem.getField("citationKey") || "")) ||
-      undefined,
-    firstCreator:
-      sanitizeText(
-        String(
-          parentItem.getField("firstCreator") ||
-            (parentItem as Zotero.Item).firstCreator ||
-            "",
-        ),
-      ) || undefined,
-    year:
-      sanitizeText(
-        String(
-          parentItem.getField("year") ||
-            parentItem.getField("date") ||
-            parentItem.getField("issued") ||
-            "",
-        ),
-      ) || undefined,
-  };
+  return resolvePaperContextRefFromAttachment(contextItem);
 }
 
 function buildMetadataOnlyFallback(papers: PaperContextRef[]): string {

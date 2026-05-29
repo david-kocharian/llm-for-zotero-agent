@@ -543,6 +543,14 @@ export function resolveInitialPanelItemState(
   }
 
   if (
+    item?.isAttachment?.() &&
+    item.parentID &&
+    basePaperItem.isRegularItem?.()
+  ) {
+    item = basePaperItem;
+  }
+
+  if (
     isPaperPortalItem(item) ||
     (isClaudePaperPortalItem(item) && isClaudeCodeModeEnabled()) ||
     (isCodexPaperPortalItem(item) && isCodexAppServerModeEnabled())

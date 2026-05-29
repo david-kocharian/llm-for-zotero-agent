@@ -63,6 +63,7 @@ import {
   resolveTextAttachmentSourceModeFromMetadata,
   type TextAttachmentSourceMode,
 } from "./textAttachmentExtraction";
+import { isPdfContextAttachment } from "./contextAttachmentSupport";
 import { config } from "./constants";
 
 const prefKey = (key: string) => `${config.prefsPrefix}.${key}`;
@@ -422,10 +423,7 @@ async function cachePDFText(
 
     const title = mainItem?.getField("title") || item.getField("title") || "";
 
-    const pdfItem =
-      item.isAttachment() && item.attachmentContentType === "application/pdf"
-        ? item
-        : null;
+    const pdfItem = isPdfContextAttachment(item) ? item : null;
 
     // 1. Try MinerU disk cache (only if MinerU is enabled)
     const allowMineru = options?.sourceMode !== "text";

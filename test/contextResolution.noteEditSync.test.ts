@@ -2,6 +2,7 @@ import { assert } from "chai";
 import {
   appendSelectedTextContextForItem,
   getSelectedTextContextEntries,
+  resolvePanelContextLifecycleState,
   resolveContextSourceItemIdAsync,
   setSelectedTextContextEntries,
   syncSelectedTextContextForSource,
@@ -412,6 +413,60 @@ describe("contextResolution note-edit sync", function () {
     assert.equal(paperContext?.itemId, 250);
     assert.equal(paperContext?.contextItemId, 251);
     assert.equal(paperContext?.contentSourceMode, "html");
+  });
+
+  it("marks parent lifecycle context as async when sync fallback is only first child", function () {
+    const parentItem = {
+      id: 252,
+      isAttachment: () => false,
+      isRegularItem: () => true,
+      getAttachments: () => [253],
+      getField: () => "Parent Paper",
+      getBestAttachment: async () => snapshot,
+    };
+    const firstPdf = {
+      id: 253,
+      parentID: 252,
+      attachmentContentType: "application/pdf",
+      attachmentFilename: "main.pdf",
+      isAttachment: () => true,
+      isRegularItem: () => false,
+      getField: () => "Main PDF",
+    };
+    const snapshot = {
+      id: 254,
+      parentID: 252,
+      attachmentContentType: "text/html",
+      attachmentFilename: "snapshot.html",
+      isAttachment: () => true,
+      isRegularItem: () => false,
+      getField: () => "Snapshot",
+    };
+    const items = new Map<number, unknown>([
+      [252, parentItem],
+      [253, firstPdf],
+      [254, snapshot],
+    ]);
+    globalScope.Zotero = {
+      ...(originalZotero || {}),
+      Items: {
+        get: (id: number) => items.get(id) || null,
+      },
+      Tabs: {
+        selectedType: "library",
+        selectedID: "library",
+        _tabs: [],
+      },
+    };
+
+    const lifecycle = resolvePanelContextLifecycleState(
+      parentItem as unknown as Zotero.Item,
+    );
+
+    assert.equal(lifecycle?.ownerItemId, 252);
+    assert.equal(lifecycle?.contextItemId, 253);
+    assert.equal(lifecycle?.sourceKind, "first-child");
+    assert.isTrue(lifecycle?.requiresAsyncResolution);
   });
 
   it("does not preload parent context when Zotero best attachment is unsupported", async function () {

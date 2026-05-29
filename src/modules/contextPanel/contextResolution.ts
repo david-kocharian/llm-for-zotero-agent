@@ -23,6 +23,7 @@ import type {
   NoteContextRef,
   ZoteroTabsState,
   ResolvedContextSource,
+  ContextSourceLifecycleState,
   SelectedTextContext,
   SelectedTextSource,
   PaperContextRef,
@@ -33,7 +34,11 @@ import {
   resolveDisplayConversationKind,
 } from "./portalScope";
 import { formatPaperCitationLabel } from "./paperAttribution";
-import { resolveTextAttachmentSourceModeFromMetadata } from "./textAttachmentExtraction";
+import {
+  isPdfContextAttachment,
+  resolveContextAttachmentSupport,
+  isSupportedContextAttachment,
+} from "./contextAttachmentSupport";
 import { createContextIcon } from "./contextIcons";
 import {
   getFirstSelectionFromReader,
@@ -306,61 +311,87 @@ export function getActiveContextAttachmentFromTabs(): Zotero.Item | null {
   return null;
 }
 
-function getAttachmentFilename(item: Zotero.Item | null | undefined): string {
-  if (!item?.isAttachment?.()) return "";
-  return sanitizeText(
-    String(
-      (item as unknown as { attachmentFilename?: unknown })
-        .attachmentFilename || "",
-    ),
-  )
-    .trim()
-    .toLowerCase();
-}
-
-function getAttachmentContentType(
-  item: Zotero.Item | null | undefined,
-): string {
-  if (!item?.isAttachment?.()) return "";
-  return sanitizeText(String(item.attachmentContentType || ""))
-    .trim()
-    .toLowerCase();
-}
-
-function isSupportedPdfContextAttachment(
-  item: Zotero.Item | null | undefined,
-): item is Zotero.Item {
-  if (!item?.isAttachment?.()) return false;
-  const contentType = getAttachmentContentType(item);
-  const filename = getAttachmentFilename(item);
-  return contentType === "application/pdf" || filename.endsWith(".pdf");
-}
-
-function isSupportedTextContextAttachment(
-  item: Zotero.Item | null | undefined,
-): item is Zotero.Item {
-  if (!item?.isAttachment?.()) return false;
-  return Boolean(
-    resolveTextAttachmentSourceModeFromMetadata({
-      contentType: getAttachmentContentType(item),
-      filename: getAttachmentFilename(item),
-    }),
-  );
-}
-
-function isSupportedContextAttachment(
-  item: Zotero.Item | null | undefined,
-): item is Zotero.Item {
-  return (
-    isSupportedPdfContextAttachment(item) ||
-    isSupportedTextContextAttachment(item)
-  );
-}
-
 function getContextItemLabel(item: Zotero.Item): string {
   const title = sanitizeText(item.getField("title") || "").trim();
   if (title) return title;
   return `Attachment ${item.id}`;
+}
+
+function normalizeItemId(item: Zotero.Item | null | undefined): number {
+  const parsed = Math.floor(Number(item?.id || 0));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function resolveRegularOwnerItem(
+  item: Zotero.Item | null | undefined,
+): Zotero.Item | null {
+  if (!item) return null;
+  if (item.isAttachment?.() && item.parentID) {
+    const parent = Zotero.Items.get(item.parentID) || null;
+    return parent?.isRegularItem?.() ? parent : null;
+  }
+  return item.isRegularItem?.() ? item : null;
+}
+
+function resolveContextOwnerItem(
+  rawItem: Zotero.Item | null | undefined,
+  contextItem: Zotero.Item | null | undefined,
+): Zotero.Item | null {
+  return (
+    resolveRegularOwnerItem(contextItem) || resolveRegularOwnerItem(rawItem)
+  );
+}
+
+function sourceNeedsAsyncBestAttachmentResolution(
+  rawItem: Zotero.Item | null | undefined,
+  source: ResolvedContextSource,
+): boolean {
+  if (!rawItem) return false;
+  if (
+    source.sourceKind === "active-reader" ||
+    source.sourceKind === "selected-child" ||
+    source.sourceKind === "direct-attachment" ||
+    source.sourceKind === "best-attachment" ||
+    source.sourceKind === "note"
+  ) {
+    return false;
+  }
+  if (
+    isGlobalPortalItem(rawItem) ||
+    resolveDisplayConversationKind(rawItem) === "global" ||
+    isSupportedContextAttachment(rawItem)
+  ) {
+    return false;
+  }
+  return Boolean(resolveRegularOwnerItem(rawItem));
+}
+
+export function resolvePanelContextLifecycleState(
+  rawItem: Zotero.Item | null | undefined,
+): ContextSourceLifecycleState | null {
+  if (!rawItem) return null;
+  const source = resolveContextSourceItem(rawItem);
+  const contextItem = source.contextItem || null;
+  const support = resolveContextAttachmentSupport(contextItem);
+  const ownerItem = resolveContextOwnerItem(rawItem, contextItem);
+  const requiresAsyncResolution = sourceNeedsAsyncBestAttachmentResolution(
+    rawItem,
+    source,
+  );
+  return {
+    rawItem,
+    ownerItem,
+    contextItem,
+    rawItemId: normalizeItemId(rawItem),
+    ownerItemId: normalizeItemId(ownerItem),
+    contextItemId: normalizeItemId(contextItem),
+    sourceKind: source.sourceKind || "none",
+    supportKind: support?.kind,
+    contentSourceMode:
+      support?.kind === "text" ? support.contentSourceMode : undefined,
+    requiresAsyncResolution,
+    isAsyncFinal: !requiresAsyncResolution,
+  };
 }
 
 function getFirstPdfChildAttachment(
@@ -370,7 +401,7 @@ function getFirstPdfChildAttachment(
   const attachments = item.getAttachments();
   for (const attachmentId of attachments) {
     const attachment = Zotero.Items.get(attachmentId);
-    if (isSupportedPdfContextAttachment(attachment)) {
+    if (isPdfContextAttachment(attachment)) {
       return attachment;
     }
   }

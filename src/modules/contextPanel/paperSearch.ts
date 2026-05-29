@@ -1,6 +1,7 @@
 import type { PaperContextRef } from "./types";
 import { sanitizeText } from "./textUtils";
 import { isMineruSyncPackageAttachment } from "./mineruSync";
+import { isPdfContextAttachment } from "./contextAttachmentSupport";
 
 export type PaperSearchAttachmentCandidate = {
   contextItemId: number;
@@ -177,11 +178,7 @@ function getPdfChildAttachments(item: Zotero.Item): Zotero.Item[] {
   const attachments = item.getAttachments();
   for (const attachmentId of attachments) {
     const attachment = Zotero.Items.get(attachmentId);
-    if (
-      attachment &&
-      attachment.isAttachment() &&
-      attachment.attachmentContentType === "application/pdf"
-    ) {
+    if (isPdfContextAttachment(attachment)) {
       out.push(attachment);
     }
   }

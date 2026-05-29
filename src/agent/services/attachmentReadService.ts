@@ -1,9 +1,9 @@
 import { readAttachmentBytes } from "../../modules/contextPanel/attachmentStorage";
 import {
   extractTextAttachmentContent,
-  resolveTextAttachmentSourceModeFromMetadata,
   type TextAttachmentSourceMode,
 } from "../../modules/contextPanel/textAttachmentExtraction";
+import { resolveContextAttachmentSupportFromMetadata } from "../../modules/contextPanel/contextAttachmentSupport";
 import {
   formatAttachmentSourceType,
   formatPaperCitationLabel,
@@ -187,13 +187,20 @@ export class AttachmentReadService {
       throw new Error(`Attachment ${params.attachmentId} not found`);
     }
 
-    const sourceMode = resolveTextAttachmentSourceModeFromMetadata({
+    const attachmentSupport = resolveContextAttachmentSupportFromMetadata({
       contentType: info.contentType,
       filename: info.filename || info.title,
     });
-    const category = sourceMode
-      ? "text"
-      : categorizeContentType(info.contentType);
+    const sourceMode =
+      attachmentSupport?.kind === "text"
+        ? attachmentSupport.contentSourceMode
+        : null;
+    const category =
+      attachmentSupport?.kind === "pdf"
+        ? "pdf"
+        : sourceMode
+          ? "text"
+          : categorizeContentType(info.contentType);
     const attribution = this.buildAttachmentAttribution(info, sourceMode);
     const baseResult = {
       attachmentId: info.attachmentId,

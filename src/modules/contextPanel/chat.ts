@@ -251,7 +251,7 @@ import {
 } from "./queuedFollowUps";
 import { getConversationKey } from "./conversationIdentity";
 import { recordContextCacheTelemetry } from "../../contextCache/manager";
-import { resolveTextAttachmentSourceModeFromMetadata } from "./textAttachmentExtraction";
+import { resolveContextAttachmentSupportFromMetadata } from "./contextAttachmentSupport";
 import {
   validateConversationScope,
   type ConversationRegistryScope,
@@ -2062,6 +2062,133 @@ function setRequestUIBusy(
   // switch conversations or create new ones while a request is in flight.
 }
 
+function getPanelBodyConversationKey(
+  body: Element,
+  fallbackItem?: Zotero.Item | null,
+): number | null {
+  const panelRoot = body.querySelector("#llm-main") as HTMLElement | null;
+  const displayedKey = Number(panelRoot?.dataset.itemId || 0);
+  if (Number.isFinite(displayedKey) && displayedKey > 0) {
+    return displayedKey;
+  }
+  if (fallbackItem) {
+    return getConversationKey(fallbackItem);
+  }
+  const getItem = activeContextPanels.get(body);
+  const item = getItem?.() || null;
+  if (item) {
+    return getConversationKey(item);
+  }
+  return null;
+}
+
+function cleanupDisconnectedPanelBody(body: Element): void {
+  activeContextPanels.delete(body);
+  activeContextPanelStateSync.delete(body);
+}
+
+function visitConversationPanelBodies(
+  conversationKey: number,
+  primaryBody: Element | null | undefined,
+  primaryItem: Zotero.Item | null | undefined,
+  visit: (body: Element) => void,
+): void {
+  const visited = new Set<Element>();
+  const visitIfMatching = (
+    body: Element,
+    fallbackItem?: Zotero.Item | null,
+  ) => {
+    if (visited.has(body)) return;
+    visited.add(body);
+    if (!body.isConnected) {
+      cleanupDisconnectedPanelBody(body);
+      return;
+    }
+    if (getPanelBodyConversationKey(body, fallbackItem) !== conversationKey) {
+      return;
+    }
+    visit(body);
+  };
+
+  if (primaryBody) {
+    visitIfMatching(primaryBody, primaryItem);
+  }
+  for (const [body, getItem] of activeContextPanels.entries()) {
+    visitIfMatching(body, getItem?.() || null);
+  }
+  for (const body of activeContextPanelStateSync.keys()) {
+    visitIfMatching(body);
+  }
+}
+
+function syncRequestUIForConversation(
+  conversationKey: number,
+  primaryBody?: Element | null,
+  primaryItem?: Zotero.Item | null,
+): void {
+  visitConversationPanelBodies(
+    conversationKey,
+    primaryBody,
+    primaryItem,
+    (body) => activeContextPanelStateSync.get(body)?.(),
+  );
+}
+
+function setPendingRequestIdAndSync(
+  conversationKey: number,
+  requestId: number,
+  primaryBody?: Element | null,
+  primaryItem?: Zotero.Item | null,
+): void {
+  setPendingRequestId(conversationKey, requestId);
+  syncRequestUIForConversation(conversationKey, primaryBody, primaryItem);
+}
+
+export function clearPendingRequestIdAndSync(
+  conversationKey: number,
+  primaryBody?: Element | null,
+  primaryItem?: Zotero.Item | null,
+): void {
+  setPendingRequestIdAndSync(conversationKey, 0, primaryBody, primaryItem);
+}
+
+function setStatusForConversationPanels(
+  conversationKey: number,
+  primaryBody: Element,
+  primaryItem: Zotero.Item,
+  primaryUi: PanelRequestUI,
+  text: string,
+  kind: Parameters<typeof setStatus>[2],
+): void {
+  visitConversationPanelBodies(
+    conversationKey,
+    primaryBody,
+    primaryItem,
+    (panelBody) => {
+      const liveStatus = panelBody.querySelector(
+        "#llm-status",
+      ) as HTMLElement | null;
+      const status =
+        liveStatus ||
+        (panelBody === primaryBody && primaryUi.status?.isConnected
+          ? primaryUi.status
+          : null);
+      if (!status) return;
+      const liveChatBox = panelBody.querySelector(
+        "#llm-chat-box",
+      ) as HTMLDivElement | null;
+      const chatBox =
+        liveChatBox ||
+        (panelBody === primaryBody && primaryUi.chatBox?.isConnected
+          ? primaryUi.chatBox
+          : null);
+      withScrollGuard(chatBox, conversationKey, () => {
+        setStatus(status, text, kind);
+      });
+    },
+  );
+}
+
 function restoreRequestUIIdle(
   body: Element,
   conversationKey: number,
@@ -2107,32 +2234,20 @@ function createPanelUpdateHelpers(
   ) => void;
 } {
   const refreshChatSafely = () => {
-    // Guard: only refresh if the panel is still showing this conversation.
-    // When the user switches conversations mid-stream, the panel's dataset
-    // changes but the streaming closure still references the old body/item.
-    // Without this check the streamed content would overwrite the new
-    // conversation's display.
-    const panelRoot = body.querySelector("#llm-main") as HTMLElement | null;
-    if (panelRoot) {
-      const displayedKey = Number(panelRoot.dataset.itemId || 0);
-      if (displayedKey > 0 && displayedKey !== conversationKey) return;
-    }
     refreshConversationPanels(body, item);
   };
   const setStatusSafely = (
     text: string,
     kind: Parameters<typeof setStatus>[2],
   ) => {
-    if (!ui.status) return;
-    // Same guard for status updates.
-    const panelRoot = body.querySelector("#llm-main") as HTMLElement | null;
-    if (panelRoot) {
-      const displayedKey = Number(panelRoot.dataset.itemId || 0);
-      if (displayedKey > 0 && displayedKey !== conversationKey) return;
-    }
-    withScrollGuard(ui.chatBox, conversationKey, () => {
-      setStatus(ui.status as HTMLElement, text, kind);
-    });
+    setStatusForConversationPanels(
+      conversationKey,
+      body,
+      item,
+      ui,
+      text,
+      kind,
+    );
   };
   return {
     refreshChatSafely,
@@ -4549,7 +4664,7 @@ export async function retryLatestAssistantResponse(
   }
 
   const thisRequestId = nextRequestId();
-  setPendingRequestId(conversationKey, thisRequestId);
+  setPendingRequestIdAndSync(conversationKey, thisRequestId, body, item);
   setRequestUIBusy(body, ui, conversationKey, "Preparing retry...");
   const assistantMessage = retryPair.assistantMessage;
   const assistantSnapshot = takeAssistantSnapshot(assistantMessage);
@@ -4632,6 +4747,7 @@ export async function retryLatestAssistantResponse(
   if (!question.trim()) {
     setStatusSafely("Nothing to retry for latest turn", "error");
     restoreRequestUIIdle(body, conversationKey, thisRequestId);
+    clearPendingRequestIdAndSync(conversationKey, body, item);
     return;
   }
 
@@ -4684,6 +4800,7 @@ export async function retryLatestAssistantResponse(
     if (blockedAttachments.length) {
       restoreOriginalAssistant();
       restoreRequestUIIdle(body, conversationKey, thisRequestId);
+      clearPendingRequestIdAndSync(conversationKey, body, item);
       setStatusSafely(
         buildCodexAppServerNativeAttachmentBlockMessage(blockedAttachments),
         "error",
@@ -4729,6 +4846,7 @@ export async function retryLatestAssistantResponse(
   } catch (err) {
     restoreOriginalAssistant();
     restoreRequestUIIdle(body, conversationKey, thisRequestId);
+    clearPendingRequestIdAndSync(conversationKey, body, item);
     const message =
       err instanceof Error && err.message.trim()
         ? err.message
@@ -5159,7 +5277,7 @@ export async function retryLatestAssistantResponse(
   } finally {
     restoreRequestUIIdle(body, conversationKey, thisRequestId);
     setAbortController(conversationKey, null);
-    setPendingRequestId(conversationKey, 0);
+    clearPendingRequestIdAndSync(conversationKey, body, item);
     if (effectiveRequestConfig.providerProtocol !== "web_sync") {
       scheduleQueuedInputDrain(body, {
         conversationSystem:
@@ -5604,13 +5722,10 @@ function getAttachmentResourceType(input: {
   contentType: string;
   filename: string;
 }): AgentAttachmentResource["attachmentType"] {
-  const contentType = input.contentType.toLowerCase();
-  const filename = input.filename.toLowerCase();
-  if (contentType === "application/pdf" || filename.endsWith(".pdf")) {
-    return "pdf";
-  }
-  const textSourceMode = resolveTextAttachmentSourceModeFromMetadata(input);
-  return textSourceMode || "unsupported";
+  return (
+    resolveContextAttachmentSupportFromMetadata(input)?.attachmentType ||
+    "unsupported"
+  );
 }
 
 function getAttachmentReadableVia(
@@ -5895,7 +6010,8 @@ function buildAgentEngineDeps(
       setAbortController(ck, ctrl),
     getAbortControllerCtor,
     nextRequestId,
-    setPendingRequestId,
+    setPendingRequestId: (ck: number, id: number) =>
+      setPendingRequestIdAndSync(ck, id),
     getPanelRequestUI,
     setRequestUIBusy,
     restoreRequestUIIdle,
@@ -6215,7 +6331,7 @@ export async function sendQuestion(
   // Track this request
   const thisRequestId = nextRequestId();
   const initialConversationKey = getConversationKey(item);
-  setPendingRequestId(initialConversationKey, thisRequestId);
+  setPendingRequestIdAndSync(initialConversationKey, thisRequestId, body, item);
 
   // Show cancel, hide send
   setRequestUIBusy(body, ui, initialConversationKey, "Preparing request...");
@@ -6271,6 +6387,10 @@ export async function sendQuestion(
   optimisticHelpers.refreshChatSafely();
 
   const conversationKey = getConversationKey(item);
+  if (conversationKey !== initialConversationKey) {
+    clearPendingRequestIdAndSync(initialConversationKey, body, item);
+    setPendingRequestIdAndSync(conversationKey, thisRequestId, body, item);
+  }
   const safeConversationScope = await validateConversationScopeForItem({
     item,
     conversationKey,
@@ -6285,7 +6405,7 @@ export async function sendQuestion(
       "error",
     );
     restoreRequestUIIdle(body, conversationKey, thisRequestId);
-    setPendingRequestId(conversationKey, 0);
+    clearPendingRequestIdAndSync(conversationKey, body, item);
     return;
   }
 
@@ -6449,7 +6569,7 @@ export async function sendQuestion(
     } finally {
       restoreRequestUIIdle(body, conversationKey, thisRequestId);
       setAbortController(conversationKey, null);
-      setPendingRequestId(conversationKey, 0);
+      clearPendingRequestIdAndSync(conversationKey, body, item);
       scheduleQueuedInputDrain(body, {
         conversationSystem:
           resolveConversationSystemForItem(item) || "upstream",
@@ -6792,7 +6912,7 @@ export async function sendQuestion(
       setStatusSafely(errMsg, "error");
     } finally {
       setAbortController(conversationKey, null);
-      setPendingRequestId(conversationKey, 0);
+      clearPendingRequestIdAndSync(conversationKey, body, item);
     }
     return;
   }
@@ -7214,7 +7334,7 @@ export async function sendQuestion(
   } finally {
     restoreRequestUIIdle(body, conversationKey, thisRequestId);
     setAbortController(conversationKey, null);
-    setPendingRequestId(conversationKey, 0);
+    clearPendingRequestIdAndSync(conversationKey, body, item);
     scheduleQueuedInputDrain(body, {
       conversationSystem: resolveConversationSystemForItem(item) || "upstream",
       conversationKey,
@@ -8616,6 +8736,15 @@ export function refreshConversationPanels(
   const conversationKey = getConversationKey(primaryItem);
   const refreshedPanels = new Set<Element>();
   const refreshOne = (body: Element, item: Zotero.Item) => {
+    const panelRoot = body.querySelector("#llm-main") as HTMLElement | null;
+    const displayedKey = Number(panelRoot?.dataset.itemId || 0);
+    if (
+      Number.isFinite(displayedKey) &&
+      displayedKey > 0 &&
+      displayedKey !== conversationKey
+    ) {
+      return;
+    }
     const chatBox = body.querySelector(
       "#llm-chat-box",
     ) as HTMLDivElement | null;

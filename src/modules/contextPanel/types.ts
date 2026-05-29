@@ -137,6 +137,28 @@ export type ResolvedContextSource = {
     | "direct-attachment"
     | "first-child"
     | "best-attachment";
+  ownerItem?: Zotero.Item | null;
+  rawItem?: Zotero.Item | null;
+  ownerItemId?: number;
+  contextItemId?: number;
+  supportKind?: "pdf" | "text";
+  contentSourceMode?: PaperContentSourceMode;
+  requiresAsyncResolution?: boolean;
+  isAsyncFinal?: boolean;
+};
+
+export type ContextSourceLifecycleState = {
+  rawItem: Zotero.Item | null;
+  ownerItem: Zotero.Item | null;
+  contextItem: Zotero.Item | null;
+  rawItemId: number;
+  ownerItemId: number;
+  contextItemId: number;
+  sourceKind: NonNullable<ResolvedContextSource["sourceKind"]>;
+  supportKind?: "pdf" | "text";
+  contentSourceMode?: PaperContentSourceMode;
+  requiresAsyncResolution: boolean;
+  isAsyncFinal: boolean;
 };
 
 export type PdfContext = {

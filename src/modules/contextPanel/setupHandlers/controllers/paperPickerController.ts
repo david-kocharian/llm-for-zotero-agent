@@ -15,6 +15,7 @@ import {
   setSelectedTextContextEntries,
   setSelectedTextExpandedIndex,
 } from "../../contextResolution";
+import { resolveContextAttachmentSupportFromMetadata } from "../../contextAttachmentSupport";
 import { resolvePaperContextRefFromItem } from "../../paperAttribution";
 import {
   browseAllItemCandidates,
@@ -206,9 +207,17 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
 
   function resolvePickerItemKind(
     contentType?: string,
+    filename?: string,
   ): "pdf" | "note" | "figure" | "other" {
     if (!contentType) return "other";
-    if (contentType === "application/pdf") return "pdf";
+    if (
+      resolveContextAttachmentSupportFromMetadata({
+        contentType,
+        filename,
+      })?.kind === "pdf"
+    ) {
+      return "pdf";
+    }
     if (contentType === ZOTERO_NOTE_CONTENT_TYPE) return "note";
     if (contentType.startsWith("image/")) return "figure";
     return "other";
@@ -223,6 +232,12 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
     return "file";
   }
 
+  function resolvePickerAttachmentKind(
+    attachment: PaperSearchAttachmentCandidate,
+  ): "pdf" | "note" | "figure" | "other" {
+    return resolvePickerItemKind(attachment.contentType, attachment.title);
+  }
+
   function resolvePickerKindLabel(
     kind: "pdf" | "note" | "figure" | "other",
   ): string {
@@ -235,16 +250,16 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
   function resolveGroupIcon(group: PaperSearchGroupCandidate): PickerIconName {
     if (group.itemKind === "standalone-note") return "note";
     const hasPdf = group.attachments.some(
-      (attachment) => resolvePickerItemKind(attachment.contentType) === "pdf",
+      (attachment) => resolvePickerAttachmentKind(attachment) === "pdf",
     );
     if (hasPdf) return "paper";
     const hasFigure = group.attachments.some(
       (attachment) =>
-        resolvePickerItemKind(attachment.contentType) === "figure",
+        resolvePickerAttachmentKind(attachment) === "figure",
     );
     if (hasFigure) return "image";
     const hasNote = group.attachments.some(
-      (attachment) => resolvePickerItemKind(attachment.contentType) === "note",
+      (attachment) => resolvePickerAttachmentKind(attachment) === "note",
     );
     if (hasNote) return "note";
     if (group.attachments.length > 0) return "file";
@@ -268,7 +283,7 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
   ): string => {
     const normalizedTitle = (attachment.title || "").trim();
     if (normalizedTitle) return normalizedTitle;
-    const kind = resolvePickerItemKind(attachment.contentType);
+    const kind = resolvePickerAttachmentKind(attachment);
     return group.attachments.length > 1
       ? `${resolvePickerKindLabel(kind)} ${attachmentIndex + 1}`
       : resolvePickerKindLabel(kind);
@@ -769,8 +784,7 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
     if (!selectedGroup) return false;
     const selectedAttachment = selectedGroup.attachments[attachmentIndex];
     if (!selectedAttachment) return false;
-    const contentType = selectedAttachment.contentType;
-    const kind = resolvePickerItemKind(contentType);
+    const kind = resolvePickerAttachmentKind(selectedAttachment);
     deps.log("LLM: Picker selection", {
       selectionKind,
       kind,
@@ -797,7 +811,7 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
             ? selectedGroup.itemId
             : undefined,
         title: selectedAttachment.title || selectedGroup.title,
-        contentType: contentType || "application/octet-stream",
+        contentType: selectedAttachment.contentType || "application/octet-stream",
         refKind: kind === "figure" ? "figure" : "other",
       });
     }
@@ -1154,7 +1168,7 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
         if (!group) return;
         const attachment = group.attachments[row.attachmentIndex];
         if (!attachment) return;
-        const attachmentKind = resolvePickerItemKind(attachment.contentType);
+        const attachmentKind = resolvePickerAttachmentKind(attachment);
         const attachmentText = createElement(
           ownerDoc,
           "div",

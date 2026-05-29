@@ -140,6 +140,7 @@ import {
   withScrollGuard,
   copyTextToClipboard,
   refreshConversationPanels,
+  clearPendingRequestIdAndSync,
   detectReasoningProvider,
   getReasoningOptions,
   getSelectedReasoningForItem,
@@ -181,7 +182,11 @@ import {
   shouldRenderSkillSlashMenu,
 } from "./slashMenuBehavior";
 import { FULL_PDF_UNSUPPORTED_MESSAGE } from "./pdfSupportMessages";
-import { buildPaperKey, resolveTextAttachmentSourceMode } from "./pdfContext";
+import { buildPaperKey } from "./pdfContext";
+import {
+  isSupportedContextAttachment,
+  resolveContextAttachmentSupport,
+} from "./contextAttachmentSupport";
 import {
   getPaperModeOverride,
   setPaperModeOverride,
@@ -639,7 +644,7 @@ export function setupHandlers(
   // the stamp is only present when setupHandlers is called twice on the
   // same DOM tree without an intervening rebuild.
   const thisGen = String(++setupHandlersGeneration);
-  if (panelRoot.dataset.handlersAttached) {
+  if (panelRoot.dataset.handlersInitialized) {
     return;
   }
   panelRoot.dataset.handlersAttached = thisGen;
@@ -2272,6 +2277,9 @@ export function setupHandlers(
   let autoLoadedContextSourceItemSnapshot: Zotero.Item | null | undefined;
   let autoLoadedPaperContextSnapshot: PaperContextRef | null | undefined;
   let autoLoadedPaperContextOwnerItemId: number | null = null;
+  let autoLoadedPaperContextItemId: number | null = null;
+  let autoLoadedPaperContextContentSourceMode: string | null = null;
+  let autoLoadedContextPanelItemKey: string | null = null;
   let autoLoadedPaperContextGeneration = 0;
   let autoLoadedPaperContextPromise: Promise<PaperContextRef | null> | null =
     null;
@@ -2293,6 +2301,7 @@ export function setupHandlers(
   const setAutoLoadedContextSnapshot = (
     contextSourceItem: Zotero.Item | null,
     paperContext: PaperContextRef | null,
+    contextPanelItem?: Zotero.Item | null,
   ) => {
     if (isGlobalMode()) {
       panelRoot.dataset.contextItemId = "";
@@ -2303,6 +2312,22 @@ export function setupHandlers(
     );
     autoLoadedPaperContextOwnerItemId =
       Number.isFinite(ownerItemId) && ownerItemId > 0 ? ownerItemId : null;
+    const contextItemId = Math.floor(
+      Number(paperContext?.contextItemId || contextSourceItem?.id || 0),
+    );
+    autoLoadedPaperContextItemId =
+      Number.isFinite(contextItemId) && contextItemId > 0
+        ? contextItemId
+        : null;
+    autoLoadedPaperContextContentSourceMode =
+      paperContext?.contentSourceMode || null;
+    const contextPanelItemId = Math.floor(
+      Number(contextPanelItem?.id || contextSourceItem?.id || 0),
+    );
+    autoLoadedContextPanelItemKey =
+      Number.isFinite(contextPanelItemId) && contextPanelItemId > 0
+        ? `${contextPanelItemId}`
+        : null;
     autoLoadedContextSourceItemSnapshot = contextSourceItem;
     autoLoadedPaperContextSnapshot = paperContext;
     writeAutoLoadedContextItemId(contextSourceItem, paperContext);
@@ -2314,6 +2339,9 @@ export function setupHandlers(
     autoLoadedContextSourceItemSnapshot = undefined;
     autoLoadedPaperContextSnapshot = undefined;
     autoLoadedPaperContextOwnerItemId = null;
+    autoLoadedPaperContextItemId = null;
+    autoLoadedPaperContextContentSourceMode = null;
+    autoLoadedContextPanelItemKey = null;
     autoLoadedPaperContextPromise = null;
     panelRoot.dataset.contextItemId = "";
   };
@@ -2327,22 +2355,53 @@ export function setupHandlers(
   };
 
   const isAutoLoadedContextSnapshotCurrent = (): boolean => {
+    const currentPanelItem = resolveAutoLoadedContextPanelItem();
+    const currentPanelItemId = Math.floor(Number(currentPanelItem?.id || 0));
+    const currentPanelItemKey =
+      Number.isFinite(currentPanelItemId) && currentPanelItemId > 0
+        ? `${currentPanelItemId}`
+        : null;
+    if (
+      autoLoadedContextPanelItemKey &&
+      currentPanelItemKey &&
+      autoLoadedContextPanelItemKey !== currentPanelItemKey
+    ) {
+      return false;
+    }
+    const currentContextSourceItem =
+      resolveAutoLoadedContextSourceItemSync(currentPanelItem);
+    const currentPaperContext = resolvePaperContextRefFromAttachment(
+      currentContextSourceItem,
+    );
     return isAutoLoadedSnapshotForCurrentPaper({
       currentOwnerItemId: getCurrentAutoLoadedPaperOwnerItemId(),
       snapshotOwnerItemId: autoLoadedPaperContextOwnerItemId,
+      currentContextItemId:
+        currentPaperContext?.contextItemId ||
+        (currentContextSourceItem
+          ? Math.floor(Number(currentContextSourceItem.id || 0))
+          : null),
+      snapshotContextItemId: autoLoadedPaperContextItemId,
+      currentContentSourceMode: currentPaperContext?.contentSourceMode || null,
+      snapshotContentSourceMode: autoLoadedPaperContextContentSourceMode,
     });
   };
 
   const resolveAutoLoadedContextPanelItem = (): Zotero.Item | null => {
+    const liveRawPanelItem = resolveLiveRawPanelItem();
     return chooseAutoLoadedContextPanelItem({
       isGlobalMode: isGlobalMode(),
       currentItem: item,
       currentPaperBaseItem: resolveCurrentPaperBaseItem(),
-      liveRawPanelItem: resolveLiveRawPanelItem(),
+      liveRawPanelItem,
+      liveRawPanelItemIsSupportedAttachment:
+        isSupportedContextAttachment(liveRawPanelItem),
     });
   };
 
-  const resolveAutoLoadedContextSourceItemSync = (): Zotero.Item | null => {
+  const resolveAutoLoadedContextSourceItemSync = (
+    panelItemOverride?: Zotero.Item | null,
+  ): Zotero.Item | null => {
     if (!item) return null;
     const noteSession = resolveCurrentNoteSession();
     if (noteSession?.noteKind === "standalone") return null;
@@ -2356,7 +2415,10 @@ export function setupHandlers(
       return null;
     }
     if (isGlobalMode()) return null;
-    const sourceItem = resolveAutoLoadedContextPanelItem();
+    const sourceItem =
+      panelItemOverride === undefined
+        ? resolveAutoLoadedContextPanelItem()
+        : panelItemOverride;
     const activeReaderAttachment = getActiveContextAttachmentFromTabs();
     if (activeReaderAttachment) return activeReaderAttachment;
     if (
@@ -2418,7 +2480,11 @@ export function setupHandlers(
           panelRoot.dataset.handlersAttached === thisGen &&
           requestGeneration === autoLoadedPaperContextGeneration
         ) {
-          setAutoLoadedContextSnapshot(contextSourceItem, paperContext);
+          setAutoLoadedContextSnapshot(
+            contextSourceItem,
+            paperContext,
+            panelItem,
+          );
         }
         return paperContext;
       })();
@@ -2438,11 +2504,12 @@ export function setupHandlers(
   const refreshAutoLoadedPaperContextForCurrentItem = () => {
     clearAutoLoadedContextSnapshot();
     if (!item || isGlobalMode()) return;
-    const contextSourceItem = resolveAutoLoadedContextSourceItemSync();
+    const panelItem = resolveAutoLoadedContextPanelItem();
+    const contextSourceItem = resolveAutoLoadedContextSourceItemSync(panelItem);
     const paperContext =
       resolvePaperContextRefFromAttachment(contextSourceItem);
     if (paperContext) {
-      setAutoLoadedContextSnapshot(contextSourceItem, paperContext);
+      setAutoLoadedContextSnapshot(contextSourceItem, paperContext, panelItem);
       return;
     }
     void resolveAutoLoadedPaperContextAsync();
@@ -2504,11 +2571,6 @@ export function setupHandlers(
           .attachmentFilename || "",
       ),
     ).trim();
-
-  const getAttachmentContentType = (attachment: Zotero.Item): string =>
-    sanitizeText(String(attachment.attachmentContentType || ""))
-      .trim()
-      .toLowerCase();
 
   const getAttachmentCardTitle = (attachment: Zotero.Item): string =>
     sanitizeText(
@@ -2595,14 +2657,6 @@ export function setupHandlers(
     );
   };
 
-  const isPdfAttachmentForPicker = (attachment: Zotero.Item): boolean => {
-    const filename = getAttachmentFilename(attachment).toLowerCase();
-    return (
-      getAttachmentContentType(attachment) === "application/pdf" ||
-      filename.endsWith(".pdf")
-    );
-  };
-
   const getMineruSourceDescription = (
     attachmentTitle: string,
     state: MineruSourceUiState,
@@ -2679,7 +2733,8 @@ export function setupHandlers(
       const attachment = Zotero.Items.get(attachmentId) || null;
       if (!attachment?.isAttachment?.()) continue;
       const attachmentTitle = getAttachmentCardTitle(attachment);
-      if (isPdfAttachmentForPicker(attachment)) {
+      const attachmentSupport = resolveContextAttachmentSupport(attachment);
+      if (attachmentSupport?.kind === "pdf") {
         const baseContext = buildPaperContextForChildAttachment(
           parentItem,
           attachment,
@@ -2723,8 +2778,8 @@ export function setupHandlers(
         });
         continue;
       }
-      const textSourceMode = resolveTextAttachmentSourceMode(attachment);
-      if (!textSourceMode) continue;
+      if (attachmentSupport?.kind !== "text") continue;
+      const textSourceMode = attachmentSupport.contentSourceMode;
       const context = buildPaperContextForChildAttachment(
         parentItem,
         attachment,
@@ -5206,6 +5261,19 @@ export function setupHandlers(
     }
   };
 
+  (body as any).__llmRefreshContextSourceForCurrentItem = () => {
+    withScrollGuard(chatBox, conversationKey, () => {
+      refreshAutoLoadedPaperContextForCurrentItem();
+      updatePaperPreviewPreservingScroll();
+      syncModelFromPrefs();
+      flushResponsiveLayoutSyncNow();
+      flushPanelStateRefreshNow();
+      if (item && chatBox && !chatBox.childElementCount) {
+        refreshChat(body, item);
+      }
+    });
+  };
+
   const webChatHistoryController = createWebChatHistoryController({
     body,
     historyMenu,
@@ -5357,16 +5425,11 @@ export function setupHandlers(
     syncRequestUiForCurrentConversation();
   };
 
-  // Initialize preview state
+  // Initialize model and preview state.  Keep panel-state DOM refresh queued
+  // until setup-local helpers are ready, then flush once.
   refreshAutoLoadedPaperContextForCurrentItem();
-  updatePaperPreviewPreservingScroll();
-  updateFilePreviewPreservingScroll();
-  updateImagePreviewPreservingScroll();
-  updateSelectedTextPreviewPreservingScroll();
-  flushPanelStateRefreshNow();
   syncModelFromPrefs();
   flushResponsiveLayoutSyncNow();
-  flushPanelStateRefreshNow();
   // Set active_target before applyWebChatModeUI so sidebar filters by the correct site
   try {
     if (isWebChatMode()) {
@@ -5382,6 +5445,8 @@ export function setupHandlers(
     /* isWebChatMode may not be ready */
   }
   applyWebChatModeUI();
+  resetComposePreviewUI();
+  flushPanelStateRefreshNow();
   // [webchat] Cold startup → show preload screen so user knows they're in webchat mode
   try {
     if (isWebChatMode()) {
@@ -5486,7 +5551,7 @@ export function setupHandlers(
     ];
   }
 
-  const getSelectedProfile = () => {
+  function getSelectedProfile() {
     if (!item) return null;
     if (isClaudeConversationSystem()) {
       return getSelectedClaudeRuntimeEntry();
@@ -5495,7 +5560,7 @@ export function setupHandlers(
       return getSelectedCodexRuntimeEntry();
     }
     return getSelectedModelEntryForItem(item.id);
-  };
+  }
 
   const getAdvancedModelParams = (
     entryId: string | undefined,
@@ -6766,7 +6831,7 @@ export function setupHandlers(
           cancelConvKey,
           getPendingRequestId(cancelConvKey),
         );
-        setPendingRequestId(cancelConvKey, 0);
+        clearPendingRequestIdAndSync(cancelConvKey, body, item);
       }
       if (status) setStatus(status, t("Cancelled"), "ready");
       // Immediately mark the last assistant message as not streaming so any
@@ -6857,6 +6922,7 @@ export function setupHandlers(
         queuedFollowUpBody.__llmQueuedFollowUpRegisteredThreadKey = null;
         activeContextPanelStateSync.delete(body);
         delete (body as any).__llmApplyResolvedClaudeEffort;
+        delete (body as any).__llmRefreshContextSourceForCurrentItem;
         delete (body as any)[SCHEDULE_QUEUED_FOLLOW_UP_DRAIN_PROPERTY];
         delete (body as any)[SCHEDULE_QUEUED_FOLLOW_UP_THREAD_DRAIN_PROPERTY];
         delete (body as any).__llmScheduleClaudeQueueDrain;
@@ -6866,4 +6932,5 @@ export function setupHandlers(
         cleanupBody.__llmQueuedFollowUpCleanupRegistered = false;
       });
   }
+  panelRoot.dataset.handlersInitialized = thisGen;
 }

@@ -3,6 +3,7 @@ import {
   isTextLikeAttachmentSourceMode,
   resolvePaperContextDisplayMetadata as resolvePaperContextDisplayMetadataShared,
 } from "../../paperAttribution";
+import { isPdfContextAttachment } from "../../contextAttachmentSupport";
 import { sanitizeText } from "../../textUtils";
 import type { PaperContextRef, PaperContentSourceMode } from "../../types";
 
@@ -150,10 +151,7 @@ function resolveMultiPdfAttachmentTitle(paperContext: PaperContextRef): string {
   let pdfCount = 0;
   for (const attachmentId of attachmentIds) {
     const attachment = getZoteroItemsApi()?.get?.(attachmentId);
-    if (
-      attachment?.isAttachment?.() &&
-      attachment.attachmentContentType === "application/pdf"
-    ) {
+    if (isPdfContextAttachment(attachment)) {
       pdfCount += 1;
     }
   }
