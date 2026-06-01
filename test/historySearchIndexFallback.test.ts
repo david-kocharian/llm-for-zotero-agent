@@ -10,6 +10,7 @@ function indexStatus(
     status: "ready",
     indexedRowCount: 0,
     catalogRowCount: 0,
+    staleIndexedRowCount: 0,
     truncatedRowCount: 0,
     ...params,
   };

@@ -29,15 +29,18 @@ describe("conversation search index", function () {
     globalScope.Zotero = originalZotero;
   });
 
-  function installSearchIndexDb(params: {
-    tables?: string[];
-    searchRows?: Array<Record<string, unknown>>;
-    tableInfo?: Array<Record<string, unknown>>;
-    handleQuery?: (
-      sql: string,
-      queryParams?: unknown[],
-    ) => Promise<unknown> | unknown;
-  } = {}) {
+  function installSearchIndexDb(
+    params: {
+      tables?: string[];
+      searchRows?: Array<Record<string, unknown>>;
+      liveConversationKeys?: number[];
+      tableInfo?: Array<Record<string, unknown>>;
+      handleQuery?: (
+        sql: string,
+        queryParams?: unknown[],
+      ) => Promise<unknown> | unknown;
+    } = {},
+  ) {
     const tables = new Set(params.tables || []);
     const queries: Array<{ sql: string; params?: unknown[] }> = [];
     globalScope.Zotero = {
@@ -50,15 +53,25 @@ describe("conversation search index", function () {
             const tableName = String(queryParams?.[0] || "");
             return tables.has(tableName) ? [{ name: tableName }] : [];
           }
-          if (sql.includes(`PRAGMA table_info(${CONVERSATION_SEARCH_INDEX_TABLE})`)) {
+          if (
+            sql.includes(
+              `PRAGMA table_info(${CONVERSATION_SEARCH_INDEX_TABLE})`,
+            )
+          ) {
             return params.tableInfo || [];
           }
           if (
             sql.includes(`FROM ${CONVERSATION_SEARCH_INDEX_TABLE}`) &&
-            sql.includes("WHERE system = ?") &&
+            (sql.includes("WHERE system = ?") ||
+              sql.includes("WHERE si.system = ?")) &&
             sql.includes("body_text AS bodyText")
           ) {
-            return params.searchRows || [];
+            const searchRows = params.searchRows || [];
+            if (!params.liveConversationKeys) return searchRows;
+            const liveKeys = new Set(params.liveConversationKeys);
+            return searchRows.filter((row) =>
+              liveKeys.has(Number(row.conversationKey)),
+            );
           }
           return [];
         },
@@ -86,7 +99,9 @@ describe("conversation search index", function () {
       queries.some(
         ({ sql }) =>
           sql.includes("CREATE INDEX IF NOT EXISTS") &&
-          sql.includes("(system, library_id, user_turn_count, last_activity_at DESC)"),
+          sql.includes(
+            "(system, library_id, user_turn_count, last_activity_at DESC)",
+          ),
       ),
     );
   });
@@ -172,7 +187,10 @@ describe("conversation search index", function () {
       ],
     });
 
-    assert.equal(await refreshConversationSearchIndexForSystem("upstream"), true);
+    assert.equal(
+      await refreshConversationSearchIndexForSystem("upstream"),
+      true,
+    );
     assert.equal(await refreshConversationSearchIndexForSystem("codex"), true);
 
     const upstreamGlobalInsert = queries.find(
@@ -274,11 +292,11 @@ describe("conversation search index", function () {
     );
     assert.include(
       tokenFilterSql,
-      "\n        OR (LOWER(COALESCE(title, '')) LIKE ?",
+      "\n        OR (LOWER(COALESCE(si.title, '')) LIKE ?",
     );
     assert.notInclude(
       tokenFilterSql,
-      "\n       AND (LOWER(COALESCE(title, '')) LIKE ?",
+      "\n       AND (LOWER(COALESCE(si.title, '')) LIKE ?",
     );
     assert.deepEqual(searchQuery?.params, [
       CONVERSATION_SEARCH_BODY_CHAR_LIMIT,
@@ -290,6 +308,7 @@ describe("conversation search index", function () {
       "%drift%",
       "%drift%",
       "%drift%",
+      2,
       10,
     ]);
     assert.isFalse(
@@ -324,6 +343,7 @@ describe("conversation search index", function () {
   it("searches scope labels without applying a default result cap", async function () {
     const conversationKey = UPSTREAM_GLOBAL_CONVERSATION_KEY_BASE + 2;
     const { queries } = installSearchIndexDb({
+      tables: ["llm_for_zotero_global_conversations"],
       searchRows: [
         {
           conversationID: buildConversationID({
@@ -366,6 +386,7 @@ describe("conversation search index", function () {
       "%library%",
       "%library%",
       "%library%",
+      2,
     ]);
   });
 
@@ -373,6 +394,10 @@ describe("conversation search index", function () {
     const globalKey = UPSTREAM_GLOBAL_CONVERSATION_KEY_BASE + 2;
     const paperKey = UPSTREAM_PAPER_CONVERSATION_KEY_BASE + 44;
     installSearchIndexDb({
+      tables: [
+        "llm_for_zotero_global_conversations",
+        "llm_for_zotero_paper_conversations",
+      ],
       searchRows: [
         {
           conversationID: buildConversationID({
@@ -428,6 +453,7 @@ describe("conversation search index", function () {
     const firstKey = UPSTREAM_GLOBAL_CONVERSATION_KEY_BASE + 2;
     const secondKey = UPSTREAM_GLOBAL_CONVERSATION_KEY_BASE + 3;
     installSearchIndexDb({
+      tables: ["llm_for_zotero_global_conversations"],
       searchRows: [
         {
           conversationID: "llm-chat:v1:profile-x:upstream:2000000000",
@@ -488,6 +514,7 @@ describe("conversation search index", function () {
   it("excludes canonical ids that point at a different scope", async function () {
     const conversationKey = UPSTREAM_GLOBAL_CONVERSATION_KEY_BASE + 2;
     installSearchIndexDb({
+      tables: ["llm_for_zotero_global_conversations"],
       searchRows: [
         {
           conversationID: buildConversationID({
@@ -570,6 +597,146 @@ describe("conversation search index", function () {
     assert.equal(result.catalogRowCount, 2);
   });
 
+  it("reports stale coverage when indexed rows no longer have catalog rows", async function () {
+    const liveKey = UPSTREAM_GLOBAL_CONVERSATION_KEY_BASE + 21;
+    const staleKey = UPSTREAM_GLOBAL_CONVERSATION_KEY_BASE + 22;
+    installSearchIndexDb({
+      tables: ["llm_for_zotero_global_conversations"],
+      liveConversationKeys: [liveKey],
+      searchRows: [
+        {
+          conversationID: buildConversationID({
+            conversationKey: liveKey,
+            system: "upstream",
+            kind: "global",
+            libraryID: 2,
+          }),
+          conversationKey: liveKey,
+          system: "upstream",
+          kind: "global",
+          libraryID: 2,
+          paperItemID: null,
+          title: "Live decoder",
+          bodyText: "decoder",
+          lastActivityAt: 2000,
+          userTurnCount: 1,
+        },
+        {
+          conversationID: buildConversationID({
+            conversationKey: staleKey,
+            system: "upstream",
+            kind: "global",
+            libraryID: 2,
+          }),
+          conversationKey: staleKey,
+          system: "upstream",
+          kind: "global",
+          libraryID: 2,
+          paperItemID: null,
+          title: "Deleted decoder",
+          bodyText: "decoder",
+          lastActivityAt: 3000,
+          userTurnCount: 1,
+        },
+      ],
+      handleQuery: (sql) => {
+        if (sql.includes("COUNT(*) AS indexedRowCount")) {
+          return [{ indexedRowCount: 2, truncatedRowCount: 0 }];
+        }
+        if (sql.includes("COUNT(*) AS catalogRowCount")) {
+          return [{ catalogRowCount: 1, missingIndexedRowCount: 0 }];
+        }
+        if (sql.includes("COUNT(*) AS staleIndexedRowCount")) {
+          return [{ staleIndexedRowCount: 1 }];
+        }
+        return undefined;
+      },
+    });
+
+    const result = await searchConversationIndexWithStatus({
+      system: "upstream",
+      libraryID: 2,
+      query: "decoder",
+    });
+
+    assert.equal(result.status, "stale");
+    assert.equal(result.indexedRowCount, 2);
+    assert.equal(result.catalogRowCount, 1);
+    assert.equal(result.staleIndexedRowCount, 1);
+    assert.deepEqual(
+      result.matches.map((row) => row.conversationKey),
+      [liveKey],
+    );
+  });
+
+  it("filters direct indexed search results through live catalog rows", async function () {
+    const liveKey = UPSTREAM_GLOBAL_CONVERSATION_KEY_BASE + 31;
+    const staleKey = UPSTREAM_GLOBAL_CONVERSATION_KEY_BASE + 32;
+    installSearchIndexDb({
+      tables: ["llm_for_zotero_global_conversations"],
+      liveConversationKeys: [liveKey],
+      searchRows: [
+        {
+          conversationID: buildConversationID({
+            conversationKey: liveKey,
+            system: "upstream",
+            kind: "global",
+            libraryID: 2,
+          }),
+          conversationKey: liveKey,
+          system: "upstream",
+          kind: "global",
+          libraryID: 2,
+          paperItemID: null,
+          title: "Live decoder",
+          bodyText: "decoder",
+          lastActivityAt: 2000,
+          userTurnCount: 1,
+        },
+        {
+          conversationID: buildConversationID({
+            conversationKey: staleKey,
+            system: "upstream",
+            kind: "global",
+            libraryID: 2,
+          }),
+          conversationKey: staleKey,
+          system: "upstream",
+          kind: "global",
+          libraryID: 2,
+          paperItemID: null,
+          title: "Deleted decoder",
+          bodyText: "decoder",
+          lastActivityAt: 3000,
+          userTurnCount: 1,
+        },
+      ],
+      handleQuery: (sql) => {
+        if (sql.includes("COUNT(*) AS indexedRowCount")) {
+          return [{ indexedRowCount: 2, truncatedRowCount: 0 }];
+        }
+        if (sql.includes("COUNT(*) AS catalogRowCount")) {
+          return [{ catalogRowCount: 1, missingIndexedRowCount: 0 }];
+        }
+        if (sql.includes("COUNT(*) AS staleIndexedRowCount")) {
+          return [{ staleIndexedRowCount: 1 }];
+        }
+        return undefined;
+      },
+    });
+
+    const rows = await searchConversationIndex({
+      system: "upstream",
+      libraryID: 2,
+      query: "decoder",
+    });
+
+    assert.deepEqual(
+      rows.map((row) => row.conversationKey),
+      [liveKey],
+    );
+  });
+
   it("reports truncated coverage when indexed bodies hit the storage limit", async function () {
     const conversationKey = UPSTREAM_GLOBAL_CONVERSATION_KEY_BASE + 2;
     installSearchIndexDb({
@@ -618,6 +785,7 @@ describe("conversation search index", function () {
   it("loads truncated indexed rows for targeted full-message search", async function () {
     const conversationKey = UPSTREAM_GLOBAL_CONVERSATION_KEY_BASE + 2;
     installSearchIndexDb({
+      tables: ["llm_for_zotero_global_conversations"],
       searchRows: [
         {
           conversationID: buildConversationID({
@@ -650,10 +818,70 @@ describe("conversation search index", function () {
     assert.equal(rows[0]?.bodyTruncated, true);
   });
 
+  it("excludes truncated indexed rows without live catalog rows", async function () {
+    const liveKey = UPSTREAM_GLOBAL_CONVERSATION_KEY_BASE + 41;
+    const staleKey = UPSTREAM_GLOBAL_CONVERSATION_KEY_BASE + 42;
+    installSearchIndexDb({
+      tables: ["llm_for_zotero_global_conversations"],
+      liveConversationKeys: [liveKey],
+      searchRows: [
+        {
+          conversationID: buildConversationID({
+            conversationKey: liveKey,
+            system: "upstream",
+            kind: "global",
+            libraryID: 2,
+          }),
+          conversationKey: liveKey,
+          system: "upstream",
+          kind: "global",
+          libraryID: 2,
+          paperItemID: null,
+          title: "Live large chat",
+          bodyText: "decoder",
+          lastActivityAt: 2000,
+          userTurnCount: 1,
+          bodyTruncated: 1,
+        },
+        {
+          conversationID: buildConversationID({
+            conversationKey: staleKey,
+            system: "upstream",
+            kind: "global",
+            libraryID: 2,
+          }),
+          conversationKey: staleKey,
+          system: "upstream",
+          kind: "global",
+          libraryID: 2,
+          paperItemID: null,
+          title: "Deleted large chat",
+          bodyText: "decoder",
+          lastActivityAt: 3000,
+          userTurnCount: 1,
+          bodyTruncated: 1,
+        },
+      ],
+    });
+
+    const rows = await loadTruncatedConversationIndexMatches({
+      system: "upstream",
+      libraryID: 2,
+    });
+
+    assert.deepEqual(
+      rows.map((row) => row.conversationKey),
+      [liveKey],
+    );
+  });
+
   it("does not refresh missing store tables", async function () {
     const { queries } = installSearchIndexDb();
 
-    assert.equal(await refreshConversationSearchIndexForSystem("claude_code"), true);
+    assert.equal(
+      await refreshConversationSearchIndexForSystem("claude_code"),
+      true,
+    );
 
     assert.isFalse(
       queries.some(
@@ -662,6 +890,46 @@ describe("conversation search index", function () {
           sql.includes("llm_for_zotero_claude_conversations"),
       ),
     );
+  });
+
+  it("prunes all system search rows when no source catalog table exists", async function () {
+    const { queries } = installSearchIndexDb();
+
+    assert.equal(await refreshConversationSearchIndexForSystem("codex"), true);
+
+    const deleteQuery = queries.find(({ sql }) =>
+      sql.includes(`DELETE FROM ${CONVERSATION_SEARCH_INDEX_TABLE}`),
+    );
+    assert.include(deleteQuery?.sql || "", "WHERE system = ?");
+    assert.notInclude(deleteQuery?.sql || "", "NOT EXISTS");
+    assert.deepEqual(deleteQuery?.params, ["codex"]);
+  });
+
+  it("prunes stale search rows against the current catalog key and library", async function () {
+    const { queries } = installSearchIndexDb({
+      tables: [
+        "llm_for_zotero_codex_conversations",
+        "llm_for_zotero_codex_messages",
+      ],
+    });
+
+    assert.equal(await refreshConversationSearchIndexForSystem("codex"), true);
+
+    const pruneQuery = queries.find(
+      ({ sql }) =>
+        sql.includes(`DELETE FROM ${CONVERSATION_SEARCH_INDEX_TABLE}`) &&
+        sql.includes("NOT EXISTS"),
+    );
+    assert.include(pruneQuery?.sql || "", "llm_for_zotero_codex_conversations");
+    assert.include(
+      pruneQuery?.sql || "",
+      `live_catalog.conversation_key = ${CONVERSATION_SEARCH_INDEX_TABLE}.legacy_conversation_key`,
+    );
+    assert.include(
+      pruneQuery?.sql || "",
+      `live_catalog.library_id = ${CONVERSATION_SEARCH_INDEX_TABLE}.library_id`,
+    );
+    assert.deepEqual(pruneQuery?.params, ["codex"]);
   });
 
   it("refreshes one indexed conversation by legacy key", async function () {
@@ -748,7 +1016,10 @@ describe("conversation search index", function () {
       ],
     });
 
-    assert.equal(await refreshConversationSearchIndexForSystem("upstream"), true);
+    assert.equal(
+      await refreshConversationSearchIndexForSystem("upstream"),
+      true,
+    );
 
     assert.isFalse(
       queries.some(({ sql }) =>
@@ -759,7 +1030,10 @@ describe("conversation search index", function () {
       sql.includes(`INSERT OR REPLACE INTO ${CONVERSATION_SEARCH_INDEX_TABLE}`),
     );
     assert.include(indexInsert?.sql || "", "? || ':' || c.conversation_key");
-    assert.include(indexInsert?.sql || "", "m.conversation_key = c.conversation_key");
+    assert.include(
+      indexInsert?.sql || "",
+      "m.conversation_key = c.conversation_key",
+    );
   });
 
   it("deletes indexed rows by id or scoped legacy key", async function () {
