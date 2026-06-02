@@ -7392,7 +7392,6 @@ label.llm-search-results-item:hover {
   display: flex;
   align-items: center;
   gap: 4px;
-  border-top: 1px solid var(--stroke-secondary, rgba(120, 120, 120, 0.18));
   padding: 6px 7px;
 }
 

@@ -37,6 +37,14 @@ export type PaperBrowseCollectionCandidate = {
   papers: PaperSearchGroupCandidate[];
 };
 
+export type PaperSearchTagCandidate = {
+  name: string;
+  normalizedName: string;
+  count: number;
+  isAutomatic: boolean;
+  score: number;
+};
+
 type IndexedPaperAttachment = {
   contextItemId: number;
   title: string;
@@ -1233,6 +1241,7 @@ export async function searchAllItemCandidates(
 export { ZOTERO_NOTE_CONTENT_TYPE };
 
 const DEFAULT_COLLECTION_SEARCH_LIMIT = 5;
+const DEFAULT_TAG_SEARCH_LIMIT = 5;
 
 export async function searchCollectionCandidates(
   libraryID: number,
@@ -1290,6 +1299,103 @@ export async function searchCollectionCandidates(
     childCollections: [],
     papers: [],
   }));
+}
+
+export async function searchTagCandidates(
+  libraryID: number,
+  query: string,
+  limit = DEFAULT_TAG_SEARCH_LIMIT,
+): Promise<PaperSearchTagCandidate[]> {
+  if (!Number.isFinite(libraryID) || libraryID <= 0) return [];
+  const normalizedQuery = normalizePaperSearchText(query);
+  if (!normalizedQuery) return [];
+  const normalizedLimit = Number.isFinite(limit)
+    ? Math.max(1, Math.floor(limit))
+    : DEFAULT_TAG_SEARCH_LIMIT;
+  const queryTokens = getSearchTokens(normalizedQuery);
+  if (!queryTokens.length) return [];
+
+  const index = await getAllItemsLibraryIndex(Math.floor(libraryID));
+  const ranked = new Map<
+    string,
+    {
+      name: string;
+      itemIds: Set<number>;
+      manualItemIds: Set<number>;
+      automaticItemIds: Set<number>;
+      score: number;
+      matchedTokenCount: number;
+    }
+  >();
+
+  const addTag = (
+    candidate: IndexedPaperCandidate,
+    rawName: string,
+    isAutomatic: boolean,
+  ): void => {
+    const name = normalizePaperSearchTagName(rawName);
+    if (!name) return;
+    const normalizedName = normalizePaperSearchText(name);
+    if (!normalizedName) return;
+    const scoreState: PaperSearchScore = {
+      score: 0,
+      matchedTokens: new Set<string>(),
+    };
+    const tagScore = scoreField(
+      scoreState,
+      normalizedName,
+      normalizedQuery,
+      queryTokens,
+      { exact: 1000, prefix: 900, contains: 700, tokenBonus: 80 },
+    );
+    if (tagScore <= 0) return;
+
+    let entry = ranked.get(name);
+    if (!entry) {
+      entry = {
+        name,
+        itemIds: new Set<number>(),
+        manualItemIds: new Set<number>(),
+        automaticItemIds: new Set<number>(),
+        score: tagScore,
+        matchedTokenCount: scoreState.matchedTokens.size,
+      };
+      ranked.set(name, entry);
+    }
+    entry.itemIds.add(candidate.itemId);
+    if (isAutomatic) entry.automaticItemIds.add(candidate.itemId);
+    else entry.manualItemIds.add(candidate.itemId);
+    entry.score = Math.max(entry.score, tagScore);
+    entry.matchedTokenCount = Math.max(
+      entry.matchedTokenCount,
+      scoreState.matchedTokens.size,
+    );
+  };
+
+  for (const candidate of index.candidates) {
+    for (const tag of candidate.tags) addTag(candidate, tag, false);
+    for (const tag of candidate.tagsAuto) addTag(candidate, tag, true);
+  }
+
+  return [...ranked.values()]
+    .sort((a, b) => {
+      const scoreDelta = b.score - a.score;
+      if (scoreDelta !== 0) return scoreDelta;
+      const matchedTokenDelta = b.matchedTokenCount - a.matchedTokenCount;
+      if (matchedTokenDelta !== 0) return matchedTokenDelta;
+      const countDelta = b.itemIds.size - a.itemIds.size;
+      if (countDelta !== 0) return countDelta;
+      return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+    })
+    .slice(0, normalizedLimit)
+    .map((entry) => ({
+      name: entry.name,
+      normalizedName: entry.name,
+      count: entry.itemIds.size,
+      isAutomatic:
+        entry.automaticItemIds.size > 0 && entry.manualItemIds.size === 0,
+      score: entry.score,
+    }));
 }
 
 export async function browseAllItemCandidates(

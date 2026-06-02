@@ -840,6 +840,119 @@ describe("paper picker controller", function () {
     }
   });
 
+  it("adds a searched tag name as tag context", async function () {
+    const originalZotero = (
+      globalThis as typeof globalThis & { Zotero?: unknown }
+    ).Zotero;
+    const originalToolkit = (
+      globalThis as typeof globalThis & { ztoolkit?: any }
+    ).ztoolkit;
+    const itemId = 145;
+    const paper = makeRegularItem(3) as Zotero.Item & {
+      getTags: () => Array<{ tag: string; type?: number }>;
+    };
+    paper.getTags = () => [{ tag: "Stable Dynamics" }];
+    const attachment = makeAttachment(3);
+    const items = new Map<number, Zotero.Item>([
+      [paper.id, paper],
+      [attachment.id, attachment],
+    ]);
+    const fakeDocument = new FakeDocument();
+    const paperPicker = fakeDocument.createElementNS(
+      "http://www.w3.org/1999/xhtml",
+      "div",
+    ) as unknown as HTMLDivElement;
+    const paperPickerList = fakeDocument.createElementNS(
+      "http://www.w3.org/1999/xhtml",
+      "div",
+    ) as unknown as HTMLDivElement;
+    const body = fakeDocument.createElementNS(
+      "http://www.w3.org/1999/xhtml",
+      "div",
+    ) as unknown as Element;
+    const inputBox = makeFakeInput("@Stable");
+
+    (globalThis as typeof globalThis & { Zotero?: unknown }).Zotero = {
+      Items: {
+        getAll: async () => [paper],
+        get: (id: number) => items.get(id) || null,
+      },
+      Collections: {
+        getByLibrary: () => [],
+      },
+      Libraries: {
+        getName: () => "My Library",
+      },
+    };
+    (globalThis as typeof globalThis & { ztoolkit?: unknown }).ztoolkit = {
+      log: () => undefined,
+    };
+    invalidatePaperSearchCache(1);
+    selectedPaperContextCache.delete(itemId);
+    selectedPaperPreviewExpandedCache.delete(itemId);
+    selectedTagContextCache.delete(itemId);
+
+    try {
+      const controller = createPaperPickerController({
+        body,
+        panelRoot: body as HTMLElement,
+        inputBox,
+        paperPicker,
+        paperPickerList,
+        getItem: () => ({ id: itemId }) as Zotero.Item,
+        getCurrentLibraryID: () => 1,
+        isWebChatMode: () => false,
+        resolveAutoLoadedPaperContext: () => null,
+        getManualPaperContextsForItem: () =>
+          selectedPaperContextCache.get(itemId) || [],
+        isPaperContextMineru: () => false,
+        getTextContextConversationKey: () => null,
+        persistDraftInputForCurrentConversation: () => undefined,
+        updatePaperPreviewPreservingScroll: () => undefined,
+        updateSelectedTextPreviewPreservingScroll: () => undefined,
+        setStatusMessage: () => undefined,
+        log: () => undefined,
+      });
+
+      controller.schedulePaperPickerSearch();
+      await waitForPickerSearch();
+
+      const root = paperPickerList as unknown as FakeElement;
+      const main = root.children[0];
+      const rowHost = main.children[0];
+      assert.lengthOf(rowHost.children, 1);
+      const tagRow = rowHost.children[0];
+      assert.include(tagRow.className, "llm-paper-picker-tag-row");
+      assert.equal(
+        tagRow.children[0].children[0].children[1].textContent,
+        "Stable Dynamics",
+      );
+      assert.include(tagRow.children[0].children[1].textContent, "Tag");
+      assert.equal(tagRow.children[1].textContent, "+");
+
+      fireFakeMouseDown(tagRow.children[1]);
+
+      const selectedTags = selectedTagContextCache.get(
+        itemId,
+      ) as TagContextRef[];
+      assert.lengthOf(selectedTags, 1);
+      assert.equal(selectedTags[0].name, "Stable Dynamics");
+      assert.equal(selectedTags[0].normalizedName, "Stable Dynamics");
+      assert.equal(selectedTags[0].libraryID, 1);
+      assert.equal(selectedTags[0].includeAutomatic, false);
+      assert.isUndefined(selectedPaperContextCache.get(itemId));
+    } finally {
+      selectedPaperContextCache.delete(itemId);
+      selectedPaperPreviewExpandedCache.delete(itemId);
+      selectedTagContextCache.delete(itemId);
+      invalidatePaperSearchCache(1);
+      (globalThis as typeof globalThis & { Zotero?: unknown }).Zotero =
+        originalZotero;
+      (globalThis as typeof globalThis & { ztoolkit?: unknown }).ztoolkit =
+        originalToolkit;
+    }
+  });
+
   it("keeps folder clicks open while tag starts collapsed and panels toggle independently", async function () {
     const originalZotero = (
       globalThis as typeof globalThis & { Zotero?: unknown }

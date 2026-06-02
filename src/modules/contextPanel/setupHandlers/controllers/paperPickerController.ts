@@ -22,11 +22,13 @@ import {
   parseAtSearchToken,
   searchAllItemCandidates,
   searchCollectionCandidates,
+  searchTagCandidates,
   ZOTERO_NOTE_CONTENT_TYPE,
   type PaperBrowseCollectionCandidate,
   type PaperSearchAttachmentCandidate,
   type PaperSearchGroupCandidate,
   type PaperSearchSlashToken,
+  type PaperSearchTagCandidate,
 } from "../../paperSearch";
 import {
   buildMineruTagIndex,
@@ -63,7 +65,8 @@ type PickerIconName =
   | "note"
   | "image"
   | "file"
-  | "collection";
+  | "collection"
+  | "tag";
 type PaperPickerFolderScope = "all" | number;
 type PaperPickerPanelKey = "folders" | "tags" | "references";
 export type PaperPickerTagIndexItem = {
@@ -76,6 +79,11 @@ type PaperPickerRow =
   | {
       kind: "collection";
       collectionId: number;
+      depth: number;
+    }
+  | {
+      kind: "tag";
+      tagName: string;
       depth: number;
     }
   | {
@@ -261,11 +269,13 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
   let paperPickerEmptyMessage = "No references available.";
   let paperPickerGroups: PaperSearchGroupCandidate[] = [];
   let paperPickerCollections: PaperBrowseCollectionCandidate[] = [];
+  let paperPickerTagCandidates: PaperSearchTagCandidate[] = [];
   let paperPickerGroupByItemId = new Map<number, PaperSearchGroupCandidate>();
   let paperPickerCollectionById = new Map<
     number,
     PaperBrowseCollectionCandidate
   >();
+  let paperPickerTagCandidateByName = new Map<string, PaperSearchTagCandidate>();
   let paperPickerExpandedPaperKeys = new Set<number>();
   let paperPickerExpandedCollectionKeys = new Set<number>();
   let paperPickerRows: PaperPickerRow[] = [];
@@ -313,11 +323,13 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
     paperPickerEmptyMessage = "No references available.";
     paperPickerGroups = [];
     paperPickerCollections = [];
+    paperPickerTagCandidates = [];
     paperPickerGroupByItemId = new Map<number, PaperSearchGroupCandidate>();
     paperPickerCollectionById = new Map<
       number,
       PaperBrowseCollectionCandidate
     >();
+    paperPickerTagCandidateByName = new Map<string, PaperSearchTagCandidate>();
     paperPickerExpandedPaperKeys = new Set<number>();
     paperPickerExpandedCollectionKeys = new Set<number>();
     paperPickerRows = [];
@@ -466,6 +478,9 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
   const getPaperPickerCollectionById = (collectionId: number) =>
     paperPickerCollectionById.get(collectionId) || null;
 
+  const getPaperPickerTagCandidateByName = (tagName: string) =>
+    paperPickerTagCandidateByName.get(tagName) || null;
+
   const getPaperPickerAllBrowseGroups = (): PaperSearchGroupCandidate[] => {
     const groupsById = new Map<number, PaperSearchGroupCandidate>();
     const visitCollection = (collection: PaperBrowseCollectionCandidate) => {
@@ -581,22 +596,29 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
   const setPaperPickerSearchResults = (
     groups: PaperSearchGroupCandidate[],
     collections: PaperBrowseCollectionCandidate[],
+    tags: PaperSearchTagCandidate[] = [],
   ): void => {
-    paperPickerMode = groups.length || collections.length ? "search" : "empty";
+    paperPickerMode =
+      groups.length || collections.length || tags.length ? "search" : "empty";
     paperPickerEmptyMessage = "No items matched.";
     paperPickerGroups = groups;
     paperPickerCollections = collections;
+    paperPickerTagCandidates = tags;
     paperPickerGroupByItemId = new Map<number, PaperSearchGroupCandidate>();
     paperPickerCollectionById = new Map<
       number,
       PaperBrowseCollectionCandidate
     >();
+    paperPickerTagCandidateByName = new Map<string, PaperSearchTagCandidate>();
     paperPickerExpandedPaperKeys = new Set<number>();
     paperPickerExpandedCollectionKeys = new Set<number>();
     for (const group of groups)
       paperPickerGroupByItemId.set(group.itemId, group);
     for (const collection of collections) {
       paperPickerCollectionById.set(collection.collectionId, collection);
+    }
+    for (const tag of tags) {
+      paperPickerTagCandidateByName.set(tag.name, tag);
     }
   };
 
@@ -607,11 +629,13 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
     paperPickerEmptyMessage = "No references available.";
     paperPickerGroups = [];
     paperPickerCollections = collections;
+    paperPickerTagCandidates = [];
     paperPickerGroupByItemId = new Map<number, PaperSearchGroupCandidate>();
     paperPickerCollectionById = new Map<
       number,
       PaperBrowseCollectionCandidate
     >();
+    paperPickerTagCandidateByName = new Map<string, PaperSearchTagCandidate>();
     paperPickerExpandedPaperKeys = new Set<number>();
     paperPickerExpandedCollectionKeys = new Set<number>();
 
@@ -662,6 +686,9 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
           collectionId: collection.collectionId,
           depth: 0,
         });
+      }
+      for (const tag of paperPickerTagCandidates) {
+        rows.push({ kind: "tag", tagName: tag.name, depth: 0 });
       }
       paperPickerGroups.forEach((group) => appendPaperRow(group, 0));
     }
@@ -1333,6 +1360,16 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
       renderPaperPicker();
       return true;
     }
+    if (row.kind === "tag") {
+      const tag = getPaperPickerTagCandidateByName(row.tagName);
+      if (!tag) return false;
+      return selectTagContextFromPickerUnified({
+        name: tag.name,
+        normalizedName: tag.normalizedName,
+        libraryID: deps.getCurrentLibraryID(),
+        includeAutomatic: tag.isAutomatic,
+      });
+    }
     if (row.kind === "attachment") {
       return selectPaperPickerAttachment(
         row.itemId,
@@ -1441,6 +1478,7 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
       }
       return;
     }
+    if (activeRow.kind === "tag") return;
     const group = getPaperPickerGroupByItemId(activeRow.itemId);
     if (
       group &&
@@ -2628,7 +2666,9 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
               ? "llm-paper-picker-attachment-row"
               : row.kind === "paper"
                 ? "llm-paper-picker-group-row"
-                : "llm-paper-picker-group-row llm-paper-picker-collection-row"
+                : row.kind === "collection"
+                  ? "llm-paper-picker-group-row llm-paper-picker-collection-row"
+                  : "llm-paper-picker-group-row llm-paper-picker-tag-row"
           }`,
         );
         option.setAttribute("role", "option");
@@ -2706,6 +2746,50 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
             isCollectionSelected
               ? t("Remove collection context")
               : t("Add collection as context"),
+          );
+        } else if (row.kind === "tag") {
+          const tag = getPaperPickerTagCandidateByName(row.tagName);
+          if (!tag) return;
+          const tagRef: TagContextRef = {
+            name: tag.name,
+            normalizedName: tag.normalizedName,
+            libraryID: deps.getCurrentLibraryID(),
+            includeAutomatic: tag.isAutomatic,
+          };
+          const isTagSelected = item
+            ? isPaperPickerTagContextSelected(tagRef)
+            : false;
+          option.classList.toggle("llm-paper-picker-selected", isTagSelected);
+          const rowMain = createElement(
+            ownerDoc,
+            "div",
+            "llm-paper-picker-group-row-main llm-paper-picker-cell-title",
+          );
+          const titleLine = createElement(
+            ownerDoc,
+            "div",
+            "llm-paper-picker-group-title-line",
+          );
+          const title = createElement(
+            ownerDoc,
+            "span",
+            "llm-paper-picker-title",
+            { textContent: tag.name, title: tag.name },
+          );
+          titleLine.append(createPickerIcon(ownerDoc, "tag"), title);
+          rowMain.append(
+            titleLine,
+            createPaperPickerMetaLine(
+              tag.isAutomatic ? t("Automatic tag") : t("Tag"),
+              `${tag.count} ${t("items")}`,
+            ),
+          );
+          option.append(rowMain);
+          appendActionCell(
+            option,
+            rowIndex,
+            isTagSelected,
+            isTagSelected ? t("Remove tag context") : t("Add tag as context"),
           );
         } else if (row.kind === "paper") {
           const group = getPaperPickerGroupByItemId(row.itemId);
@@ -2920,16 +3004,17 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
         renderPaperPicker();
         return;
       }
-      const [paperResults, collectionResults] = await Promise.all([
+      const [paperResults, collectionResults, tagResults] = await Promise.all([
         searchAllItemCandidates(libraryID, activeSlashToken.query, 20),
         searchCollectionCandidates(libraryID, activeSlashToken.query),
+        searchTagCandidates(libraryID, activeSlashToken.query),
       ]);
       if (requestId !== paperPickerRequestSeq) return;
       if (!getActiveAtToken()) {
         closePaperPicker();
         return;
       }
-      setPaperPickerSearchResults(paperResults, collectionResults);
+      setPaperPickerSearchResults(paperResults, collectionResults, tagResults);
       paperPickerActiveRowIndex = 0;
       renderPaperPicker();
     };
