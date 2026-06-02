@@ -1,12 +1,17 @@
-import type { AgentModelMessage } from "../types";
+import type { AgentModelMessage, AgentToolMessage } from "../types";
 import { estimateContextMessagesTokens } from "../../utils/modelInputCap";
 import type { AgentContextBudgetState } from "./budgetPolicy";
+import {
+  createAgentToolResultHandleRecord,
+  type AgentToolResultHandleRecord,
+} from "../store/toolResultHandles";
 
 export type AgentTranscriptCompactionResult = {
   compacted: boolean;
   messages: AgentModelMessage[];
   summaryMessage?: AgentModelMessage;
   droppedMessageCount: number;
+  handleRecords: AgentToolResultHandleRecord[];
 };
 
 function stringifyContent(content: AgentModelMessage["content"]): string {
@@ -26,6 +31,48 @@ function truncateText(value: string, maxChars: number): string {
   const normalized = value.replace(/\s+/g, " ").trim();
   if (normalized.length <= maxChars) return normalized;
   return `${normalized.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...`;
+}
+
+function stableStringify(value: unknown): string {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value);
+  } catch (_error) {
+    return String(value);
+  }
+}
+
+function simpleDigest(value: unknown): string {
+  const text = stableStringify(value);
+  let hash = 2166136261;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16);
+}
+
+function parseToolContent(message: AgentToolMessage): unknown {
+  try {
+    return JSON.parse(message.content);
+  } catch (_error) {
+    return message.content;
+  }
+}
+
+function buildToolCallArgumentDigestById(
+  messages: AgentModelMessage[],
+): Map<string, string> {
+  const digests = new Map<string, string>();
+  for (const message of messages) {
+    if (message.role !== "assistant" || !Array.isArray(message.tool_calls)) {
+      continue;
+    }
+    for (const call of message.tool_calls) {
+      digests.set(call.id, simpleDigest(call.arguments ?? {}));
+    }
+  }
+  return digests;
 }
 
 function toolNamesFromMessage(message: AgentModelMessage): string[] {
@@ -68,6 +115,7 @@ function alignTailStartToProviderMessageBoundary(
 function buildSummaryMessage(
   messages: AgentModelMessage[],
   summaryTokens: number,
+  toolHandleLines: string[] = [],
 ): AgentModelMessage {
   const summaryChars = Math.max(600, summaryTokens * 4);
   const userLines: string[] = [];
@@ -99,6 +147,9 @@ function buildSummaryMessage(
       ? `Earlier assistant conclusions:\n${assistantLines.join("\n")}`
       : "",
     toolLine ? `Earlier tools used: ${toolLine}` : "",
+    toolHandleLines.length
+      ? `Stored compacted tool-result handles:\n${toolHandleLines.join("\n")}`
+      : "",
   ].filter(Boolean);
   return {
     role: "user",
@@ -106,10 +157,42 @@ function buildSummaryMessage(
   };
 }
 
+function buildDroppedToolHandleRecords(params: {
+  messages: AgentModelMessage[];
+  conversationKey?: number;
+  resourceSignature?: string;
+  argumentDigestById: Map<string, string>;
+}): {
+  handleRecords: AgentToolResultHandleRecord[];
+  toolHandleLines: string[];
+} {
+  const handleRecords: AgentToolResultHandleRecord[] = [];
+  const toolHandleLines: string[] = [];
+  for (const message of params.messages) {
+    if (message.role !== "tool") continue;
+    const record = createAgentToolResultHandleRecord({
+      conversationKey: params.conversationKey,
+      toolName: message.name,
+      toolCallId: message.tool_call_id,
+      inputDigest: params.argumentDigestById.get(message.tool_call_id),
+      resourceSignature: params.resourceSignature,
+      content: parseToolContent(message),
+    });
+    if (!record) continue;
+    handleRecords.push(record);
+    toolHandleLines.push(
+      `- ${message.name} (${message.tool_call_id}) handle=${record.handle}`,
+    );
+  }
+  return { handleRecords, toolHandleLines };
+}
+
 export function compactAgentTranscript(params: {
   messages: AgentModelMessage[];
   budget: AgentContextBudgetState;
   force?: boolean;
+  conversationKey?: number;
+  resourceSignature?: string;
 }): AgentTranscriptCompactionResult {
   const messages = params.messages.filter(
     (message) => message.role !== "system",
@@ -119,6 +202,7 @@ export function compactAgentTranscript(params: {
       compacted: false,
       messages,
       droppedMessageCount: 0,
+      handleRecords: [],
     };
   }
   const tailStart = alignTailStartToProviderMessageBoundary(
@@ -135,11 +219,19 @@ export function compactAgentTranscript(params: {
       compacted: false,
       messages,
       droppedMessageCount: 0,
+      handleRecords: [],
     };
   }
+  const { handleRecords, toolHandleLines } = buildDroppedToolHandleRecords({
+    messages: older,
+    conversationKey: params.conversationKey,
+    resourceSignature: params.resourceSignature,
+    argumentDigestById: buildToolCallArgumentDigestById(messages),
+  });
   const summaryMessage = buildSummaryMessage(
     older,
     params.budget.summaryTokens,
+    toolHandleLines,
   );
   const compactedMessages = [summaryMessage, ...tail];
   if (
@@ -151,6 +243,7 @@ export function compactAgentTranscript(params: {
       compacted: false,
       messages,
       droppedMessageCount: 0,
+      handleRecords: [],
     };
   }
   return {
@@ -158,5 +251,6 @@ export function compactAgentTranscript(params: {
     messages: compactedMessages,
     summaryMessage,
     droppedMessageCount: older.length,
+    handleRecords,
   };
 }

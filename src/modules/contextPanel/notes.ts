@@ -3,7 +3,6 @@ import {
   sanitizeText,
   escapeNoteHtml,
   getCurrentLocalTimestamp,
-  getSelectedTextSourceIcon,
   normalizeSelectedTextSource,
 } from "./textUtils";
 import { normalizeAttachmentContentHash } from "./normalizers";
@@ -386,6 +385,7 @@ function buildAssistantNoteHtml(
   const response = replaceQuoteCitationPlaceholdersForMarkdown(
     sanitizeText(stripTrailingPluginFooter(contentText || "")).trim(),
     quoteCitations,
+    { unresolved: "unavailable" },
   );
   const source = modelName.trim() || "unknown";
   const timestamp = getCurrentLocalTimestamp();
@@ -401,6 +401,7 @@ function renderChatMessageHtmlForNote(
   const safeText = replaceQuoteCitationPlaceholdersForMarkdown(
     sanitizeText(text || "").trim(),
     quoteCitations,
+    { unresolved: "unavailable" },
   );
   if (!safeText) return "";
   // Reuse the same markdown-to-note rendering path as single-response save.
@@ -488,19 +489,18 @@ function formatSelectedTextLabel(
   index: number,
   total: number,
 ): string {
-  const icon = getSelectedTextSourceIcon(source);
   if (source === "note") {
     return total === 1
-      ? `${icon} Note context`
-      : `${icon} Note context (${index + 1})`;
+      ? "Note context"
+      : `Note context (${index + 1})`;
   }
   if (source === "note-edit") {
     return total === 1
-      ? `${icon} Editing focus`
-      : `${icon} Editing focus (${index + 1})`;
+      ? "Editing focus"
+      : `Editing focus (${index + 1})`;
   }
-  if (total === 1) return `${icon} Selected text`;
-  return `${icon} Selected text (${index + 1})`;
+  if (total === 1) return "Selected text";
+  return `Selected text (${index + 1})`;
 }
 
 function buildScreenshotImagesHtmlForNote(images: string[]): string {
@@ -715,11 +715,19 @@ export function buildChatHistoryNotePayload(messages: Message[]): {
         lastUserPaperContexts,
       );
     }
+    const exportedText =
+      msg.role === "assistant"
+        ? replaceQuoteCitationPlaceholdersForMarkdown(
+            textWithContext,
+            msg.quoteCitations,
+            { unresolved: "unavailable" },
+          )
+        : textWithContext;
     if (msg.role === "user") {
       lastUserPaperContexts = getMessageCitationPaperContexts(msg);
     }
     if (!rendered && !screenshotHtml && !fileHtml) continue;
-    textLines.push(`${speaker}: ${textWithContext}`);
+    textLines.push(`${speaker}: ${exportedText}`);
     const renderedBlock = rendered ? `<div>${rendered}</div>` : "";
     htmlBlocks.push(
       `<p><strong>${escapeNoteHtml(speaker)}:</strong></p>${renderedBlock}${screenshotHtml}${fileHtml}`,

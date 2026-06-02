@@ -54,20 +54,27 @@ import {
   isNotesDirectoryConfigured,
 } from "../utils/notesDirectoryConfig";
 import {
-  estimateContextMessagesTokens,
-  resolveContextWindowTokens,
-} from "../utils/modelInputCap";
-import {
   buildAgentContextBudgetState,
   resolveAgentContextBudgetPolicy,
 } from "./context/budgetPolicy";
 import { compactAgentTranscript } from "./context/transcriptCompactor";
+import {
+  AgentPromptBudgetError,
+  enforceAgentPromptBudget,
+} from "./context/promptBudget";
 import {
   appendAgentRunEvent,
   createAgentRun,
   finishAgentRun,
   getAgentRunTrace,
 } from "./store/traceStore";
+import {
+  hasAgentToolResultHandles,
+  hydrateAgentToolResultHandles,
+  upsertAgentToolResultHandles,
+} from "./store/toolResultHandles";
+
+const TOOL_RESULT_READ_TOOL_NAME = "tool_result_read";
 
 type AgentRuntimeDeps = {
   registry: AgentToolRegistry;
@@ -399,6 +406,25 @@ function isUserDeniedToolResult(result: AgentToolResult): boolean {
   return readToolError(result).toLowerCase() === "user denied action";
 }
 
+function setToolResultReadAvailability(
+  request: AgentRuntimeRequest,
+  available: boolean,
+): void {
+  const metadata = { ...(request.metadata || {}) };
+  if (available) {
+    metadata.agentToolResultReadAvailable = true;
+  } else {
+    delete metadata.agentToolResultReadAvailable;
+  }
+  request.metadata = metadata;
+}
+
+function filterTransientRecoveryTool<T extends { name: string }>(
+  tools: T[],
+): T[] {
+  return tools.filter((tool) => tool.name !== TOOL_RESULT_READ_TOOL_NAME);
+}
+
 function isWriteNoteFileRequest(
   request: AgentRuntimeRequest,
   matchedSkills: ReadonlyArray<string>,
@@ -570,15 +596,23 @@ export class AgentRuntime {
       content?: unknown;
     }> = [];
     const pendingReadActivities: AgentPendingReadActivity[] = [];
+    await hydrateAgentToolResultHandles(request.conversationKey);
+    let toolResultReadAvailable = hasAgentToolResultHandles(
+      request.conversationKey,
+    );
+    setToolResultReadAvailability(request, false);
     const toolDefinitions =
       this.registry.listToolDefinitionsForRequest(request);
-    const toolSpecs = this.registry.listToolsForRequest(request);
+    const toolSpecs = filterTransientRecoveryTool(
+      this.registry.listToolsForRequest(request),
+    );
     await hydrateAgentEvidenceCache(request.conversationKey);
     await hydrateAgentCoverageLedger({
       conversationKey: request.conversationKey,
       request,
     });
     const resourceContextPlan = buildAgentResourceContextPlan(request);
+    context.resourceSignature = resourceContextPlan.resourceSignature;
     request.contextCache = resourceContextPlan.contextCache;
     const transcriptCompatibilityKey = buildAgentTranscriptCompatibilityKey({
       request,
@@ -607,6 +641,8 @@ export class AgentRuntime {
         messages: transcriptMessagesForPrompt,
         budget,
         force: true,
+        conversationKey: request.conversationKey,
+        resourceSignature: resourceContextPlan.resourceSignature,
       });
       const text = compacted.compacted
         ? "Conversation compacted"
@@ -617,6 +653,8 @@ export class AgentRuntime {
           messages: compacted.messages,
           compactedAt: this.now(),
         };
+        await upsertAgentToolResultHandles(compacted.handleRecords);
+        if (compacted.handleRecords.length) toolResultReadAvailable = true;
         await replaceAgentTranscriptSegment(transcriptSegment);
         await emit({ type: "context_compacted", automatic: false });
       }
@@ -688,6 +726,8 @@ export class AgentRuntime {
       const compacted = compactAgentTranscript({
         messages: transcriptMessagesForPrompt,
         budget: budgetState,
+        conversationKey: request.conversationKey,
+        resourceSignature: resourceContextPlan.resourceSignature,
       });
       if (compacted.compacted) {
         transcriptSegment = {
@@ -696,6 +736,8 @@ export class AgentRuntime {
           compactedAt: this.now(),
         };
         transcriptMessagesForPrompt = transcriptSegment.messages;
+        await upsertAgentToolResultHandles(compacted.handleRecords);
+        if (compacted.handleRecords.length) toolResultReadAvailable = true;
         await replaceAgentTranscriptSegment(transcriptSegment);
         await emit({ type: "context_compacted", automatic: true });
         messages.splice(
@@ -859,11 +901,38 @@ export class AgentRuntime {
         stepStreamedText = "";
         stepPendingDelta = "";
       };
-      const stepContextWindow = resolveContextWindowTokens(
-        request.model || "",
-        request.advanced?.inputTokenCap,
-      );
-      const stepContextTokens = estimateContextMessagesTokens(messages);
+      const preflight = enforceAgentPromptBudget({
+        messages,
+        model: request.model,
+        inputTokenCap: request.advanced?.inputTokenCap,
+        conversationKey: request.conversationKey,
+        resourceSignature: resourceContextPlan.resourceSignature,
+      });
+      if (preflight.changed) {
+        await upsertAgentToolResultHandles(preflight.handleRecords);
+        if (preflight.handleRecords.length) toolResultReadAvailable = true;
+        messages.splice(0, messages.length, ...preflight.messages);
+        adapter.resetState?.();
+        await emit({
+          type: "provider_event",
+          providerType: "agent_context_budget",
+          payload: {
+            action: "compacted_model_prompt",
+            beforeTokens: preflight.estimatedBeforeTokens,
+            afterTokens: preflight.estimatedAfterTokens,
+            softLimitTokens: preflight.softLimitTokens,
+            contextWindow: preflight.contextWindow,
+            reductions: preflight.reductions,
+            handleCount: preflight.handleRecords.length,
+          },
+        });
+      }
+      const stepToolResultReadAvailable =
+        toolResultReadAvailable || preflight.handleRecords.length > 0;
+      setToolResultReadAvailability(request, stepToolResultReadAvailable);
+      const stepToolSpecs = this.registry.listToolsForRequest(request);
+      const stepContextWindow = preflight.contextWindow;
+      const stepContextTokens = preflight.estimatedAfterTokens;
       if (stepContextTokens > 0 && stepContextWindow > 0) {
         await emit({
           type: "usage",
@@ -878,7 +947,7 @@ export class AgentRuntime {
       const step = await adapter.runStep({
         request,
         messages,
-        tools: toolSpecs,
+        tools: stepToolSpecs,
         signal: params.signal,
         onTextDelta: async (delta) => {
           if (!delta) return;
@@ -1312,12 +1381,21 @@ export class AgentRuntime {
       });
     };
     for (let round = 1; round <= maxRounds; round += 1) {
-      const { step, stepStreamedText } = await runModelStep(
-        round,
-        round === 1
-          ? "Running agent"
-          : `Continuing agent (${round}/${maxRounds})`,
-      );
+      let stepResult: { step: AgentModelStep; stepStreamedText: string };
+      try {
+        stepResult = await runModelStep(
+          round,
+          round === 1
+            ? "Running agent"
+            : `Continuing agent (${round}/${maxRounds})`,
+        );
+      } catch (err) {
+        if (err instanceof AgentPromptBudgetError) {
+          return completeRun(err.message, "failed");
+        }
+        throw err;
+      }
+      const { step, stepStreamedText } = stepResult;
       if (step.kind === "final") {
         if (
           requiresFileNoteWrite &&

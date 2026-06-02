@@ -5,6 +5,7 @@ import type {
   ActiveNoteContext,
   ChatAttachment,
   CollectionContextRef,
+  PaperContentSourceMode,
   PaperContextRef,
   SelectedTextSource,
 } from "../shared/types";
@@ -28,6 +29,8 @@ export type AgentRequest = {
   fullTextPaperContexts?: PaperContextRef[];
   pinnedPaperContexts?: PaperContextRef[];
   selectedCollectionContexts?: CollectionContextRef[];
+  availableAttachmentResources?: AgentAttachmentResource[];
+  attachmentResourceSummaries?: AgentAttachmentResourceSummary[];
   attachments?: ChatAttachment[];
   screenshots?: string[];
   /** Skill IDs to force-activate regardless of regex matching (from slash menu selection). */
@@ -311,6 +314,7 @@ export type AgentEvent =
       args?: unknown;
       ok?: boolean;
       text?: string;
+      codeBlock?: string;
     }
   | {
       type: "usage";
@@ -356,10 +360,21 @@ export type AgentToolCall = {
   arguments: unknown;
 };
 
+export type AgentTraceDetailKind = "text" | "code" | "json" | "url";
+
+export type AgentTraceDetail = {
+  label: string;
+  value: string;
+  kind?: AgentTraceDetailKind;
+};
+
 export type AgentTraceChip = {
-  icon: string;
+  icon?: string;
+  iconName?: string;
   label: string;
   title?: string;
+  detail?: AgentTraceDetail;
+  details?: AgentTraceDetail[];
 };
 
 export type AgentTraceRequestSummary = {
@@ -451,6 +466,41 @@ export type AgentRuntimeRequest = AgentRequest & {
   contextCache?: ContextCachePlan;
 };
 
+export type AgentAttachmentReadableVia =
+  | "read_attachment"
+  | "paper_read"
+  | "unsupported";
+
+export type AgentAttachmentType =
+  | "pdf"
+  | "markdown"
+  | "html"
+  | "txt"
+  | "docx"
+  | "unsupported";
+
+export type AgentAttachmentResource = {
+  lifecycleState: "available";
+  parentItemId: number;
+  parentTitle: string;
+  contextItemId: number;
+  title: string;
+  contentType: string;
+  attachmentType: AgentAttachmentType;
+  readableVia: AgentAttachmentReadableVia;
+  contentSourceMode?: PaperContentSourceMode;
+  isPrimary?: boolean;
+};
+
+export type AgentAttachmentResourceSummary = {
+  scope: "selected-collection";
+  collectionId: number;
+  libraryID: number;
+  collectionName: string;
+  parentItemCount: number;
+  attachmentCounts: Partial<Record<AgentAttachmentType, number>>;
+};
+
 export type AgentRuntimeOutcome =
   | {
       kind: "completed";
@@ -533,6 +583,7 @@ export type AgentToolContext = {
   currentAnswerText: string;
   modelName: string;
   modelProviderLabel?: string;
+  resourceSignature?: string;
 };
 
 export type AgentToolInputValidation<T> =

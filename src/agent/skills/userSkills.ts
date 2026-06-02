@@ -139,13 +139,66 @@ const BUILTIN_BOOTSTRAP_RAW_HASHES: Partial<
   Record<string, ReadonlyArray<string>>
 > = {
   "library-analysis.md": ["ftq8b2"],
-  "compare-papers.md": ["1jvl4lu"],
+  "compare-papers.md": [
+    "i0j6yq",
+    "1yreksb",
+    "7os2qk",
+    "1frgnyh",
+    "1jvl4lu",
+    "cp9zod",
+    "w9wsrp",
+    "1w3ytrp",
+    "1krlubq",
+  ],
   "analyze-figures.md": ["msvqtf", "17o1bpl"],
   "simple-paper-qa.md": ["1r2ban6"],
-  "evidence-based-qa.md": ["1er2ubr"],
+  "evidence-based-qa.md": [
+    "vyeyap",
+    "1vhakii",
+    "dxw5b3",
+    "11cbpv7",
+    "1er2ubr",
+    "13esvqx",
+    "1k39b46",
+    "1xglfq0",
+  ],
   "write-note.md": ["172xn8t"],
   "literature-review.md": ["kbrknh"],
   "import-cited-reference.md": ["19bomz1"],
+};
+
+const BUILTIN_BOOTSTRAP_BODY_HASHES: Partial<
+  Record<string, ReadonlyArray<string>>
+> = {
+  "compare-papers.md": [
+    "x00ci1",
+    "1au58pu",
+    "13ppssj",
+    "19kyxys",
+    "spgyhq",
+    "17c7wx5",
+    "6r67g8",
+    "1j5fq18",
+  ],
+  "evidence-based-qa.md": [
+    "1aby95d",
+    "1g0a76y",
+    "4gj0dx",
+    "12qgkrq",
+    "bgr2hf",
+    "zjwar9",
+  ],
+};
+
+const BUILTIN_FRONTMATTER_PATCH_OPTIONS: Partial<
+  Record<string, Parameters<typeof patchSkillFrontmatter>[2]>
+> = {
+  "compare-papers.md": {
+    historicalContexts: ["paper-set"],
+  },
+  "evidence-based-qa.md": {
+    historicalContexts: ["single-paper,paper-set"],
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -235,6 +288,13 @@ function matchesKnownRawHash(
 ): boolean {
   if (!hashes?.length) return false;
   return hashes.includes(hashBody(raw));
+}
+
+function matchesKnownHash(
+  hash: string | undefined,
+  hashes: ReadonlyArray<string> | undefined,
+): boolean {
+  return Boolean(hash && hashes?.includes(hash));
 }
 
 // ---------------------------------------------------------------------------
@@ -380,7 +440,19 @@ export async function initUserSkills(): Promise<void> {
       // On-disk differs from shipped — decide whether to upgrade.
       const storedHash = bodyHashes[filename];
 
-      if (storedHash && onDiskHash === storedHash) {
+      const knownHistoricalBodyHashes = BUILTIN_BOOTSTRAP_BODY_HASHES[filename];
+      const trackedCustomizedBody =
+        storedHash &&
+        onDiskHash === storedHash &&
+        knownHistoricalBodyHashes?.length &&
+        !matchesKnownHash(storedHash, knownHistoricalBodyHashes);
+
+      if (trackedCustomizedBody) {
+        Zotero.debug?.(
+          `[llm-for-zotero] Kept customized skill body: ${filename} ` +
+            `(shipped v${shippedSkill.version} available — use preferences to restore defaults)`,
+        );
+      } else if (storedHash && onDiskHash === storedHash) {
         // Hash matches what we last wrote → user didn't modify the managed
         // section/body. Safe to upgrade while preserving content outside any
         // managed block.
@@ -442,11 +514,10 @@ export async function initUserSkills(): Promise<void> {
   setBodyHashes(bodyHashes);
 
   // ── Step 3: Metadata patching (frontmatter only) ────────────────────────
-  // Updates `description` and `version` frontmatter fields only; all other
-  // keys (including user-customized `match:` patterns and any other custom
-  // metadata the user added) are preserved verbatim. Useful for keeping the
-  // displayed description/version current on customized files without
-  // touching either the instruction body or user-added frontmatter.
+  // Updates plugin-owned frontmatter fields and known old shipped routing
+  // metadata; all other keys (including user-customized `match:` patterns and
+  // custom contexts) are preserved verbatim. Useful for keeping customized
+  // files compatible without touching the instruction body.
   if (io.read) {
     for (const [filename, shippedContent] of Object.entries(
       BUILTIN_SKILL_FILES,
@@ -456,7 +527,11 @@ export async function initUserSkills(): Promise<void> {
         if (!(await io.exists(filePath))) continue;
         const onDiskRaw = await readFileText(io, filePath);
         if (!onDiskRaw) continue;
-        const patched = patchSkillFrontmatter(onDiskRaw, shippedContent);
+        const patched = patchSkillFrontmatter(
+          onDiskRaw,
+          shippedContent,
+          BUILTIN_FRONTMATTER_PATCH_OPTIONS[filename],
+        );
         if (patched) {
           await io.write(filePath, encoder.encode(patched));
           Zotero.debug?.(

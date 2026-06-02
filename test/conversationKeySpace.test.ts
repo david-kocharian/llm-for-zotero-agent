@@ -7,9 +7,13 @@ import {
   UPSTREAM_GLOBAL_CONVERSATION_KEY_BASE,
   UPSTREAM_PAPER_CONVERSATION_KEY_BASE,
   RUNTIME_CONVERSATION_KEY_END,
+  RUNTIME_DEFAULT_CONVERSATION_KEY_OFFSET,
   buildDefaultConversationKey,
+  buildDefaultUpstreamGlobalConversationKey,
   classifyConversationKey,
   getConversationKeyRange,
+  getRuntimeAllocatedConversationKeyRange,
+  getRuntimeDefaultConversationKeyRange,
   isConversationKeyForKind,
 } from "../src/shared/conversationKeySpace";
 import { isClaudeConversationKey } from "../src/claudeCode/constants";
@@ -74,6 +78,17 @@ describe("conversation key space", function () {
     assert.isFalse(isConversationKeyForKind("upstream", "global", 42));
   });
 
+  it("builds library-scoped upstream default global keys", function () {
+    const libraryOne = buildDefaultUpstreamGlobalConversationKey(1);
+    const libraryTwo = buildDefaultUpstreamGlobalConversationKey(2);
+
+    assert.equal(libraryOne, UPSTREAM_GLOBAL_CONVERSATION_KEY_BASE + 1);
+    assert.equal(libraryTwo, UPSTREAM_GLOBAL_CONVERSATION_KEY_BASE + 2);
+    assert.notEqual(libraryOne, libraryTwo);
+    assert.isTrue(isConversationKeyForKind("upstream", "global", libraryOne));
+    assert.isTrue(isConversationKeyForKind("upstream", "global", libraryTwo));
+  });
+
   it("leaves future high-key bands unclassified", function () {
     assert.isNull(classifyConversationKey(RUNTIME_CONVERSATION_KEY_END));
     assert.isFalse(isClaudeConversationKey(RUNTIME_CONVERSATION_KEY_END));
@@ -82,6 +97,11 @@ describe("conversation key space", function () {
 
   it("builds default profile-scoped runtime keys inside the requested range", function () {
     const range = getConversationKeyRange("codex", "paper", "profile-0");
+    const defaultRange = getRuntimeDefaultConversationKeyRange(
+      "codex",
+      "paper",
+      "profile-0",
+    );
     const key = buildDefaultConversationKey(
       "codex",
       "paper",
@@ -89,12 +109,37 @@ describe("conversation key space", function () {
       "profile-0",
     );
 
-    assert.equal(key, range.start + 42);
+    assert.equal(key, range.start + RUNTIME_DEFAULT_CONVERSATION_KEY_OFFSET + 42);
+    assert.isAtLeast(key, defaultRange.start);
+    assert.isBelow(key, defaultRange.endExclusive);
     assert.isAtLeast(key, range.start);
     assert.isBelow(key, range.endExclusive);
     assert.deepEqual(classifyConversationKey(key), {
       system: "codex",
       kind: "paper",
     });
+  });
+
+  it("keeps runtime default item keys out of allocated conversation bands", function () {
+    const defaultRange = getRuntimeDefaultConversationKeyRange(
+      "codex",
+      "paper",
+      "profile-0",
+    );
+    const allocatedRange = getRuntimeAllocatedConversationKeyRange(
+      "codex",
+      "paper",
+      "profile-0",
+    );
+    const futureItemKey = buildDefaultConversationKey(
+      "codex",
+      "paper",
+      3340,
+      "profile-0",
+    );
+
+    assert.isAtLeast(futureItemKey, defaultRange.start);
+    assert.isBelow(futureItemKey, defaultRange.endExclusive);
+    assert.isBelow(futureItemKey, allocatedRange.start);
   });
 });

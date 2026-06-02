@@ -6,8 +6,16 @@ import {
   selectedOtherRefContextCache,
   selectedPaperContextCache,
   selectedPaperPreviewExpandedCache,
+  paperContextModeOverrides,
+  pinnedSelectedTextKeys,
 } from "../../state";
-import { appendSelectedTextContextForItem } from "../../contextResolution";
+import {
+  appendSelectedTextContextForItem,
+  getSelectedTextContextEntries,
+  setSelectedTextContextEntries,
+  setSelectedTextExpandedIndex,
+} from "../../contextResolution";
+import { resolveContextAttachmentSupportFromMetadata } from "../../contextAttachmentSupport";
 import { resolvePaperContextRefFromItem } from "../../paperAttribution";
 import {
   browseAllItemCandidates,
@@ -27,13 +35,19 @@ import type {
   OtherContextRef,
   PaperContextRef,
 } from "../../types";
-import { setPaperModeOverride } from "../../contexts/paperContextState";
+import {
+  clearSelectedPaperState,
+  setPaperModeOverride,
+} from "../../contexts/paperContextState";
 import { isSamePaperContextRef } from "../../modeBehavior";
+import { buildPaperKey } from "../../pdfContext";
 import { resolvePaperContextDisplayMetadata } from "./composeContextController";
+import { removePinnedSelectedText } from "./pinnedContextController";
 
 type StatusLevel = "ready" | "warning" | "error";
 type ActiveSlashToken = PaperSearchSlashToken;
 type PaperPickerMode = "browse" | "search" | "empty";
+type PickerIconName = "paper" | "pdf" | "note" | "image" | "file";
 type PaperPickerRow =
   | {
       kind: "collection";
@@ -184,23 +198,26 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
   };
 
   function buildPaperMetaText(paper: {
-    citationKey?: string;
     firstCreator?: string;
     year?: string;
   }): string {
-    const parts = [
-      paper.firstCreator || "",
-      paper.year || "",
-      paper.citationKey || "",
-    ].filter(Boolean);
+    const parts = [paper.firstCreator || "", paper.year || ""].filter(Boolean);
     return parts.join(" · ");
   }
 
   function resolvePickerItemKind(
     contentType?: string,
+    filename?: string,
   ): "pdf" | "note" | "figure" | "other" {
     if (!contentType) return "other";
-    if (contentType === "application/pdf") return "pdf";
+    if (
+      resolveContextAttachmentSupportFromMetadata({
+        contentType,
+        filename,
+      })?.kind === "pdf"
+    ) {
+      return "pdf";
+    }
     if (contentType === ZOTERO_NOTE_CONTENT_TYPE) return "note";
     if (contentType.startsWith("image/")) return "figure";
     return "other";
@@ -208,11 +225,17 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
 
   function resolvePickerKindIcon(
     kind: "pdf" | "note" | "figure" | "other",
-  ): string {
-    if (kind === "pdf") return "📚";
-    if (kind === "note") return "📝";
-    if (kind === "figure") return "🖼";
-    return "📎";
+  ): PickerIconName {
+    if (kind === "pdf") return "pdf";
+    if (kind === "note") return "note";
+    if (kind === "figure") return "image";
+    return "file";
+  }
+
+  function resolvePickerAttachmentKind(
+    attachment: PaperSearchAttachmentCandidate,
+  ): "pdf" | "note" | "figure" | "other" {
+    return resolvePickerItemKind(attachment.contentType, attachment.title);
   }
 
   function resolvePickerKindLabel(
@@ -224,24 +247,34 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
     return "File";
   }
 
-  function resolveGroupIcon(group: PaperSearchGroupCandidate): string {
-    if (group.itemKind === "standalone-note") return "📝";
+  function resolveGroupIcon(group: PaperSearchGroupCandidate): PickerIconName {
+    if (group.itemKind === "standalone-note") return "note";
     const hasPdf = group.attachments.some(
-      (attachment) => resolvePickerItemKind(attachment.contentType) === "pdf",
+      (attachment) => resolvePickerAttachmentKind(attachment) === "pdf",
     );
-    if (hasPdf) return "📚";
+    if (hasPdf) return "paper";
     const hasFigure = group.attachments.some(
       (attachment) =>
-        resolvePickerItemKind(attachment.contentType) === "figure",
+        resolvePickerAttachmentKind(attachment) === "figure",
     );
-    if (hasFigure) return "🖼";
+    if (hasFigure) return "image";
     const hasNote = group.attachments.some(
-      (attachment) => resolvePickerItemKind(attachment.contentType) === "note",
+      (attachment) => resolvePickerAttachmentKind(attachment) === "note",
     );
-    if (hasNote) return "📝";
-    if (group.attachments.length > 0) return "📎";
-    return "📄";
+    if (hasNote) return "note";
+    if (group.attachments.length > 0) return "file";
+    return "file";
   }
+
+  const createPickerIcon = (
+    ownerDoc: Document,
+    icon: PickerIconName,
+  ): HTMLSpanElement =>
+    createElement(
+      ownerDoc,
+      "span",
+      `llm-paper-picker-item-icon llm-paper-picker-icon-${icon}`,
+    );
 
   const getPaperPickerAttachmentDisplayTitle = (
     group: PaperSearchGroupCandidate,
@@ -250,7 +283,7 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
   ): string => {
     const normalizedTitle = (attachment.title || "").trim();
     if (normalizedTitle) return normalizedTitle;
-    const kind = resolvePickerItemKind(attachment.contentType);
+    const kind = resolvePickerAttachmentKind(attachment);
     return group.attachments.length > 1
       ? `${resolvePickerKindLabel(kind)} ${attachmentIndex + 1}`
       : resolvePickerKindLabel(kind);
@@ -486,6 +519,61 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
     positionPaperPickerForVisibleAnchor();
   };
 
+  const refreshPaperPickerAfterContextSelection = () => {
+    const scrollTop = paperPicker?.scrollTop ?? 0;
+    consumeAtQueryOnly();
+    paperPickerRequestSeq += 1;
+    clearPaperPickerDebounceTimer();
+    renderPaperPicker();
+    if (paperPicker) paperPicker.scrollTop = scrollTop;
+    inputBox.focus({ preventScroll: true });
+  };
+
+  const getSelectedNoteContextItemIds = (): Set<number> => {
+    const textContextKey = deps.getTextContextConversationKey();
+    if (!textContextKey) return new Set();
+    const noteIds = getSelectedTextContextEntries(textContextKey)
+      .filter((entry) => entry.source === "note")
+      .map((entry) =>
+        Number(entry.noteContext?.noteItemId || entry.contextItemId),
+      )
+      .filter((noteId) => Number.isFinite(noteId) && noteId > 0)
+      .map((noteId) => Math.floor(noteId));
+    return new Set(noteIds);
+  };
+
+  const removeManualPaperContext = (paper: PaperContextRef): boolean => {
+    const item = deps.getItem();
+    if (!item) return false;
+    const selectedPapers = deps.getManualPaperContextsForItem(
+      item.id,
+      deps.resolveAutoLoadedPaperContext(),
+    );
+    const existingIndex = selectedPapers.findIndex(
+      (entry) =>
+        entry.itemId === paper.itemId &&
+        entry.contextItemId === paper.contextItemId,
+    );
+    if (existingIndex < 0) return false;
+    const removedPaper = selectedPapers[existingIndex];
+    if (removedPaper) {
+      paperContextModeOverrides.delete(
+        `${item.id}:${buildPaperKey(removedPaper)}`,
+      );
+    }
+    const nextPapers = selectedPapers.filter(
+      (_, index) => index !== existingIndex,
+    );
+    if (nextPapers.length) {
+      selectedPaperContextCache.set(item.id, nextPapers);
+    } else {
+      clearSelectedPaperState(item.id);
+    }
+    deps.updatePaperPreviewPreservingScroll();
+    setStatus(`Paper context removed (${nextPapers.length})`, "ready");
+    return true;
+  };
+
   const upsertPaperContext = (paper: PaperContextRef): boolean => {
     const item = deps.getItem();
     if (!item) return false;
@@ -539,6 +627,42 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
     return true;
   };
 
+  const togglePaperContext = (paper: PaperContextRef): boolean => {
+    if (removeManualPaperContext(paper)) return true;
+    return upsertPaperContext(paper);
+  };
+
+  const removeNoteTextContext = (contextItemId: number): boolean => {
+    const textContextKey = deps.getTextContextConversationKey();
+    if (!textContextKey) return false;
+    const normalizedContextItemId = Math.floor(contextItemId);
+    const selectedContexts = getSelectedTextContextEntries(textContextKey);
+    const existingIndex = selectedContexts.findIndex((entry) => {
+      if (entry.source !== "note") return false;
+      const noteItemId = Number(
+        entry.noteContext?.noteItemId || entry.contextItemId,
+      );
+      return (
+        Number.isFinite(noteItemId) &&
+        Math.floor(noteItemId) === normalizedContextItemId
+      );
+    });
+    if (existingIndex < 0) return false;
+    removePinnedSelectedText(
+      pinnedSelectedTextKeys,
+      textContextKey,
+      selectedContexts[existingIndex],
+    );
+    const nextContexts = selectedContexts.filter(
+      (_, index) => index !== existingIndex,
+    );
+    setSelectedTextContextEntries(textContextKey, nextContexts);
+    setSelectedTextExpandedIndex(textContextKey, null);
+    deps.updateSelectedTextPreviewPreservingScroll();
+    setStatus(t("Selected text removed"), "ready");
+    return true;
+  };
+
   const upsertNoteTextContext = (contextItemId: number): boolean => {
     const item = deps.getItem();
     const textContextKey = deps.getTextContextConversationKey();
@@ -554,7 +678,7 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
       snapshot.text,
       "note",
       undefined,
-      undefined,
+      { contextItemId: snapshot.noteId },
       {
         libraryID: snapshot.libraryID,
         noteItemKey: snapshot.noteItemKey || "",
@@ -572,6 +696,11 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
     deps.updateSelectedTextPreviewPreservingScroll();
     setStatus(t("Note context added as text."), "ready");
     return true;
+  };
+
+  const toggleNoteTextContext = (contextItemId: number): boolean => {
+    if (removeNoteTextContext(contextItemId)) return true;
+    return upsertNoteTextContext(contextItemId);
   };
 
   const addZoteroItemsAsPaperContext = (zoteroItems: Zotero.Item[]): void => {
@@ -601,6 +730,29 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
     }
   };
 
+  const removeOtherRefContext = (contextItemId: number): boolean => {
+    const item = deps.getItem();
+    if (!item) return false;
+    const existing = selectedOtherRefContextCache.get(item.id) || [];
+    const existingIndex = existing.findIndex(
+      (entry) => entry.contextItemId === contextItemId,
+    );
+    if (existingIndex < 0) return false;
+    const removedRef = existing[existingIndex];
+    const next = existing.filter((_, index) => index !== existingIndex);
+    if (next.length) {
+      selectedOtherRefContextCache.set(item.id, next);
+    } else {
+      selectedOtherRefContextCache.delete(item.id);
+    }
+    deps.updatePaperPreviewPreservingScroll();
+    setStatus(
+      `${removedRef?.refKind === "figure" ? "Figure" : "File"} context removed (${next.length})`,
+      "ready",
+    );
+    return true;
+  };
+
   const upsertOtherRefContext = (ref: OtherContextRef): boolean => {
     const item = deps.getItem();
     if (!item) return false;
@@ -618,6 +770,11 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
     return true;
   };
 
+  const toggleOtherRefContext = (ref: OtherContextRef): boolean => {
+    if (removeOtherRefContext(ref.contextItemId)) return true;
+    return upsertOtherRefContext(ref);
+  };
+
   const selectPaperPickerAttachment = (
     itemId: number,
     attachmentIndex: number,
@@ -627,8 +784,7 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
     if (!selectedGroup) return false;
     const selectedAttachment = selectedGroup.attachments[attachmentIndex];
     if (!selectedAttachment) return false;
-    const contentType = selectedAttachment.contentType;
-    const kind = resolvePickerItemKind(contentType);
+    const kind = resolvePickerAttachmentKind(selectedAttachment);
     deps.log("LLM: Picker selection", {
       selectionKind,
       kind,
@@ -636,7 +792,7 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
       contextItemId: selectedAttachment.contextItemId,
     });
     if (kind === "pdf") {
-      upsertPaperContext({
+      togglePaperContext({
         itemId: selectedGroup.itemId,
         contextItemId: selectedAttachment.contextItemId,
         title: selectedGroup.title,
@@ -646,23 +802,20 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
         year: selectedGroup.year,
       });
     } else if (kind === "note") {
-      upsertNoteTextContext(selectedAttachment.contextItemId);
+      toggleNoteTextContext(selectedAttachment.contextItemId);
     } else {
-      upsertOtherRefContext({
+      toggleOtherRefContext({
         contextItemId: selectedAttachment.contextItemId,
         parentItemId:
           selectedGroup.itemId !== selectedAttachment.contextItemId
             ? selectedGroup.itemId
             : undefined,
         title: selectedAttachment.title || selectedGroup.title,
-        contentType: contentType || "application/octet-stream",
+        contentType: selectedAttachment.contentType || "application/octet-stream",
         refKind: kind === "figure" ? "figure" : "other",
       });
     }
-    consumeAtQueryOnly();
-    schedulePaperPickerSearch();
-    renderPaperPicker();
-    inputBox.focus({ preventScroll: true });
+    refreshPaperPickerAfterContextSelection();
     return true;
   };
 
@@ -678,16 +831,24 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
       libraryID,
     };
     const existing = selectedCollectionContextCache.get(item.id) || [];
-    if (existing.some((entry) => entry.collectionId === ref.collectionId)) {
-      setStatus(t("Collection already selected"), "warning");
-      return false;
+    const existingIndex = existing.findIndex(
+      (entry) => entry.collectionId === ref.collectionId,
+    );
+    if (existingIndex >= 0) {
+      const next = existing.filter((_, index) => index !== existingIndex);
+      if (next.length) {
+        selectedCollectionContextCache.set(item.id, next);
+      } else {
+        selectedCollectionContextCache.delete(item.id);
+      }
+      deps.updatePaperPreviewPreservingScroll();
+      refreshPaperPickerAfterContextSelection();
+      setStatus(t("Collection context removed."), "ready");
+      return true;
     }
     selectedCollectionContextCache.set(item.id, [...existing, ref]);
-    consumeAtQueryOnly();
-    schedulePaperPickerSearch();
     deps.updatePaperPreviewPreservingScroll();
-    renderPaperPicker();
-    inputBox.focus({ preventScroll: true });
+    refreshPaperPickerAfterContextSelection();
     setStatus(t("Collection context added."), "ready");
     return true;
   };
@@ -839,6 +1000,10 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
       return;
     }
     paperPickerList.innerHTML = "";
+    const item = deps.getItem();
+    const selectedNoteContextItemIds = item
+      ? getSelectedNoteContextItemIds()
+      : new Set<number>();
     paperPickerRows.forEach((row, rowIndex) => {
       const option = createElement(
         ownerDoc,
@@ -857,9 +1022,13 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
         rowIndex === paperPickerActiveRowIndex ? "true" : "false",
       );
       option.tabIndex = -1;
-      option.style.paddingLeft = `${9 + row.depth * 14}px`;
+      option.style.setProperty(
+        "--llm-paper-picker-depth-indent",
+        `${9 + row.depth * 14}px`,
+      );
+      option.style.paddingLeft =
+        "calc(var(--llm-paper-picker-depth-indent) + var(--llm-paper-picker-selection-gutter, 0px))";
 
-      const item = deps.getItem();
       if (item && (row.kind === "paper" || row.kind === "attachment")) {
         const autoLoadedPaperContext = deps.resolveAutoLoadedPaperContext();
         const selectedPapers = deps.getManualPaperContextsForItem(
@@ -883,7 +1052,8 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
               ) ||
               selectedOtherRefs.some(
                 (ref) => ref.contextItemId === attachment.contextItemId,
-              );
+              ) ||
+              selectedNoteContextItemIds.has(attachment.contextItemId);
             option.classList.toggle("llm-paper-picker-selected", isSelected);
           }
         }
@@ -892,15 +1062,16 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
       if (row.kind === "collection") {
         const collection = getPaperPickerCollectionById(row.collectionId);
         if (!collection) return;
+        let isCollectionSelected = false;
         if (item) {
           const selectedCollections =
             selectedCollectionContextCache.get(item.id) || [];
+          isCollectionSelected = selectedCollections.some(
+            (collectionRef) => collectionRef.collectionId === row.collectionId,
+          );
           option.classList.toggle(
             "llm-paper-picker-selected",
-            selectedCollections.some(
-              (collectionRef) =>
-                collectionRef.collectionId === row.collectionId,
-            ),
+            isCollectionSelected,
           );
         }
         option.setAttribute(
@@ -937,11 +1108,17 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
           ownerDoc,
           "button",
           "llm-paper-picker-collection-add-btn",
-          { textContent: "+", title: t("Add collection as context") },
+          {
+            textContent: isCollectionSelected ? "-" : "+",
+            title: isCollectionSelected
+              ? t("Remove collection context")
+              : t("Add collection as context"),
+          },
         );
         addBtn.addEventListener("mousedown", (event: Event) => {
           event.preventDefault();
           event.stopPropagation();
+          paperPickerActiveRowIndex = rowIndex;
           selectCollectionFromPickerUnified(row.collectionId);
         });
         option.appendChild(addBtn);
@@ -963,9 +1140,7 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
           "llm-paper-picker-group-title-line",
         );
         titleLine.append(
-          createElement(ownerDoc, "span", "llm-paper-picker-item-icon", {
-            textContent: resolveGroupIcon(group),
-          }),
+          createPickerIcon(ownerDoc, resolveGroupIcon(group)),
           createElement(ownerDoc, "span", "llm-paper-picker-title", {
             textContent: group.title,
             title: group.title,
@@ -993,7 +1168,7 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
         if (!group) return;
         const attachment = group.attachments[row.attachmentIndex];
         if (!attachment) return;
-        const attachmentKind = resolvePickerItemKind(attachment.contentType);
+        const attachmentKind = resolvePickerAttachmentKind(attachment);
         const attachmentText = createElement(
           ownerDoc,
           "div",
@@ -1022,15 +1197,10 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
           "llm-paper-picker-attachment-main",
         );
         attachmentMain.append(
-          createElement(ownerDoc, "span", "llm-paper-picker-item-icon", {
-            textContent: resolvePickerKindIcon(attachmentKind),
-          }),
+          createPickerIcon(ownerDoc, resolvePickerKindIcon(attachmentKind)),
           attachmentText,
         );
-        option.append(
-          createElement(ownerDoc, "span", "llm-paper-picker-attachment-indent"),
-          attachmentMain,
-        );
+        option.appendChild(attachmentMain);
       }
 
       option.addEventListener("mousedown", (event: Event) => {

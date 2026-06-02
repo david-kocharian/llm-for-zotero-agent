@@ -1,8 +1,11 @@
 import { assert } from "chai";
 import {
+  buildAssistantDisplayMarkdownForRender,
+  buildRenderedMarkdownClipboardPayload,
   resolveRetryModelInputsForTests,
   type EffectiveRequestConfig,
 } from "../src/modules/contextPanel/chat";
+import { buildQuoteCitation } from "../src/modules/contextPanel/quoteCitations";
 import type {
   ChatAttachment,
   Message,
@@ -18,6 +21,95 @@ describe("chat retry model inputs", function () {
     category: "pdf",
     storedPath: "/tmp/paper.pdf",
   };
+
+  it("preserves known quote anchors for interactive assistant rendering", function () {
+    const quoteCitation = buildQuoteCitation({
+      quoteText: "Rendered quote anchors should not leak.",
+      citationLabel: "(Lee, 2026)",
+      contextItemId: 42,
+    });
+    assert.isDefined(quoteCitation);
+
+    const rendered = buildAssistantDisplayMarkdownForRender({
+      text: `Evidence:\n\n[[quote:${quoteCitation!.id}]]`,
+      quoteCitations: [quoteCitation!],
+    });
+
+    assert.include(rendered, `[[quote:${quoteCitation!.id}]]`);
+    assert.notInclude(rendered, "> Rendered quote anchors");
+    assert.notInclude(rendered, "(Lee, 2026)");
+  });
+
+  it("does not render unresolved quote anchors in assistant bubbles", function () {
+    const rendered = buildAssistantDisplayMarkdownForRender({
+      text: "Evidence:\n\n[[quote:Q_missing]]",
+      quoteCitations: [],
+    });
+
+    assert.include(rendered, "[quote unavailable]");
+    assert.notInclude(rendered, "[[quote:");
+  });
+
+  it("expands quote anchors in rendered clipboard payloads", function () {
+    const quoteCitation = buildQuoteCitation({
+      quoteText: "Clipboard quote anchors should not leak.",
+      citationLabel: "(Lee, 2026)",
+      contextItemId: 42,
+    });
+    assert.isDefined(quoteCitation);
+
+    const payload = buildRenderedMarkdownClipboardPayload(
+      `Evidence:\n\n[[quote:${quoteCitation!.id}]]`,
+      [quoteCitation!],
+    );
+
+    assert.isNotNull(payload);
+    assert.include(payload!.plainText, "> Clipboard quote anchors");
+    assert.include(payload!.plainText, "(Lee, 2026)");
+    assert.notInclude(payload!.plainText, "[[quote:");
+    assert.include(payload!.renderedHtml, "<blockquote>");
+    assert.notInclude(payload!.renderedHtml, "[[quote:");
+  });
+
+  it("does not leak unresolved quote anchors in clipboard payloads", function () {
+    const payload = buildRenderedMarkdownClipboardPayload(
+      "Evidence:\n\n[[quote:Q_missing]]",
+      [],
+    );
+
+    assert.isNotNull(payload);
+    assert.include(payload!.plainText, "[quote unavailable]");
+    assert.notInclude(payload!.plainText, "[[quote:");
+    assert.notInclude(payload!.renderedHtml, "[[quote:");
+  });
+
+  it("sanitizes leaked source metadata markers before assistant rendering", function () {
+    const rendered = buildAssistantDisplayMarkdownForRender({
+      text: '"our results provide evidence that the activity of dynamic engrams..." [[source=(Tomé, 2024), section=Dynamic and selective engrams emerge with memory consolidation, chunk=28]]',
+      quoteCitations: [],
+    });
+
+    assert.include(rendered, "> our results provide evidence");
+    assert.include(rendered, "(Tomé, 2024)");
+    assert.notInclude(rendered, "[[source=");
+    assert.notInclude(rendered, "section=");
+    assert.notInclude(rendered, "chunk=");
+  });
+
+  it("sanitizes leaked source metadata markers in clipboard payloads", function () {
+    const payload = buildRenderedMarkdownClipboardPayload(
+      '"our model predicted that memory engrams are highly dynamic" [[source=(Tomé, 2024), section=Dynamic and selective engrams emerge with memory consolidation, chunk=8]]',
+      [],
+    );
+
+    assert.isNotNull(payload);
+    assert.include(payload!.plainText, "> our model predicted");
+    assert.include(payload!.plainText, "(Tomé, 2024)");
+    assert.notInclude(payload!.plainText, "[[source=");
+    assert.notInclude(payload!.plainText, "section=");
+    assert.notInclude(payload!.plainText, "chunk=");
+    assert.notInclude(payload!.renderedHtml, "[[source=");
+  });
 
   const visionConfig: EffectiveRequestConfig = {
     model: "third-party-vision",

@@ -21,12 +21,11 @@ import {
   isManagedBlobPath,
   removeAttachmentFile,
 } from "../../attachmentStorage";
+import { isPdfContextAttachment } from "../../contextAttachmentSupport";
 import { buildPaperKey } from "../../pdfContext";
 import {
-  getNextContentSourceMode,
   clearSelectedPaperState,
   isPaperContextFullTextMode,
-  setPaperContentSourceOverride,
   setPaperModeOverride,
 } from "../../contexts/paperContextState";
 import {
@@ -49,8 +48,10 @@ import type {
   PaperContextRef,
   SelectedTextContext,
 } from "../../types";
-import { FULL_PDF_UNSUPPORTED_MESSAGE } from "../../pdfSupportMessages";
-import { getModelPdfSupport } from "./modelReasoningController";
+import {
+  isPaperContextFullTextOnlySourceMode,
+  isPaperContextReaderFocusableSourceMode,
+} from "./composeContextController";
 import {
   removePinnedSelectedText,
   togglePinnedFile,
@@ -87,20 +88,16 @@ type ComposePreviewInteractionControllerDeps = {
     itemId: number,
     paperContext: PaperContextRef,
   ) => string;
-  isPaperContextMineru: (paperContext: PaperContextRef) => boolean;
   isWebChatMode: () => boolean;
-  getCurrentRuntimeMode: () => string;
-  getSelectedProfile: () => {
-    model?: string;
-    providerProtocol?: string;
-    authMode?: string;
-    apiBase?: string;
-  } | null;
-  getSelectedModelInfo: () => { currentModel: string };
   resolveCurrentPaperBaseItem: () => Zotero.Item | null;
   clearSelectedImageState: (itemId: number) => void;
   clearSelectedFileState: (itemId: number) => void;
   closePaperChipMenu: () => void;
+  openPaperChipMenu: (
+    chip: HTMLDivElement,
+    paperContext: PaperContextRef,
+    options?: { sticky?: boolean },
+  ) => void;
   resolvePaperContextFromChipElement: (
     chip: HTMLElement,
   ) => PaperContextRef | null;
@@ -431,6 +428,13 @@ export function attachComposePreviewInteractionController(
         item.id,
         paperContext,
       );
+      if (isPaperContextFullTextOnlySourceMode(contentSource)) {
+        setStatus(
+          t("Attachment sources are always sent as full text."),
+          "ready",
+        );
+        return;
+      }
       if (contentSource === "pdf" && !deps.isWebChatMode()) {
         setStatus(
           t(
@@ -487,6 +491,8 @@ export function attachComposePreviewInteractionController(
         ".llm-paper-chip-menu-row",
       ) as HTMLButtonElement | null;
       if (cardRow) {
+        const item = getItem();
+        if (!item) return;
         const paperChipForCard = cardRow.closest(
           ".llm-paper-context-chip",
         ) as HTMLDivElement | null;
@@ -497,6 +503,11 @@ export function attachComposePreviewInteractionController(
         const paperContextForCard =
           deps.resolvePaperContextFromChipElement(paperChipForCard);
         if (!paperContextForCard) return;
+        const contentSource = deps.resolvePaperContentSourceMode(
+          item.id,
+          paperContextForCard,
+        );
+        if (!isPaperContextReaderFocusableSourceMode(contentSource)) return;
         void deps
           .focusPaperContextInActiveTab(paperContextForCard)
           .then((focused) => {
@@ -524,67 +535,20 @@ export function attachComposePreviewInteractionController(
       if (!paperContext) return;
       const mouse = event as MouseEvent;
       if (mouse.metaKey || mouse.ctrlKey) {
-        void openPaperContextInReader(paperContext);
-        return;
-      }
-      if (deps.isWebChatMode()) {
-        setStatus(
-          t("WebChat mode always uses PDF. Right-click to toggle send/skip."),
-          "ready",
+        const contentSource = deps.resolvePaperContentSourceMode(
+          item.id,
+          paperContext,
         );
-        return;
-      }
-      const currentSource = deps.resolvePaperContentSourceMode(
-        item.id,
-        paperContext,
-      );
-      const mineruAvailable = deps.isPaperContextMineru(paperContext);
-      const nextSource = getNextContentSourceMode(
-        currentSource,
-        mineruAvailable,
-      );
-      if (nextSource === "pdf" && deps.getCurrentRuntimeMode() === "agent") {
-        setStatus(
-          t(
-            "Agent mode normally reads PDF pages on demand. Forcing full PDF mode.",
-          ),
-          "warning",
-        );
-      }
-      if (nextSource === "pdf") {
-        const selectedProfile = deps.getSelectedProfile();
-        const modelName = (
-          selectedProfile?.model ||
-          deps.getSelectedModelInfo().currentModel ||
-          ""
-        ).trim();
-        const pdfSupport = getModelPdfSupport(
-          modelName,
-          selectedProfile?.providerProtocol,
-          selectedProfile?.authMode,
-          selectedProfile?.apiBase,
-        );
-        if (pdfSupport !== "native") {
-          setStatus(t(FULL_PDF_UNSUPPORTED_MESSAGE), "error");
-          return;
+        if (isPaperContextReaderFocusableSourceMode(contentSource)) {
+          void openPaperContextInReader({
+            ...paperContext,
+            contentSourceMode: contentSource,
+          });
         }
+        return;
       }
-      setPaperContentSourceOverride(item.id, paperContext, nextSource);
-      deps.updatePaperPreviewPreservingScroll();
-      const modeLabel =
-        nextSource === "text"
-          ? "Text"
-          : nextSource === "mineru"
-            ? "MinerU"
-            : "PDF";
-      if (nextSource === "pdf") {
-        setStatus(
-          `${t("Content source:")} ${modeLabel}. ${t("Full file will be sent. Right-click retrieval is not available.")}`,
-          "ready",
-        );
-      } else {
-        setStatus(`${t("Content source:")} ${modeLabel}`, "ready");
-      }
+      if (paperChip.dataset.paperContextMenu === "false") return;
+      deps.openPaperChipMenu(paperChip, paperContext, { sticky: true });
     });
   }
 
@@ -640,10 +604,7 @@ export function attachComposePreviewInteractionController(
 
     const currentItem = getItem();
     const currentPanelItemId = asFinitePositiveItemId(
-      currentItem?.isAttachment?.() &&
-        currentItem.attachmentContentType === "application/pdf"
-        ? currentItem.id
-        : 0,
+      isPdfContextAttachment(currentItem) ? currentItem?.id : 0,
     );
     if (currentPanelItemId) return currentPanelItemId;
 
@@ -652,7 +613,7 @@ export function attachComposePreviewInteractionController(
     const attachments = basePaper.getAttachments?.() || [];
     for (const attachmentId of attachments) {
       const attachment = Zotero.Items.get(attachmentId) || null;
-      if (attachment?.attachmentContentType === "application/pdf") {
+      if (isPdfContextAttachment(attachment)) {
         return attachment.id;
       }
     }

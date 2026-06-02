@@ -6,7 +6,6 @@ import {
 import type { AgentSkill } from "../../../../agent/skills/skillLoader";
 import {
   getAgentApi,
-  getCoreAgentRuntime,
   initAgentSubsystem,
 } from "../../../../agent";
 import type { ActionRequestContext } from "../../../../agent/actions";
@@ -1197,7 +1196,10 @@ export function createActionCommandController(
         loading.setAttribute("aria-hidden", "true");
         loading.textContent = t("Loading Claude commands...");
         list.insertBefore(loading, firstBase);
-        void refreshClaudeSlashCommands(getCoreAgentRuntime(), false)
+        void initAgentSubsystem()
+          .then((coreRuntime) =>
+            refreshClaudeSlashCommands(coreRuntime, false),
+          )
           .then(() => {
             renderAgentActionsInSlashMenu(query);
           })

@@ -2,13 +2,13 @@ import { assert } from "chai";
 import { createBuiltInToolRegistry } from "../src/agent/tools";
 import {
   BUILTIN_SKILL_FILES,
+  getSkillContextEligibility,
   getMatchedSkillIds,
   parseSkill,
   setUserSkills,
 } from "../src/agent/skills";
 import { AgentToolRegistry } from "../src/agent/tools/registry";
 import { createPaperReadTool } from "../src/agent/tools/read/paperRead";
-import { createWebSearchTool } from "../src/agent/tools/read/webSearch";
 import type { AgentToolContext } from "../src/agent/types";
 
 describe("semantic tool surface", function () {
@@ -75,7 +75,7 @@ describe("semantic tool surface", function () {
       pdfPageService: {} as never,
       retrievalService: {} as never,
     });
-    const tools = registry.listTools();
+    const tools = registry.listToolsForRequest(baseContext.request);
     const names = tools.map((tool) => tool.name).sort();
 
     assert.deepEqual(names, [
@@ -85,6 +85,7 @@ describe("semantic tool surface", function () {
       "library_delete",
       "library_import",
       "library_read",
+      "library_retrieve",
       "library_search",
       "library_update",
       "literature_search",
@@ -92,8 +93,17 @@ describe("semantic tool surface", function () {
       "paper_read",
       "run_command",
       "undo_last_action",
-      "web_search",
       "zotero_script",
+    ]);
+    const literatureSearch = tools.find((tool) => tool.name === "literature_search");
+    const literatureProperties = (
+      literatureSearch?.inputSchema as {
+        properties?: Record<string, { enum?: string[] }>;
+      }
+    )?.properties;
+    assert.deepEqual(literatureProperties?.workflow?.enum, [
+      "answer",
+      "review",
     ]);
     for (const legacyName of [
       "query_library",
@@ -111,6 +121,7 @@ describe("semantic tool surface", function () {
         `${legacyName} remains internally callable`,
       );
     }
+    assert.isUndefined(registry.getTool("web_search"));
     for (const name of ["file_io", "run_command", "zotero_script"]) {
       assert.equal(
         tools.find((tool) => tool.name === name)?.tier,
@@ -416,7 +427,10 @@ describe("semantic tool surface", function () {
       assert.equal(result?.backend, "zotero_metadata");
       assert.include(String(result?.text || ""), "Abstract fallback");
       assert.include(String(result?.warning || ""), "full.md disappeared");
-      assert.include(String(result?.warning || ""), "PDF text extraction failed");
+      assert.include(
+        String(result?.warning || ""),
+        "PDF text extraction failed",
+      );
     } finally {
       if (originalIOUtils === undefined) {
         delete globalScope.IOUtils;
@@ -642,7 +656,11 @@ describe("semantic tool surface", function () {
     if (!validated.ok) return;
     const output = (await tool.execute(validated.value, baseContext)) as {
       results?: unknown[];
-      quoteCitations?: Array<{ id: string; quoteText: string; citationLabel: string }>;
+      quoteCitations?: Array<{
+        id: string;
+        quoteText: string;
+        citationLabel: string;
+      }>;
       papers?: Array<{
         status?: string;
         sourceLabel?: string;
@@ -666,7 +684,10 @@ describe("semantic tool surface", function () {
       "Second method passage.",
     );
     assert.lengthOf(output.quoteCitations || [], 2);
-    assert.equal(output.quoteCitations?.[0]?.quoteText, "First method passage.");
+    assert.equal(
+      output.quoteCitations?.[0]?.quoteText,
+      "First method passage.",
+    );
     assert.equal(output.quoteCitations?.[0]?.citationLabel, "(Huys, 2016)");
     assert.equal(
       output.papers?.[0]?.passages?.[0]?.quoteCitationId,
@@ -694,7 +715,9 @@ describe("semantic tool surface", function () {
     const tool = createPaperReadTool(
       {
         ensurePaperContext: async () => {
-          throw new Error("semantic retrieval should not prepare paper context");
+          throw new Error(
+            "semantic retrieval should not prepare paper context",
+          );
         },
       } as never,
       {
@@ -782,7 +805,9 @@ describe("semantic tool surface", function () {
       {} as never,
       {
         retrieveEvidence: async () => {
-          throw new Error("semantic retrieval should not run for explicit pages");
+          throw new Error(
+            "semantic retrieval should not run for explicit pages",
+          );
         },
       } as never,
       {
@@ -1048,7 +1073,10 @@ describe("semantic tool surface", function () {
 
   it("compare-papers guidance prefers one targeted batched read for method comparisons", function () {
     const raw = BUILTIN_SKILL_FILES["compare-papers.md"];
+    assert.include(raw, "contexts: paper-set,library-corpus");
     assert.include(raw, "targeted first when the dimension is known");
+    assert.include(raw, "A selected Zotero collection/folder is also a valid comparison corpus");
+    assert.include(raw, "library_retrieve({ query:'methods methodology method section'");
     assert.include(
       raw,
       "paper_read({ mode:'targeted', query:'methods methodology method section', targets:[...] })",
@@ -1064,57 +1092,77 @@ describe("semantic tool surface", function () {
     );
   });
 
-  it("web_search returns cited URL results without fetching result pages", async function () {
-    const globalScope = globalThis as typeof globalThis & {
-      Zotero?: { HTTP?: { request?: unknown } };
-    };
-    const originalZotero = globalScope.Zotero;
-    let requestedUrl = "";
-    globalScope.Zotero = {
-      HTTP: {
-        request: async (_method: string, url: string) => {
-          requestedUrl = url;
-          return {
-            responseText: `
-              <html><body>
-                <div class="result">
-                  <a class="result__a" href="https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fdocs">Example Docs</a>
-                  <a class="result__snippet">Current documentation snippet.</a>
-                </div>
-              </body></html>
-            `,
-          };
-        },
-      },
-    };
-    try {
-      const tool = createWebSearchTool();
-      const validated = tool.validate({
-        query: "example docs",
-        mode: "docs",
-        limit: 3,
-      });
-      assert.equal(validated.ok, true);
-      if (!validated.ok) return;
-      const output = await tool.execute(validated.value, baseContext);
-      const content = output as {
-        query?: string;
-        mode?: string;
-        results?: Array<{ title?: string; url?: string; source?: string }>;
-      };
-      assert.include(requestedUrl, "html.duckduckgo.com");
-      assert.equal(content.query, "example docs");
-      assert.equal(content.mode, "docs");
-      assert.deepEqual(content.results, [
-        {
-          title: "Example Docs",
-          url: "https://example.com/docs",
-          snippet: "Current documentation snippet.",
-          source: "example.com",
-        },
-      ]);
-    } finally {
-      globalScope.Zotero = originalZotero;
-    }
+  it("matches compare-papers for collection-scoped comparison requests", function () {
+    setUserSkills([parseSkill(BUILTIN_SKILL_FILES["compare-papers.md"])]);
+
+    assert.include(
+      getMatchedSkillIds({
+        userText: "compare the methods of all papers in this folder",
+        selectedCollectionContexts: [
+          { collectionId: 4, name: "Computational_Psychiatry", libraryID: 1 },
+        ],
+      }),
+      "compare-papers",
+    );
   });
+
+  it("allows compare-papers slash selection for selected collections", function () {
+    const skill = parseSkill(BUILTIN_SKILL_FILES["compare-papers.md"]);
+
+    assert.deepEqual(
+      getSkillContextEligibility(skill, {
+        userText: "",
+        selectedCollectionContexts: [
+          { collectionId: 4, name: "Computational_Psychiatry", libraryID: 1 },
+        ],
+      }),
+      { eligible: true },
+    );
+  });
+
+  it("matches evidence-based-qa for collection-scoped evidence requests", function () {
+    setUserSkills([parseSkill(BUILTIN_SKILL_FILES["evidence-based-qa.md"])]);
+
+    assert.include(
+      getMatchedSkillIds({
+        userText: "find evidence in these papers for this claim",
+        selectedCollectionContexts: [
+          { collectionId: 4, name: "Computational_Psychiatry", libraryID: 1 },
+        ],
+      }),
+      "evidence-based-qa",
+    );
+  });
+
+  it("allows evidence-based-qa slash selection for selected collections", function () {
+    const skill = parseSkill(BUILTIN_SKILL_FILES["evidence-based-qa.md"]);
+
+    assert.deepEqual(
+      getSkillContextEligibility(skill, {
+        userText: "",
+        selectedCollectionContexts: [
+          { collectionId: 4, name: "Computational_Psychiatry", libraryID: 1 },
+        ],
+      }),
+      { eligible: true },
+    );
+  });
+
+  it("explains multi-context skill eligibility requirements", function () {
+    const evidenceSkill = parseSkill(BUILTIN_SKILL_FILES["evidence-based-qa.md"]);
+    const compareSkill = parseSkill(BUILTIN_SKILL_FILES["compare-papers.md"]);
+
+    assert.deepEqual(
+      getSkillContextEligibility(evidenceSkill, { userText: "" }),
+      {
+        eligible: false,
+        reason: "Requires one paper or multiple papers or collection/library context",
+      },
+    );
+    assert.deepEqual(getSkillContextEligibility(compareSkill, { userText: "" }), {
+      eligible: false,
+      reason: "Requires multiple papers or collection/library context",
+    });
+  });
+
 });

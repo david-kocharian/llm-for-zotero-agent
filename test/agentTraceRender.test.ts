@@ -1,20 +1,26 @@
 import { assert } from "chai";
+import { readFileSync } from "node:fs";
 import {
+  buildAgentTraceChipDetails,
   buildAgentTraceDisplayItems,
+  buildAgentTraceMarkdownForRender,
   getPendingActionButtonLayout,
   renderAgentTrace,
 } from "../src/modules/contextPanel/agentTrace/render";
 import {
   renderAssistantMarkdownHtmlForChat,
+  renderAssistantGeneratedImagesInto,
   shouldAttachAssistantResponseContextMenu,
   shouldDecorateInterleavedAgentTraceCitations,
   shouldSuppressAssistantResponseContextMenu,
 } from "../src/modules/contextPanel/chat";
 import {
   extractRenderedMermaidSvg,
+  needsMermaidCytoscapeLayoutHost,
   normalizeMermaidFlowchartLabels,
   normalizeMermaidSourceForTheme,
   polishRenderedMermaidSvg,
+  renderRenderedMarkdownInto,
   resolveMermaidThemeFromColors,
 } from "../src/modules/contextPanel/renderedMarkdown";
 import {
@@ -25,6 +31,7 @@ import type {
   AgentPendingAction,
   AgentRunEventRecord,
 } from "../src/agent/types";
+import { buildQuoteCitation } from "../src/modules/contextPanel/quoteCitations";
 
 class FakeClassList {
   private readonly classes = new Set<string>();
@@ -142,6 +149,14 @@ class FakeElement {
     return null;
   }
 
+  findAllByClass(className: string): FakeElement[] {
+    const matches = this.classList.contains(className) ? [this] : [];
+    for (const child of this.children) {
+      matches.push(...child.findAllByClass(className));
+    }
+    return matches;
+  }
+
   getCopyableChildren(): FakeElement[] {
     return this.copyableChildren;
   }
@@ -155,9 +170,62 @@ class FakeCopyableElement extends FakeElement {
   }
 }
 
+class ThrowingTemplateElement extends FakeElement {
+  public readonly content = {
+    querySelectorAll: () => [],
+  };
+
+  set innerHTML(_value: string) {
+    throw new Error("template parser unavailable");
+  }
+
+  get innerHTML(): string {
+    return "";
+  }
+}
+
+class OneShotInnerHtmlFailureElement extends FakeElement {
+  private htmlSetCount = 0;
+  private storedHtml = "";
+
+  set innerHTML(value: string) {
+    this.htmlSetCount++;
+    if (this.htmlSetCount === 1) {
+      throw new Error("strict chrome innerHTML rejected fragment");
+    }
+    this.storedHtml = value;
+  }
+
+  get innerHTML(): string {
+    return this.storedHtml;
+  }
+
+  getInnerHtmlSetCount(): number {
+    return this.htmlSetCount;
+  }
+}
+
 const fakeDocument = {
   createElement: (tagName: string) => new FakeElement(tagName),
+  createElementNS: (_namespace: string, tagName: string) =>
+    new FakeElement(tagName),
 } as unknown as Document;
+
+const throwingTemplateDocument = {
+  createElement: (tagName: string) =>
+    tagName === "template"
+      ? new ThrowingTemplateElement(tagName)
+      : new FakeElement(tagName),
+  createElementNS: (_namespace: string, tagName: string) =>
+    new FakeElement(tagName),
+} as unknown as Document;
+
+function collectFakeText(element: FakeElement | null | undefined): string {
+  if (!element) return "";
+  return [element.textContent, ...element.children.map(collectFakeText)].join(
+    "",
+  );
+}
 
 const obsidianStyleMermaidFixture = [
   "flowchart TB",
@@ -237,10 +305,7 @@ describe("Mermaid rendering helpers", function () {
 
     const normalized = normalizeMermaidFlowchartLabels(source);
 
-    assert.include(
-      normalized,
-      'B["LEC population activity (time cells?)"]',
-    );
+    assert.include(normalized, 'B["LEC population activity (time cells?)"]');
     assert.include(normalized, 'C["Intrinsic drift: over time"]');
     assert.include(normalized, "A[Continuous experience]");
   });
@@ -253,8 +318,7 @@ describe("Mermaid rendering helpers", function () {
   });
 
   it("does not rewrite Mermaid edge labels while normalizing node labels", function () {
-    const source =
-      "flowchart TD\n  A[Bad label?] -->|question [yes?]| B[Done]";
+    const source = "flowchart TD\n  A[Bad label?] -->|question [yes?]| B[Done]";
 
     const normalized = normalizeMermaidFlowchartLabels(source);
 
@@ -295,7 +359,8 @@ describe("Mermaid rendering helpers", function () {
   });
 
   it("adds SVG polish rules for the expanded Mermaid viewer", function () {
-    const svg = '<svg viewBox="0 0 10 10"><g class="cluster"><rect /></g></svg>';
+    const svg =
+      '<svg viewBox="0 0 10 10"><g class="cluster"><rect /></g></svg>';
 
     const polished = polishRenderedMermaidSvg(svg, "light");
 
@@ -318,6 +383,29 @@ describe("Mermaid rendering helpers", function () {
     assert.include(normalized, 'subgraph Scaffold["Grid-cell scaffold"]');
   });
 
+  it("normalizes Markdown-style flowchart labels for Mermaid HTML rendering", function () {
+    const source = [
+      "flowchart TD",
+      '  A["**Problem** spatial mapping **and** episodic memory"]',
+      '  B["Graceful memory `continuum` &amp; sequence scaffold"]',
+      "  C[**Conclusion**]",
+      "  A -->|edge **label** stays markdown source| B --> C",
+    ].join("\n");
+
+    const normalized = normalizeMermaidFlowchartLabels(source);
+
+    assert.include(
+      normalized,
+      'A["<strong>Problem</strong> spatial mapping <strong>and</strong> episodic memory"]',
+    );
+    assert.include(
+      normalized,
+      'B["Graceful memory <code>continuum</code> & sequence scaffold"]',
+    );
+    assert.include(normalized, 'C["<strong>Conclusion</strong>"]');
+    assert.include(normalized, "-->|edge **label** stays markdown source| B");
+  });
+
   it("strips locked Mermaid init overrides while preserving safe directives", function () {
     const source = [
       '%%{init: {"securityLevel": "loose", "htmlLabels": false}}%%',
@@ -331,6 +419,23 @@ describe("Mermaid rendering helpers", function () {
     assert.notInclude(normalized, "securityLevel");
     assert.notInclude(normalized, "htmlLabels");
     assert.include(normalized, "showSequenceNumbers");
+  });
+
+  it("detects Mermaid mindmaps that need the Cytoscape layout host", function () {
+    const mindmap = [
+      '%%{init: {"theme": "base"}}%%',
+      "%% generated summary",
+      "mindmap",
+      "  root((Spatial scaffolds))",
+      "    Episodic memory",
+    ].join("\n");
+
+    assert.isTrue(needsMermaidCytoscapeLayoutHost(mindmap));
+    assert.isFalse(
+      needsMermaidCytoscapeLayoutHost(
+        'flowchart TD\n  A["mindmap is just label text"] --> B',
+      ),
+    );
   });
 
   it("allows safe Mermaid foreignObject labels with HTML line breaks", function () {
@@ -425,6 +530,34 @@ describe("Mermaid rendering helpers", function () {
 });
 
 describe("agentTrace render", function () {
+  it("preserves known quote anchors before agent trace DOM decoration", function () {
+    const quoteCitation = buildQuoteCitation({
+      quoteText: "Interleaved trace quote anchors should not leak.",
+      citationLabel: "(Chandra et al., 2025)",
+      contextItemId: 51,
+    });
+    assert.isDefined(quoteCitation);
+
+    const rendered = buildAgentTraceMarkdownForRender(
+      `Evidence:\n\n[[quote:${quoteCitation!.id}]]`,
+      { quoteCitations: [quoteCitation!] },
+    );
+
+    assert.include(rendered, `[[quote:${quoteCitation!.id}]]`);
+    assert.notInclude(rendered, "> Interleaved trace quote anchors");
+    assert.notInclude(rendered, "(Chandra et al., 2025)");
+  });
+
+  it("does not render unresolved quote anchors in agent trace markdown", function () {
+    const rendered = buildAgentTraceMarkdownForRender(
+      "Evidence:\n\n[[quote:Q_missing]]",
+      { quoteCitations: [] },
+    );
+
+    assert.include(rendered, "[quote unavailable]");
+    assert.notInclude(rendered, "[[quote:");
+  });
+
   it("uses rendered Markdown HTML for streaming assistant text", function () {
     const html = renderAssistantMarkdownHtmlForChat(
       [
@@ -448,6 +581,47 @@ describe("agentTrace render", function () {
       "| A | B |\n|---|---|\n| 1 | 2 |",
     );
     assert.include(tableHtml, "<table");
+  });
+
+  it("keeps rendered Markdown when template sanitizer parsing fails", function () {
+    const target = new FakeElement("div") as unknown as HTMLElement;
+
+    renderRenderedMarkdownInto(
+      target,
+      ["## Methodology Overview", "", "**Fiber photometry**", "", "---"].join(
+        "\n",
+      ),
+      throwingTemplateDocument,
+    );
+
+    const html = (target as unknown as FakeElement).innerHTML;
+    assert.include(html, "<h3>Methodology Overview</h3>");
+    assert.include(html, "<strong>Fiber photometry</strong>");
+    assert.include(html, "<hr");
+    assert.notInclude(html, "## Methodology Overview");
+    assert.isTrue(
+      (target as unknown as FakeElement).classList.contains(
+        "llm-rendered-markdown",
+      ),
+    );
+  });
+
+  it("falls back to the legacy renderer when chrome innerHTML rejects marked HTML", function () {
+    const target = new OneShotInnerHtmlFailureElement(
+      "div",
+    ) as unknown as HTMLElement;
+
+    renderRenderedMarkdownInto(
+      target,
+      ["## Methodology Overview", "", "The study used photometry."].join("\n"),
+      throwingTemplateDocument,
+    );
+
+    const fakeTarget = target as unknown as OneShotInnerHtmlFailureElement;
+    assert.equal(fakeTarget.getInnerHtmlSetCount(), 2);
+    assert.include(fakeTarget.innerHTML, "<h3>Methodology Overview</h3>");
+    assert.include(fakeTarget.innerHTML, "<p>The study used photometry.</p>");
+    assert.notInclude(fakeTarget.innerHTML, "## Methodology Overview");
   });
 
   it("renders trace inline math through the shared Markdown surface", function () {
@@ -509,7 +683,10 @@ describe("agentTrace render", function () {
 
     assert.exists(copyable);
     assert.exists(copyButton);
-    assert.equal(copyButton?.attributes["aria-label"], "Copy original markdown");
+    assert.equal(
+      copyButton?.attributes["aria-label"],
+      "Copy original markdown",
+    );
   });
 
   it("renders tagged display math as KaTeX tag markup", function () {
@@ -657,8 +834,7 @@ describe("agentTrace render", function () {
       .map((item) => item.text);
     const codexProgressMessages = items.filter(
       (item): item is Extract<(typeof items)[number], { type: "message" }> =>
-        item.type === "message" &&
-        item.text !== "Request sent to Codex.",
+        item.type === "message" && item.text !== "Request sent to Codex.",
     );
 
     assert.includeMembers(progressMessages, [
@@ -716,6 +892,242 @@ describe("agentTrace render", function () {
 
     assert.notInclude(actionTexts, "Using Query Library");
     assert.include(actionTexts, "Used Query Library");
+  });
+
+  it("renders generated assistant images outside user screenshot UI", function () {
+    const savedPathContainer = fakeDocument.createElement("div") as unknown as
+      | HTMLElement
+      | FakeElement;
+    const renderedSavedPath = renderAssistantGeneratedImagesInto(
+      savedPathContainer as HTMLElement,
+      [
+        {
+          id: "img-1",
+          label: "result.png",
+          path: "/tmp/result.png",
+          revisedPrompt: "A concise chart",
+        },
+      ],
+      fakeDocument,
+    );
+    assert.isTrue(renderedSavedPath);
+    const savedPathRoot = savedPathContainer as FakeElement;
+    const savedImg = savedPathRoot.findByClass(
+      "llm-assistant-generated-image",
+    ) as unknown as { src?: string; alt?: string; title?: string } | null;
+    assert.equal(savedImg?.src, "file:///tmp/result.png");
+    assert.equal(savedImg?.alt, "result.png");
+    assert.equal(savedImg?.title, "A concise chart");
+    assert.isNull(savedPathRoot.findByClass("llm-user-screenshots-preview"));
+
+    const dataUrlContainer = fakeDocument.createElement("div") as HTMLElement;
+    assert.isTrue(
+      renderAssistantGeneratedImagesInto(
+        dataUrlContainer,
+        [{ id: "img-2", src: "data:image/png;base64,abc123" }],
+        fakeDocument,
+      ),
+    );
+    const dataImg = (dataUrlContainer as unknown as FakeElement).findByClass(
+      "llm-assistant-generated-image",
+    ) as unknown as { src?: string } | null;
+    assert.equal(dataImg?.src, "data:image/png;base64,abc123");
+
+    const opaqueContainer = fakeDocument.createElement("div") as HTMLElement;
+    assert.isFalse(
+      renderAssistantGeneratedImagesInto(
+        opaqueContainer,
+        [{ id: "img-3", src: "opaque-result-id" }],
+        fakeDocument,
+      ),
+    );
+  });
+
+  it("renders full expandable details for long Codex trace values", function () {
+    const longQuery =
+      "Anticevic Cole Repovs Savic Driesen connectivity pharmacology computational psychiatry";
+    const longUrl =
+      "https://www.frontiersin.org/journals/psychiatry/articles/10.3389/fpsyt.2013.00169/full";
+    const longPath =
+      "/tmp/codex/screenshots/frontiers-article-page-0001-full-width.png";
+    const command = `python scripts/fetch.py --url ${longUrl}`;
+    const events: AgentRunEventRecord[] = [
+      {
+        runId: "run-1",
+        seq: 1,
+        eventType: "codex_tool_activity",
+        payload: {
+          type: "codex_tool_activity",
+          itemId: "web-1",
+          phase: "completed",
+          toolName: "codex_web_search",
+          toolLabel: "Opened web page",
+          args: {
+            query: longQuery,
+            url: longUrl,
+            pattern: "connectivity pharmacology",
+          },
+        },
+        createdAt: 1,
+      },
+      {
+        runId: "run-1",
+        seq: 2,
+        eventType: "codex_tool_activity",
+        payload: {
+          type: "codex_tool_activity",
+          itemId: "image-1",
+          phase: "completed",
+          toolName: "image_view",
+          toolLabel: "Viewed image",
+          args: { path: longPath },
+        },
+        createdAt: 2,
+      },
+      {
+        runId: "run-1",
+        seq: 3,
+        eventType: "codex_tool_activity",
+        payload: {
+          type: "codex_tool_activity",
+          itemId: "cmd-1",
+          phase: "completed",
+          toolName: "command",
+          toolLabel: "Command",
+          args: { status: "exit 0" },
+          codeBlock: command,
+        },
+        createdAt: 3,
+      },
+    ];
+
+    const trace = renderAgentTrace({
+      doc: fakeDocument,
+      message: {
+        role: "assistant",
+        text: "",
+        timestamp: 1,
+        runMode: "agent",
+        modelProviderLabel: "Codex",
+      },
+      events,
+    }) as unknown as FakeElement;
+
+    const values = trace
+      .findAllByClass("llm-agent-process-detail-value")
+      .map(collectFakeText);
+    assert.include(values, longQuery);
+    assert.include(values, longUrl);
+    assert.include(values, "connectivity pharmacology");
+    assert.include(values, longPath);
+    assert.include(values, command);
+    assert.isEmpty(trace.findAllByClass("llm-at-expand"));
+
+    const chipLabels = trace
+      .findAllByClass("llm-agent-process-chip-label")
+      .map(collectFakeText);
+    assert.includeMembers(chipLabels, [
+      "Query",
+      "URL",
+      "Pattern",
+      "Path",
+      "Status",
+    ]);
+    assert.isFalse(chipLabels.some((label) => label.includes("...")));
+  });
+
+  it("renders full expandable details for request context chips", function () {
+    const longPaperTitle =
+      "A very long paper title about hippocampal attractor dynamics and entorhinal grid cell scaffolds across episodic memory";
+    const longSelectedText = [
+      "This is a long selected passage from the paper that should remain fully available",
+      "inside the expanded agent trace details instead of disappearing behind a chip.",
+    ].join(" ");
+    const longFileName =
+      "supplementary-analysis-notebook-with-long-descriptive-filename-and-version-history.md";
+    const events: AgentRunEventRecord[] = [
+      {
+        runId: "run-1",
+        seq: 1,
+        eventType: "final",
+        payload: { type: "final", text: "Done." },
+        createdAt: 1,
+      },
+    ];
+
+    const trace = renderAgentTrace({
+      doc: fakeDocument,
+      userMessage: {
+        role: "user",
+        text: "Use this context.",
+        timestamp: 1,
+        selectedTexts: [longSelectedText],
+        selectedTextSources: ["pdf"],
+        paperContexts: [
+          {
+            itemId: 10,
+            contextItemId: 11,
+            title: longPaperTitle,
+          },
+        ],
+        attachments: [
+          {
+            id: "file-1",
+            name: longFileName,
+            mimeType: "text/markdown",
+            sizeBytes: 42,
+            category: "markdown",
+          },
+        ],
+      },
+      message: {
+        role: "assistant",
+        text: "Done.",
+        timestamp: 2,
+        runMode: "agent",
+        modelProviderLabel: "OpenAI",
+      },
+      events,
+    }) as unknown as FakeElement;
+
+    const values = trace
+      .findAllByClass("llm-agent-process-detail-value")
+      .map(collectFakeText);
+    assert.include(values, longPaperTitle);
+    assert.include(values, longSelectedText);
+    assert.include(values, longFileName);
+
+    const chipLabels = trace
+      .findAllByClass("llm-agent-process-chip-label")
+      .map(collectFakeText);
+    assert.includeMembers(chipLabels, ["Paper", "Selected text", "File"]);
+    assert.isFalse(chipLabels.some((label) => label.includes("...")));
+  });
+
+  it("preserves custom chip title and long label values as details", function () {
+    const longTitle =
+      "https://example.org/articles/with/a/very/long/path/that/must/remain/recoverable";
+    const longLabel =
+      "Custom tool output with a long label that should become an expandable detail value";
+
+    assert.deepEqual(
+      buildAgentTraceChipDetails({ label: "URL", title: longTitle }),
+      [{ label: "URL", value: longTitle, kind: "url" }],
+    );
+    assert.deepEqual(buildAgentTraceChipDetails({ label: longLabel }), [
+      { label: "Detail", value: longLabel, kind: "text" },
+    ]);
+  });
+
+  it("does not ellipsize agent trace chip labels in CSS", function () {
+    const css = readFileSync("addon/content/zoteroPane.css", "utf8");
+    const chipLabelRule =
+      css.match(/\.llm-agent-process-chip-label\s*\{[\s\S]*?\}/)?.[0] || "";
+
+    assert.include(chipLabelRule, "white-space: normal");
+    assert.include(chipLabelRule, "overflow: visible");
+    assert.include(chipLabelRule, "text-overflow: clip");
+    assert.notInclude(chipLabelRule, "text-overflow: ellipsis");
   });
 
   it("falls back to a Zotero MCP tool label when Codex omits the exact tool name", function () {
@@ -1111,7 +1523,9 @@ describe("agentTrace render", function () {
     assert.isFalse(isInterleaved);
     assert.isFalse(inlineTextReplacesAssistantText);
     assert.isFalse(items.some((item) => item.type === "inline_text"));
-    assert.isTrue(shouldAttachAssistantResponseContextMenu({ text: finalText }));
+    assert.isTrue(
+      shouldAttachAssistantResponseContextMenu({ text: finalText }),
+    );
   });
 
   it("keeps unique original-agent interleaved text in trace and final answer in the assistant bubble", function () {
@@ -1182,7 +1596,9 @@ describe("agentTrace render", function () {
     assert.isTrue(isInterleaved);
     assert.isFalse(inlineTextReplacesAssistantText);
     assert.deepEqual(inlineTexts, [scratchText]);
-    assert.isTrue(shouldAttachAssistantResponseContextMenu({ text: finalText }));
+    assert.isTrue(
+      shouldAttachAssistantResponseContextMenu({ text: finalText }),
+    );
   });
 
   it("suppresses original-agent duplicate inline final text without suppressing the assistant bubble", function () {
@@ -1234,7 +1650,9 @@ describe("agentTrace render", function () {
     assert.isTrue(isInterleaved);
     assert.isFalse(inlineTextReplacesAssistantText);
     assert.isFalse(items.some((item) => item.type === "inline_text"));
-    assert.isTrue(shouldAttachAssistantResponseContextMenu({ text: finalText }));
+    assert.isTrue(
+      shouldAttachAssistantResponseContextMenu({ text: finalText }),
+    );
   });
 
   it("does not mark rolled-back scratch text as interleaved", function () {
@@ -1635,8 +2053,7 @@ describe("agentTrace render", function () {
         eventType: "message_delta",
         payload: {
           type: "message_delta",
-          text:
-            " the Obsidian vault location and look for any existing note for this paper.",
+          text: " the Obsidian vault location and look for any existing note for this paper.",
         },
         createdAt: 3,
       },
@@ -1654,17 +2071,13 @@ describe("agentTrace render", function () {
       },
     ];
 
-    const { items, isInterleaved } = buildAgentTraceDisplayItems(
-      events,
-      null,
-      {
-        role: "assistant",
-        text: sentence,
-        timestamp: 1,
-        runMode: "agent",
-        modelProviderLabel: "Claude Code",
-      },
-    );
+    const { items, isInterleaved } = buildAgentTraceDisplayItems(events, null, {
+      role: "assistant",
+      text: sentence,
+      timestamp: 1,
+      runMode: "agent",
+      modelProviderLabel: "Claude Code",
+    });
     const inlineTexts = items
       .filter(
         (
@@ -1709,8 +2122,7 @@ describe("agentTrace render", function () {
         eventType: "message_delta",
         payload: {
           type: "message_delta",
-          text:
-            " the Obsidian vault location and look for any existing note for this paper.",
+          text: " the Obsidian vault location and look for any existing note for this paper.",
         },
         createdAt: 3,
       },
@@ -1749,17 +2161,13 @@ describe("agentTrace render", function () {
       },
     ];
 
-    const { items, isInterleaved } = buildAgentTraceDisplayItems(
-      events,
-      null,
-      {
-        role: "assistant",
-        text: sentence,
-        timestamp: 1,
-        runMode: "agent",
-        modelProviderLabel: "Claude Code",
-      },
-    );
+    const { items, isInterleaved } = buildAgentTraceDisplayItems(events, null, {
+      role: "assistant",
+      text: sentence,
+      timestamp: 1,
+      runMode: "agent",
+      modelProviderLabel: "Claude Code",
+    });
     const inlineTexts = items
       .filter(
         (
@@ -1820,17 +2228,13 @@ describe("agentTrace render", function () {
       },
     ];
 
-    const { items, isInterleaved } = buildAgentTraceDisplayItems(
-      events,
-      null,
-      {
-        role: "assistant",
-        text: "dog dog",
-        timestamp: 1,
-        runMode: "agent",
-        modelProviderLabel: "Claude Code",
-      },
-    );
+    const { items, isInterleaved } = buildAgentTraceDisplayItems(events, null, {
+      role: "assistant",
+      text: "dog dog",
+      timestamp: 1,
+      runMode: "agent",
+      modelProviderLabel: "Claude Code",
+    });
     const inlineText = items.find((item) => item.type === "inline_text");
 
     assert.isTrue(isInterleaved);

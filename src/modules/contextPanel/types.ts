@@ -3,6 +3,8 @@ import type {
   SelectedTextSource,
   ChatAttachmentCategory,
   ChatAttachment,
+  GeneratedChatImage,
+  PaperContentSourceMode,
   AdvancedModelParams,
   ActiveNoteSession,
   PaperContextRef,
@@ -18,6 +20,8 @@ export type {
   SelectedTextSource,
   ChatAttachmentCategory,
   ChatAttachment,
+  GeneratedChatImage,
+  PaperContentSourceMode,
   AdvancedModelParams,
   ActiveNoteSession,
   PaperContextRef,
@@ -63,6 +67,7 @@ export interface Message {
   paperContextsExpanded?: boolean;
   attachments?: ChatAttachment[];
   modelAttachments?: ChatAttachment[];
+  generatedImages?: GeneratedChatImage[];
   attachmentsExpanded?: boolean;
   attachmentActiveIndex?: number;
   screenshotExpanded?: boolean;
@@ -78,7 +83,12 @@ export interface Message {
   reasoningDetails?: string;
   reasoningOpen?: boolean;
   webchatRunState?: "done" | "incomplete" | "error";
-  webchatCompletionReason?: "settled" | "forced_cancel" | "timeout" | "error" | null;
+  webchatCompletionReason?:
+    | "settled"
+    | "forced_cancel"
+    | "timeout"
+    | "error"
+    | null;
   webchatChatUrl?: string;
   webchatChatId?: string;
   compactMarker?: boolean;
@@ -87,12 +97,7 @@ export interface Message {
 }
 
 export type ChatRuntimeMode = "chat" | "agent";
-export type PaperContextSendMode =
-  | "retrieval"
-  | "full-next"
-  | "full-sticky";
-
-export type PaperContentSourceMode = "text" | "mineru" | "pdf";
+export type PaperContextSendMode = "retrieval" | "full-next" | "full-sticky";
 
 export type ReasoningProviderKind =
   | "openai"
@@ -127,6 +132,36 @@ export type CustomShortcut = {
 export type ResolvedContextSource = {
   contextItem: Zotero.Item | null;
   statusText: string;
+  sourceKind?:
+    | "none"
+    | "note"
+    | "active-reader"
+    | "selected-child"
+    | "direct-attachment"
+    | "first-child"
+    | "best-attachment";
+  ownerItem?: Zotero.Item | null;
+  rawItem?: Zotero.Item | null;
+  ownerItemId?: number;
+  contextItemId?: number;
+  supportKind?: "pdf" | "text";
+  contentSourceMode?: PaperContentSourceMode;
+  requiresAsyncResolution?: boolean;
+  isAsyncFinal?: boolean;
+};
+
+export type ContextSourceLifecycleState = {
+  rawItem: Zotero.Item | null;
+  ownerItem: Zotero.Item | null;
+  contextItem: Zotero.Item | null;
+  rawItemId: number;
+  ownerItemId: number;
+  contextItemId: number;
+  sourceKind: NonNullable<ResolvedContextSource["sourceKind"]>;
+  supportKind?: "pdf" | "text";
+  contentSourceMode?: PaperContentSourceMode;
+  requiresAsyncResolution: boolean;
+  isAsyncFinal: boolean;
 };
 
 export type PdfContext = {
@@ -143,7 +178,14 @@ export type PdfContext = {
   embeddingPromiseKey?: string;
   /** Last embedding attempt that failed; suppresses retry storms for the same config. */
   embeddingFailureKey?: string;
-  sourceType?: "mineru" | "zotero-worker" | "zotero-fulltext-cache";
+  sourceType?:
+    | "mineru"
+    | "zotero-worker"
+    | "zotero-fulltext-cache"
+    | "attachment-markdown"
+    | "attachment-html"
+    | "attachment-txt"
+    | "attachment-docx";
 };
 
 export type PdfChunkKind =
@@ -209,6 +251,8 @@ export type PaperContextCandidate = {
   embeddingScore: number;
   hybridScore: number;
   evidenceScore: number;
+  matchedQueryVariant?: string;
+  matchedQueryVariants?: string[];
 };
 
 export type MultiContextPlan = {
@@ -332,7 +376,12 @@ export type SendQuestionOptions = {
   model?: string;
   apiBase?: string;
   apiKey?: string;
-  authMode?: "api_key" | "codex_auth" | "codex_app_server" | "copilot_auth" | "webchat";
+  authMode?:
+    | "api_key"
+    | "codex_auth"
+    | "codex_app_server"
+    | "copilot_auth"
+    | "webchat";
   providerProtocol?: import("../../utils/providerProtocol").ProviderProtocol;
   modelEntryId?: string;
   modelProviderLabel?: string;
@@ -385,11 +434,20 @@ export type EditRetryOptions = {
   modelAttachments?: ChatAttachment[];
   pdfUploadSystemMessages?: string[];
   targetRuntimeMode?: ChatRuntimeMode;
-  expected?: { conversationKey: number; userTimestamp: number; assistantTimestamp: number };
+  expected?: {
+    conversationKey: number;
+    userTimestamp: number;
+    assistantTimestamp: number;
+  };
   model?: string;
   apiBase?: string;
   apiKey?: string;
-  authMode?: "api_key" | "codex_auth" | "codex_app_server" | "copilot_auth" | "webchat";
+  authMode?:
+    | "api_key"
+    | "codex_auth"
+    | "codex_app_server"
+    | "copilot_auth"
+    | "webchat";
   providerProtocol?: import("../../utils/providerProtocol").ProviderProtocol;
   modelEntryId?: string;
   modelProviderLabel?: string;

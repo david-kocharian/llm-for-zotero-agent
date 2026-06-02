@@ -2,10 +2,12 @@ import { config } from "../../../package.json";
 import { t } from "../../utils/i18n";
 import { ReasoningLevel as LLMReasoningLevel } from "../../utils/llmClient";
 import {
+  buildDefaultUpstreamGlobalConversationKey,
   isConversationKeyForKind,
   UPSTREAM_GLOBAL_CONVERSATION_KEY_BASE,
   UPSTREAM_PAPER_CONVERSATION_KEY_BASE,
 } from "../../shared/conversationKeySpace";
+export { buildDefaultUpstreamGlobalConversationKey };
 export {
   COLLECTION_RETRIEVAL_MAX_PAPERS,
   MAX_FULL_TEXT_PAPER_CONTEXTS,
@@ -30,7 +32,7 @@ export const PAPER_FOLLOWUP_RETRIEVAL_MIN_CHUNKS = 2;
 export const PAPER_FOLLOWUP_RETRIEVAL_MAX_CHUNKS = 5;
 export const COLLECTION_RETRIEVAL_MIN_SCORE_FALLBACK_PAPERS = 10;
 export const PERSISTED_HISTORY_LIMIT = 200;
-export const AUTO_SCROLL_BOTTOM_THRESHOLD = 64;
+export const AUTO_SCROLL_BOTTOM_THRESHOLD = 1;
 export const FONT_SCALE_DEFAULT_PERCENT = 120;
 export const FONT_SCALE_MIN_PERCENT = 80;
 export const FONT_SCALE_MAX_PERCENT = 180;
@@ -38,7 +40,8 @@ export const FONT_SCALE_STEP_PERCENT = 10;
 export const SELECTED_TEXT_MAX_LENGTH = 4000;
 export const SELECTED_TEXT_PREVIEW_LENGTH = 240;
 export const MAX_SELECTED_TEXT_CONTEXTS = 5;
-export const MAX_EDITABLE_SHORTCUTS = 10;
+// Total visible editable shortcuts: built-in plus user-created custom shortcuts.
+export const MAX_EDITABLE_SHORTCUTS = 20;
 export const MAX_SELECTED_IMAGES = 50;
 export const MAX_UPLOAD_PDF_SIZE_BYTES = 50 * 1024 * 1024;
 export const CHAT_ATTACHMENTS_DIR_NAME = "chat-attachments";
@@ -92,6 +95,7 @@ export const BUILTIN_SHORTCUT_FILES = [
   { id: "key-points", label: "Key Points", file: "key-points.txt" },
   { id: "methodology", label: "Methodology", file: "methodology.txt" },
   { id: "limitations", label: "Limitations", file: "limitations.txt" },
+  { id: "mermaid-diagram", label: "Diagram", file: "mermaid-diagram.txt" },
 ] as const;
 
 

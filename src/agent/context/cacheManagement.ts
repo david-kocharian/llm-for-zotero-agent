@@ -23,6 +23,7 @@ type AgentEvidenceSnippet = {
   pageLabel?: string;
   chunkKind?: string;
   chunkIndex?: number;
+  quoteCitationId?: string;
   score?: number;
 };
 
@@ -53,6 +54,7 @@ const READ_TOOL_NAMES = new Set([
   "paper_read",
   "read_paper",
   "search_paper",
+  "library_retrieve",
   "view_pdf_pages",
   "read_attachment",
 ]);
@@ -423,7 +425,7 @@ function findMineruPaperTarget(
 
 function snippetFromRecord(value: unknown): AgentEvidenceSnippet | null {
   const record = normalizeRecord(value);
-  const text = normalizeEvidenceText(record.text);
+  const text = normalizeEvidenceText(record.text || record.snippet);
   if (!text) return null;
   const snippet: AgentEvidenceSnippet = { text };
   const sourceLabel = normalizeText(record.sourceLabel, 80);
@@ -438,6 +440,11 @@ function snippetFromRecord(value: unknown): AgentEvidenceSnippet | null {
   if (chunkKind) snippet.chunkKind = chunkKind;
   const chunkIndex = normalizePositiveInt(record.chunkIndex);
   if (chunkIndex !== undefined) snippet.chunkIndex = chunkIndex;
+  const quoteCitationId = normalizeText(record.quoteCitationId, 80).replace(
+    /[^A-Za-z0-9_-]/g,
+    "",
+  );
+  if (quoteCitationId) snippet.quoteCitationId = quoteCitationId;
   const score = normalizeNumber(record.score);
   if (score !== undefined) snippet.score = score;
   return snippet;
@@ -619,6 +626,7 @@ function collectGenericSnippets(content: unknown): AgentEvidenceSnippet[] {
   const record = normalizeRecord(content);
   const candidates: unknown[] = [];
   if (Array.isArray(record.results)) candidates.push(...record.results);
+  if (Array.isArray(record.snippets)) candidates.push(...record.snippets);
   if (Array.isArray(record.pages)) candidates.push(...record.pages);
   if (Array.isArray(record.chunks)) candidates.push(...record.chunks);
   if (candidates.length) {
@@ -627,11 +635,59 @@ function collectGenericSnippets(content: unknown): AgentEvidenceSnippet[] {
       .filter((entry): entry is AgentEvidenceSnippet => Boolean(entry))
       .slice(0, MAX_SNIPPETS_PER_ENTRY);
   }
-  const text =
-    typeof content === "string"
-      ? normalizeEvidenceText(content)
-      : normalizeEvidenceText(record.text || record.content || record.summary);
-  return text ? [{ text }] : [];
+  const directSnippet = snippetFromRecord({
+    ...record,
+    text:
+      typeof content === "string"
+        ? content
+        : record.text || record.content || record.summary || record.textContent,
+  });
+  return directSnippet ? [directSnippet] : [];
+}
+
+function buildReadAttachmentEvidenceEntry(
+  activity: AgentCacheEvidenceActivity,
+): AgentEvidenceEntry | null {
+  const content = normalizeRecord(activity.content);
+  const text = normalizeEvidenceText(content.textContent);
+  if (!text) return null;
+  const paperContext = normalizePaperContext(content.paperContext);
+  const parentItem = normalizeRecord(content.parentItem);
+  const attachmentId = normalizePositiveInt(content.attachmentId);
+  const target = {
+    itemId: paperContext.itemId || normalizePositiveInt(parentItem.itemId),
+    contextItemId: paperContext.contextItemId || attachmentId,
+    title:
+      normalizeText(content.title, 120) ||
+      paperContext.title ||
+      normalizeText(content.attachmentTitle, 120),
+  };
+  const sourceLabel = normalizeText(content.sourceLabel, 120);
+  const snippet = snippetFromRecord({
+    text,
+    sourceLabel,
+    citationLabel: content.citationLabel,
+  }) || { text, ...(sourceLabel ? { sourceLabel } : {}) };
+  const detail =
+    normalizeText(content.sourceType, 80) ||
+    normalizeText(content.sourceMode, 40) ||
+    buildReadDetail(activity.toolName, activity.input);
+  return {
+    key: buildEvidenceKey(activity.toolName, target, detail, [snippet]),
+    toolName: activity.toolName,
+    label: activity.toolLabel || "Read Attachment",
+    targetLabel: formatTargetLabel(target),
+    detail,
+    sourceKind: "attachment_text",
+    itemId: target.itemId,
+    contextItemId: target.contextItemId,
+    title: target.title,
+    snippets: [snippet],
+    contentHash: hashText(stableJson(snippet)),
+    count: 1,
+    firstSeenAt: activity.timestamp,
+    lastSeenAt: activity.timestamp,
+  };
 }
 
 function buildEvidenceKey(
@@ -660,6 +716,10 @@ function buildEvidenceEntries(
   if (activity.toolName === "paper_read") {
     const entries = buildPaperReadEvidenceEntries(activity);
     if (entries.length) return entries;
+  }
+  if (activity.toolName === "read_attachment") {
+    const entry = buildReadAttachmentEvidenceEntry(activity);
+    if (entry) return [entry];
   }
   return buildGenericReadEvidenceEntries(activity);
 }
@@ -866,16 +926,23 @@ function truncateSnippet(value: string): string {
 }
 
 function formatSnippet(snippet: AgentEvidenceSnippet, index: number): string {
-  const metadata = [
-    snippet.sourceLabel ? `source=${snippet.sourceLabel}` : "",
-    snippet.pageLabel ? `page=${snippet.pageLabel}` : "",
-    snippet.sectionLabel ? `section=${snippet.sectionLabel}` : "",
-    snippet.chunkIndex !== undefined ? `chunk=${snippet.chunkIndex}` : "",
+  const lines = [`  ${index + 1}. Evidence snippet:`];
+  if (snippet.quoteCitationId) {
+    lines.push(`     quoteCitationId: ${snippet.quoteCitationId}`);
+  }
+  if (snippet.sourceLabel) {
+    lines.push(`     sourceLabel: ${snippet.sourceLabel}`);
+  }
+  const locator = [
+    snippet.pageLabel ? `page ${snippet.pageLabel}` : "",
+    snippet.sectionLabel ? `section ${snippet.sectionLabel}` : "",
+    snippet.chunkIndex !== undefined ? `chunkIndex ${snippet.chunkIndex}` : "",
   ].filter(Boolean);
-  const prefix = metadata.length
-    ? `  ${index + 1}. [${metadata.join(", ")}]`
-    : `  ${index + 1}.`;
-  return `${prefix} ${truncateSnippet(snippet.text)}`;
+  if (locator.length) {
+    lines.push(`     internalLocator: ${locator.join("; ")}`);
+  }
+  lines.push(`     text: ${truncateSnippet(snippet.text)}`);
+  return lines.join("\n");
 }
 
 function formatEvidenceEntry(entry: AgentEvidenceEntry): string[] {
@@ -924,6 +991,13 @@ function buildRequestEvidenceScope(request: AgentRuntimeRequest): {
       itemId: paper.itemId,
       contextItemId: paper.contextItemId,
       title: paper.title,
+    });
+  }
+  for (const attachment of request.availableAttachmentResources || []) {
+    addTarget({
+      itemId: attachment.parentItemId,
+      contextItemId: attachment.contextItemId,
+      title: attachment.title,
     });
   }
   if (request.activeItemId) addTarget({ itemId: request.activeItemId });
@@ -983,6 +1057,7 @@ export function buildAgentEvidenceContextBlock(params: {
   return [
     "Preserved evidence from prior agent tool reads:",
     "Reuse this evidence when it directly answers the follow-up. Re-read only when the user asks for updated evidence, the preserved snippets are insufficient, or the resource scope changed.",
+    "Citation rule: use quoteCitationId as [[quote:<id>]] when available, otherwise put sourceLabel on the next non-empty line after a blockquote. Do not copy source/page/section/chunk metadata into the final answer.",
     ...entries.flatMap(formatEvidenceEntry),
   ].join("\n");
 }

@@ -1,6 +1,7 @@
 import type { PaperContextRef } from "./types";
 import { sanitizeText } from "./textUtils";
 import { isMineruSyncPackageAttachment } from "./mineruSync";
+import { isPdfContextAttachment } from "./contextAttachmentSupport";
 
 export type PaperSearchAttachmentCandidate = {
   contextItemId: number;
@@ -16,6 +17,7 @@ export type PaperSearchGroupCandidate = Omit<
   attachments: PaperSearchAttachmentCandidate[];
   score: number;
   modifiedAt: number;
+  addedAt?: number;
   itemKind?: "standalone-note";
 };
 
@@ -47,6 +49,7 @@ type IndexedPaperCandidate = {
   year?: string;
   attachments: IndexedPaperAttachment[];
   modifiedAt: number;
+  addedAt: number;
   collectionIDs: number[];
   itemKind?: "standalone-note";
   normalized: {
@@ -143,6 +146,21 @@ function toModifiedTimestamp(value: unknown): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function getItemAddedTimestamp(item: Zotero.Item): number {
+  return toModifiedTimestamp((item as { dateAdded?: unknown }).dateAdded);
+}
+
+function compareByAddedNewestFirst(
+  a: PaperSearchGroupCandidate,
+  b: PaperSearchGroupCandidate,
+): number {
+  const addedDelta = (b.addedAt || 0) - (a.addedAt || 0);
+  if (addedDelta !== 0) return addedDelta;
+  const modifiedDelta = b.modifiedAt - a.modifiedAt;
+  if (modifiedDelta !== 0) return modifiedDelta;
+  return a.title.localeCompare(b.title, undefined, { sensitivity: "base" });
+}
+
 function getItemFieldText(
   item: Zotero.Item,
   field: _ZoteroTypes.Item.ItemField,
@@ -160,11 +178,7 @@ function getPdfChildAttachments(item: Zotero.Item): Zotero.Item[] {
   const attachments = item.getAttachments();
   for (const attachmentId of attachments) {
     const attachment = Zotero.Items.get(attachmentId);
-    if (
-      attachment &&
-      attachment.isAttachment() &&
-      attachment.attachmentContentType === "application/pdf"
-    ) {
+    if (isPdfContextAttachment(attachment)) {
       out.push(attachment);
     }
   }
@@ -314,6 +328,7 @@ function buildIndexedCandidate(item: Zotero.Item): IndexedPaperCandidate | null 
     year,
     attachments,
     modifiedAt: toModifiedTimestamp(item.dateModified),
+    addedAt: getItemAddedTimestamp(item),
     collectionIDs: getCollectionIDs(item),
     normalized: {
       title: normalizePaperSearchText(title),
@@ -445,6 +460,7 @@ function buildVisibleCandidate(
     attachments,
     score: 0,
     modifiedAt: candidate.modifiedAt,
+    addedAt: candidate.addedAt,
   };
 }
 
@@ -756,10 +772,10 @@ export async function browsePaperCollectionCandidates(
   const unfiledPapers = libraryIndex.candidates
     .filter((candidate) => candidate.collectionIDs.length === 0)
     .map((candidate) => visibleCandidates.get(candidate.itemId) || null)
-    .filter((candidate): candidate is PaperSearchGroupCandidate => Boolean(candidate))
-    .sort((a, b) =>
-      a.title.localeCompare(b.title, undefined, { sensitivity: "base" }),
-    );
+    .filter((candidate): candidate is PaperSearchGroupCandidate =>
+      Boolean(candidate),
+    )
+    .sort(compareByAddedNewestFirst);
 
   if (unfiledPapers.length) {
     topLevelCollections.push({
@@ -886,6 +902,7 @@ function buildIndexedItemCandidate(item: Zotero.Item): IndexedPaperCandidate | n
         },
       ],
       modifiedAt: toModifiedTimestamp(item.dateModified),
+      addedAt: getItemAddedTimestamp(item),
       collectionIDs: getCollectionIDs(item),
       normalized: {
         title: normalizePaperSearchText(title),
@@ -946,6 +963,7 @@ function buildIndexedItemCandidate(item: Zotero.Item): IndexedPaperCandidate | n
     year,
     attachments,
     modifiedAt: toModifiedTimestamp(item.dateModified),
+    addedAt: getItemAddedTimestamp(item),
     collectionIDs: getCollectionIDs(item),
     normalized: {
       title: normalizePaperSearchText(title),
@@ -1036,6 +1054,7 @@ function buildVisibleItemCandidate(
     })),
     score: 0,
     modifiedAt: candidate.modifiedAt,
+    addedAt: candidate.addedAt,
   };
 }
 
@@ -1202,9 +1221,7 @@ export async function browseAllItemCandidates(
     .filter((candidate) => candidate.collectionIDs.length === 0)
     .map((candidate) => visibleCandidates.get(candidate.itemId) || null)
     .filter((c): c is PaperSearchGroupCandidate => Boolean(c))
-    .sort((a, b) =>
-      a.title.localeCompare(b.title, undefined, { sensitivity: "base" }),
-    );
+    .sort(compareByAddedNewestFirst);
 
   if (unfiledItems.length) {
     topLevelCollections.push({

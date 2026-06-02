@@ -22,10 +22,15 @@ import {
   tokenizeRetrievalQuery,
   tokenizeRetrievalText,
 } from "./retrievalTokenizer";
+import type { RetrievalQueryPlan } from "./retrievalQueryPlan";
 import {
+  buildGenericSourceQuoteCitationGuidance,
   buildPaperQuoteCitationGuidance,
+  formatAttachmentSourceType,
+  formatPaperAttachmentTitle,
   formatPaperCitationLabel,
   formatPaperSourceLabel,
+  isTextLikeAttachmentSourceMode,
 } from "./paperAttribution";
 import {
   buildQuoteAnchorPromptBlock,
@@ -33,6 +38,7 @@ import {
   mergeQuoteCitations,
 } from "./quoteCitations";
 import { readNoteSnapshot } from "./notes";
+import { readAttachmentBytes } from "./attachmentStorage";
 import { pdfTextCache, pdfTextLoadingTasks } from "./state";
 import {
   buildAndWriteManifest,
@@ -45,12 +51,19 @@ import { isMineruEnabled } from "../../utils/mineruConfig";
 import type {
   PdfContext,
   ChunkStat,
+  PaperContentSourceMode,
   PaperContextRef,
   PaperContextCandidate,
   PdfChunkMeta,
   PdfChunkKind,
   QuoteCitation,
 } from "./types";
+import {
+  extractTextAttachmentContent,
+  resolveTextAttachmentSourceModeFromMetadata,
+  type TextAttachmentSourceMode,
+} from "./textAttachmentExtraction";
+import { isPdfContextAttachment } from "./contextAttachmentSupport";
 import { config } from "./constants";
 
 const prefKey = (key: string) => `${config.prefsPrefix}.${key}`;
@@ -169,14 +182,16 @@ function decodeFileContents(data: unknown): string {
 }
 
 async function readLocalTextFile(source: string | nsIFile): Promise<string> {
-  const zoteroFile = (Zotero as unknown as {
-    File?: {
-      getContentsAsync?: (
-        source: string | nsIFile,
-        charset?: string,
-      ) => Promise<unknown> | unknown;
-    };
-  }).File;
+  const zoteroFile = (
+    Zotero as unknown as {
+      File?: {
+        getContentsAsync?: (
+          source: string | nsIFile,
+          charset?: string,
+        ) => Promise<unknown> | unknown;
+      };
+    }
+  ).File;
   if (zoteroFile?.getContentsAsync) {
     try {
       const data = await zoteroFile.getContentsAsync(source, "utf-8");
@@ -191,22 +206,26 @@ async function readLocalTextFile(source: string | nsIFile): Promise<string> {
   }
 
   const path = typeof source === "string" ? source : source.path;
-  const IOUtils = (globalThis as unknown as {
-    IOUtils?: {
-      read?: (path: string) => Promise<Uint8Array | ArrayBuffer>;
-    };
-  }).IOUtils;
+  const IOUtils = (
+    globalThis as unknown as {
+      IOUtils?: {
+        read?: (path: string) => Promise<Uint8Array | ArrayBuffer>;
+      };
+    }
+  ).IOUtils;
   if (IOUtils?.read) {
     return decodeFileContents(await IOUtils.read(path));
   }
 
-  const OS = (globalThis as unknown as {
-    OS?: {
-      File?: {
-        read?: (path: string) => Promise<Uint8Array | ArrayBuffer>;
+  const OS = (
+    globalThis as unknown as {
+      OS?: {
+        File?: {
+          read?: (path: string) => Promise<Uint8Array | ArrayBuffer>;
+        };
       };
-    };
-  }).OS;
+    }
+  ).OS;
   if (OS?.File?.read) {
     return decodeFileContents(await OS.File.read(path));
   }
@@ -214,16 +233,20 @@ async function readLocalTextFile(source: string | nsIFile): Promise<string> {
   return "";
 }
 
-async function readZoteroFulltextCache(
-  item: Zotero.Item,
-): Promise<string> {
+async function readZoteroFulltextCache(item: Zotero.Item): Promise<string> {
   try {
-    const fulltext = (Zotero as unknown as {
-      Fulltext?: { getItemCacheFile?: (item: Zotero.Item) => nsIFile };
-      FullText?: { getItemCacheFile?: (item: Zotero.Item) => nsIFile };
-    }).Fulltext || (Zotero as unknown as {
-      FullText?: { getItemCacheFile?: (item: Zotero.Item) => nsIFile };
-    }).FullText;
+    const fulltext =
+      (
+        Zotero as unknown as {
+          Fulltext?: { getItemCacheFile?: (item: Zotero.Item) => nsIFile };
+          FullText?: { getItemCacheFile?: (item: Zotero.Item) => nsIFile };
+        }
+      ).Fulltext ||
+      (
+        Zotero as unknown as {
+          FullText?: { getItemCacheFile?: (item: Zotero.Item) => nsIFile };
+        }
+      ).FullText;
     const cacheFile = fulltext?.getItemCacheFile?.(item);
     if (!cacheFile) return "";
     if (typeof cacheFile.exists === "function" && !cacheFile.exists()) {
@@ -239,10 +262,158 @@ async function readZoteroFulltextCache(
   }
 }
 
-async function cachePDFText(item: Zotero.Item) {
+function getAttachmentFilename(item: Zotero.Item): string {
+  return sanitizePdfText(
+    String(
+      (item as unknown as { attachmentFilename?: unknown })
+        .attachmentFilename || "",
+    ),
+  );
+}
+
+function getAttachmentContentType(item: Zotero.Item): string {
+  return sanitizePdfText(
+    String(
+      (item as unknown as { attachmentContentType?: unknown })
+        .attachmentContentType || "",
+    ),
+  ).toLowerCase();
+}
+
+function getAttachmentTitle(item: Zotero.Item): string {
+  return sanitizePdfText(
+    String(item.getField("title") || getAttachmentFilename(item) || ""),
+  );
+}
+
+export function resolveTextAttachmentSourceMode(
+  item: Zotero.Item | null | undefined,
+): TextAttachmentSourceMode | null {
+  if (!item?.isAttachment?.()) return null;
+  return resolveTextAttachmentSourceModeFromMetadata({
+    contentType: getAttachmentContentType(item),
+    filename: getAttachmentFilename(item),
+  });
+}
+
+function sourceTypeForTextAttachment(
+  mode: TextAttachmentSourceMode,
+): PdfContext["sourceType"] {
+  return `attachment-${mode}` as PdfContext["sourceType"];
+}
+
+function cachedContextMatchesSourceMode(
+  cached: PdfContext,
+  sourceMode?: PaperContentSourceMode,
+): boolean {
+  if (!sourceMode) return true;
+  if (sourceMode === "pdf") return true;
+  if (sourceMode === "mineru") return cached.sourceType === "mineru";
+  if (sourceMode === "text") return cached.sourceType !== "mineru";
+  if (
+    sourceMode === "markdown" ||
+    sourceMode === "html" ||
+    sourceMode === "txt" ||
+    sourceMode === "docx"
+  ) {
+    return cached.sourceType === sourceTypeForTextAttachment(sourceMode);
+  }
+  return true;
+}
+
+async function cacheTextAttachment(
+  item: Zotero.Item,
+  sourceMode: TextAttachmentSourceMode,
+): Promise<void> {
+  const title = getAttachmentTitle(item) || `Attachment ${item.id}`;
+  try {
+    const filePath: string | undefined =
+      (
+        item as unknown as { getFilePath?: () => string | undefined }
+      ).getFilePath?.() || undefined;
+    if (!filePath) {
+      pdfTextCache.set(item.id, {
+        title,
+        chunks: [],
+        chunkMeta: [],
+        chunkStats: [],
+        docFreq: {},
+        avgChunkLength: 0,
+        fullLength: 0,
+        sourceType: sourceTypeForTextAttachment(sourceMode),
+      });
+      return;
+    }
+    const bytes = await readAttachmentBytes(filePath);
+    const text = sanitizePdfText(
+      extractTextAttachmentContent(bytes, sourceMode),
+    );
+    if (text) {
+      const chunks = splitIntoChunks(text, CHUNK_TARGET_LENGTH);
+      const chunkMeta = buildChunkMetadata(
+        chunks,
+        sourceTypeForTextAttachment(sourceMode),
+      );
+      const { chunkStats, docFreq, avgChunkLength } = buildChunkIndex(chunks);
+      pdfTextCache.set(item.id, {
+        title,
+        chunks,
+        chunkMeta,
+        chunkStats,
+        docFreq,
+        avgChunkLength,
+        fullLength: text.length,
+        sourceType: sourceTypeForTextAttachment(sourceMode),
+      });
+    } else {
+      pdfTextCache.set(item.id, {
+        title,
+        chunks: [],
+        chunkMeta: [],
+        chunkStats: [],
+        docFreq: {},
+        avgChunkLength: 0,
+        fullLength: 0,
+        sourceType: sourceTypeForTextAttachment(sourceMode),
+      });
+    }
+  } catch (error) {
+    ztoolkit.log("Error caching text attachment:", error);
+    pdfTextCache.set(item.id, {
+      title,
+      chunks: [],
+      chunkMeta: [],
+      chunkStats: [],
+      docFreq: {},
+      avgChunkLength: 0,
+      fullLength: 0,
+      sourceType: sourceTypeForTextAttachment(sourceMode),
+    });
+  }
+}
+
+async function cachePDFText(
+  item: Zotero.Item,
+  options?: { sourceMode?: PaperContentSourceMode },
+) {
   if (pdfTextCache.has(item.id)) return;
 
   try {
+    const requestedTextAttachmentMode =
+      options?.sourceMode === "markdown" ||
+      options?.sourceMode === "html" ||
+      options?.sourceMode === "txt" ||
+      options?.sourceMode === "docx"
+        ? options.sourceMode
+        : null;
+    const inferredTextAttachmentMode = resolveTextAttachmentSourceMode(item);
+    const textAttachmentMode =
+      requestedTextAttachmentMode || inferredTextAttachmentMode;
+    if (textAttachmentMode) {
+      await cacheTextAttachment(item, textAttachmentMode);
+      return;
+    }
+
     let pdfText = "";
     let sourceType: PdfContext["sourceType"];
     const mainItem =
@@ -252,22 +423,21 @@ async function cachePDFText(item: Zotero.Item) {
 
     const title = mainItem?.getField("title") || item.getField("title") || "";
 
-    const pdfItem =
-      item.isAttachment() && item.attachmentContentType === "application/pdf"
-        ? item
-        : null;
+    const pdfItem = isPdfContextAttachment(item) ? item : null;
 
     // 1. Try MinerU disk cache (only if MinerU is enabled)
-    if (isMineruEnabled() && pdfItem) {
+    const allowMineru = options?.sourceMode !== "text";
+    if (allowMineru && isMineruEnabled() && pdfItem) {
       try {
         await ensureMineruRuntimeCacheForAttachment(pdfItem);
       } catch (error) {
         ztoolkit.log("LLM: MinerU sync restore failed", error);
       }
     }
-    const cachedMd = isMineruEnabled()
-      ? await readCachedMineruMd(item.id)
-      : null;
+    const cachedMd =
+      allowMineru && isMineruEnabled()
+        ? await readCachedMineruMd(item.id)
+        : null;
     if (cachedMd) {
       pdfText = convertHtmlTablesToMarkdown(cachedMd);
       sourceType = "mineru";
@@ -408,16 +578,34 @@ async function cachePDFText(item: Zotero.Item) {
   }
 }
 
-export async function ensurePDFTextCached(item: Zotero.Item): Promise<void> {
-  if (pdfTextCache.has(item.id)) return;
+export async function ensurePDFTextCached(
+  item: Zotero.Item,
+  options?: { sourceMode?: PaperContentSourceMode },
+): Promise<void> {
+  const cached = pdfTextCache.get(item.id);
+  if (cached && cachedContextMatchesSourceMode(cached, options?.sourceMode)) {
+    return;
+  }
+  if (cached) {
+    pdfTextCache.delete(item.id);
+  }
   const existingTask = pdfTextLoadingTasks.get(item.id);
   if (existingTask) {
     await existingTask;
+    const latest = pdfTextCache.get(item.id);
+    if (latest && cachedContextMatchesSourceMode(latest, options?.sourceMode)) {
+      return;
+    }
+    if (latest) {
+      pdfTextCache.delete(item.id);
+    }
+  }
+  if (pdfTextCache.has(item.id)) {
     return;
   }
   const task = (async () => {
     try {
-      await cachePDFText(item);
+      await cachePDFText(item, options);
     } finally {
       pdfTextLoadingTasks.delete(item.id);
     }
@@ -1265,6 +1453,36 @@ function tokenizeQuery(query: string): string[] {
   return tokenizeRetrievalQuery(query);
 }
 
+function queryPlanTerms(
+  question: string,
+  queryPlan: RetrievalQueryPlan | undefined,
+): string[] {
+  return queryPlan?.lexicalTerms?.length
+    ? queryPlan.lexicalTerms
+    : tokenizeQuery(question);
+}
+
+function matchedQueryVariantsForText(
+  text: string,
+  queryPlan: RetrievalQueryPlan | undefined,
+): string[] {
+  if (!queryPlan?.effectiveQueries.length || !text.trim()) return [];
+  const haystack = text.toLocaleLowerCase();
+  const matches: string[] = [];
+  for (const query of queryPlan.effectiveQueries) {
+    const normalizedQuery = query.trim().toLocaleLowerCase();
+    if (normalizedQuery.length > 2 && haystack.includes(normalizedQuery)) {
+      matches.push(query);
+      continue;
+    }
+    const terms = tokenizeQuery(query);
+    if (terms.length && terms.some((term) => haystack.includes(term))) {
+      matches.push(query);
+    }
+  }
+  return Array.from(new Set(matches));
+}
+
 function scoreChunkBM25(
   chunk: ChunkStat,
   terms: string[],
@@ -1486,6 +1704,32 @@ function formatPaperMetadataLines(ref: PaperContextRef): string[] {
   return lines;
 }
 
+function formatSelectedAttachmentMetadataLines(ref: PaperContextRef): string[] {
+  const lines = ["Parent Zotero Item:", `Title: ${ref.title}`];
+  if (ref.citationKey) lines.push(`Citation key: ${ref.citationKey}`);
+  if (ref.firstCreator) lines.push(`Author: ${ref.firstCreator}`);
+  if (ref.year) lines.push(`Year: ${ref.year}`);
+  lines.push(
+    "",
+    "Selected Source:",
+    `Type: ${formatAttachmentSourceType(ref.contentSourceMode)}`,
+    `Attachment title: ${formatPaperAttachmentTitle(ref)}`,
+    "Relationship: Child attachment under the parent item; it may be user OCR, a translated file, supplement, notes, or another related file.",
+    `Source label: ${formatPaperSourceLabel(ref)}`,
+  );
+  return lines;
+}
+
+function formatSelectedAttachmentGuidanceLines(): string[] {
+  return [
+    "Selected attachment guidance:",
+    "- Treat this selected attachment as the primary evidence source for the current chat.",
+    "- Use parent item metadata for bibliographic/contextual grounding, but do not override the selected attachment text with inferences from the parent title.",
+    "- Do not infer that the attachment failed or is corrupted merely because its content differs from the parent title.",
+    '- If the user asks about "this paper", state that the current source is the selected attachment under the parent item and answer from this source.',
+  ];
+}
+
 function formatPerPaperQuoteGuidanceLines(ref: PaperContextRef): string[] {
   return buildPaperQuoteCitationGuidance(ref);
 }
@@ -1494,22 +1738,36 @@ export function buildFullPaperContext(
   paperContext: PaperContextRef,
   pdfContext: PdfContext | undefined,
 ): string {
-  const metadata = formatPaperMetadataLines(paperContext);
+  const isSelectedAttachment = isTextLikeAttachmentSourceMode(
+    paperContext.contentSourceMode,
+  );
+  const metadata = isSelectedAttachment
+    ? formatSelectedAttachmentMetadataLines(paperContext)
+    : formatPaperMetadataLines(paperContext);
+  const guidance = isSelectedAttachment
+    ? [
+        ...formatSelectedAttachmentGuidanceLines(),
+        "",
+        ...formatPerPaperQuoteGuidanceLines(paperContext),
+      ]
+    : formatPerPaperQuoteGuidanceLines(paperContext);
   if (!pdfContext || !pdfContext.chunks.length) {
     return [
       ...metadata,
       "",
-      ...formatPerPaperQuoteGuidanceLines(paperContext),
+      ...guidance,
       "",
-      "[No extractable PDF text available. Using metadata only.]",
+      isSelectedAttachment
+        ? "[No extractable selected attachment text available. Using metadata only.]"
+        : "[No extractable PDF text available. Using metadata only.]",
     ].join("\n");
   }
   return [
     ...metadata,
     "",
-    ...formatPerPaperQuoteGuidanceLines(paperContext),
+    ...guidance,
     "",
-    "Paper Text:",
+    isSelectedAttachment ? "Selected Attachment Text:" : "Paper Text:",
     pdfContext.chunks.join("\n\n"),
   ].join("\n");
 }
@@ -1524,14 +1782,28 @@ export function buildTruncatedFullPaperContext(
   truncated: boolean;
   fullLength: number;
 } {
-  const metadata = formatPaperMetadataLines(paperContext);
+  const isSelectedAttachment = isTextLikeAttachmentSourceMode(
+    paperContext.contentSourceMode,
+  );
+  const metadata = isSelectedAttachment
+    ? formatSelectedAttachmentMetadataLines(paperContext)
+    : formatPaperMetadataLines(paperContext);
+  const guidance = isSelectedAttachment
+    ? [
+        ...formatSelectedAttachmentGuidanceLines(),
+        "",
+        ...formatPerPaperQuoteGuidanceLines(paperContext),
+      ]
+    : formatPerPaperQuoteGuidanceLines(paperContext);
   if (!pdfContext || !pdfContext.chunks.length) {
     const text = [
       ...metadata,
       "",
-      ...formatPerPaperQuoteGuidanceLines(paperContext),
+      ...guidance,
       "",
-      "[No extractable PDF text available. Using metadata only.]",
+      isSelectedAttachment
+        ? "[No extractable selected attachment text available. Using metadata only.]"
+        : "[No extractable PDF text available. Using metadata only.]",
     ].join("\n");
     return {
       text,
@@ -1545,9 +1817,9 @@ export function buildTruncatedFullPaperContext(
   const parts = [
     ...metadata,
     "",
-    ...formatPerPaperQuoteGuidanceLines(paperContext),
+    ...guidance,
     "",
-    "Paper Text:",
+    isSelectedAttachment ? "Selected Attachment Text:" : "Paper Text:",
   ];
   let text = parts.join("\n");
   let estimatedTokens = estimateTextTokens(text);
@@ -1764,12 +2036,20 @@ export async function buildPaperRetrievalCandidates(
     mode?: "general" | "evidence";
     /** Pre-computed query embedding to avoid redundant API calls in multi-paper loops. */
     precomputedQueryEmbedding?: number[];
+    /** Disable semantic embeddings even when the global semantic-search preference is enabled. */
+    disableEmbeddings?: boolean;
+    /** Shared retrieval query plan with bounded variants and lexical terms. */
+    queryPlan?: RetrievalQueryPlan;
   },
   compatibilityOptions?: {
     topK?: number;
     mode?: "general" | "evidence";
     /** Pre-computed query embedding to avoid redundant API calls in multi-paper loops. */
     precomputedQueryEmbedding?: number[];
+    /** Disable semantic embeddings even when the global semantic-search preference is enabled. */
+    disableEmbeddings?: boolean;
+    /** Shared retrieval query plan with bounded variants and lexical terms. */
+    queryPlan?: RetrievalQueryPlan;
   },
 ): Promise<PaperContextCandidate[]> {
   if (!pdfContext) return [];
@@ -1777,7 +2057,8 @@ export async function buildPaperRetrievalCandidates(
     compatibilityOptions ||
     ("topK" in (apiOverridesOrOptions || {}) ||
     "mode" in (apiOverridesOrOptions || {}) ||
-    "precomputedQueryEmbedding" in (apiOverridesOrOptions || {})
+    "precomputedQueryEmbedding" in (apiOverridesOrOptions || {}) ||
+    "queryPlan" in (apiOverridesOrOptions || {})
       ? apiOverridesOrOptions
       : undefined);
   const { chunks, chunkStats, docFreq, avgChunkLength } = pdfContext;
@@ -1792,7 +2073,9 @@ export async function buildPaperRetrievalCandidates(
     ? Math.max(1, Math.floor(options?.topK as number))
     : RETRIEVAL_TOP_K_PER_PAPER;
 
-  const terms = tokenizeQuery(question);
+  const queryPlan = options?.queryPlan;
+  const terms = queryPlanTerms(question, queryPlan);
+  const semanticQuery = queryPlan?.semanticQuery || question;
   const bm25Scores = chunkStats.map((chunk) =>
     scoreChunkBM25(chunk, terms, docFreq, chunks.length, avgChunkLength || 1),
   );
@@ -1809,7 +2092,11 @@ export async function buildPaperRetrievalCandidates(
   // Compute embedding ranks if available
   let embedRank: number[] | null = null;
   let rawEmbeddingScores: number[] | null = null;
-  if (question.trim() && shouldTryEmbeddings()) {
+  if (
+    semanticQuery.trim() &&
+    !options?.disableEmbeddings &&
+    shouldTryEmbeddings()
+  ) {
     const embeddingsReady = await ensureEmbeddings(
       pdfContext,
       paperContext.contextItemId,
@@ -1818,7 +2105,7 @@ export async function buildPaperRetrievalCandidates(
       try {
         const queryEmbedding =
           options?.precomputedQueryEmbedding ||
-          (await callEmbeddings([question]))[0] ||
+          (await callEmbeddings([semanticQuery]))[0] ||
           [];
         if (queryEmbedding.length) {
           rawEmbeddingScores = pdfContext.embeddings.map((vec) =>
@@ -1851,6 +2138,10 @@ export async function buildPaperRetrievalCandidates(
       ? 1 / (RRF_K + bm25Rank[idx]) + 1 / (RRF_K + embedRank[idx])
       : 1 / (RRF_K + bm25Rank[idx]);
     const meta = chunkMeta[chunk.index];
+    const matchedQueryVariants = matchedQueryVariantsForText(
+      chunks[chunk.index],
+      queryPlan,
+    );
     const candidate: PaperContextCandidate = {
       paperKey: buildPaperKey(paperContext),
       itemId: paperContext.itemId,
@@ -1870,6 +2161,10 @@ export async function buildPaperRetrievalCandidates(
       embeddingScore,
       hybridScore,
       evidenceScore: hybridScore,
+      matchedQueryVariant: matchedQueryVariants[0],
+      matchedQueryVariants: matchedQueryVariants.length
+        ? matchedQueryVariants
+        : undefined,
     };
     const evidenceScore =
       retrievalMode === "evidence"
@@ -1957,6 +2252,9 @@ export function buildEvidencePack(params: {
   const quoteAnchorGuidance = buildQuoteAnchorPromptBlock(
     normalizedQuoteCitations,
   );
+  const hasSelectedAttachmentSource = papers.some((paper) =>
+    isTextLikeAttachmentSourceMode(paper.contentSourceMode),
+  );
 
   const blocks: string[] = [
     [
@@ -1964,8 +2262,12 @@ export function buildEvidencePack(params: {
       "",
       ...quoteAnchorGuidance,
       ...(quoteAnchorGuidance.length ? [""] : []),
-      ...buildPaperQuoteCitationGuidance(),
-      "The full paper remains available in paper chat.",
+      ...(hasSelectedAttachmentSource
+        ? buildGenericSourceQuoteCitationGuidance()
+        : buildPaperQuoteCitationGuidance()),
+      hasSelectedAttachmentSource
+        ? "The full paper or selected attachment source remains available in paper chat."
+        : "The full paper remains available in paper chat.",
       "For this reply, prioritize these retrieved snippets as the primary evidence pack.",
       "Do not use snippets from references as empirical evidence.",
       "If support is weak or indirect, say so instead of overstating the claim.",
@@ -2028,13 +2330,20 @@ export function renderClaimEvidencePack(params: {
       .filter((entry): entry is QuoteCitation => Boolean(entry)),
   );
   const quoteAnchorGuidance = buildQuoteAnchorPromptBlock(quoteCitations);
+  const hasSelectedAttachmentSource = isTextLikeAttachmentSourceMode(
+    paper.contentSourceMode,
+  );
   const lines = [
     "Claim Evidence:",
     "",
     ...quoteAnchorGuidance,
     ...(quoteAnchorGuidance.length ? [""] : []),
-    ...buildPaperQuoteCitationGuidance(),
-    "The full paper remains available in paper chat.",
+    ...(hasSelectedAttachmentSource
+      ? buildGenericSourceQuoteCitationGuidance()
+      : buildPaperQuoteCitationGuidance()),
+    hasSelectedAttachmentSource
+      ? "The full paper or selected attachment source remains available in paper chat."
+      : "The full paper remains available in paper chat.",
     "Use the evidence snippets below as the primary grounding for this claim assessment.",
     "Do not treat references or background citations as direct empirical evidence.",
     "If the evidence is indirect or mixed, say so explicitly.",

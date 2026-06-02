@@ -22,6 +22,7 @@ import {
   unregisterQueuedFollowUpBody,
 } from "./queuedFollowUps";
 import {
+  buildDefaultUpstreamGlobalConversationKey,
   config,
   AUTO_SCROLL_BOTTOM_THRESHOLD,
   MAX_FULL_TEXT_PAPER_CONTEXTS,
@@ -30,10 +31,16 @@ import {
   PERSISTED_HISTORY_LIMIT,
   formatFigureCountLabel,
   formatFileCountLabel,
+  GLOBAL_CONVERSATION_KEY_BASE,
   GLOBAL_HISTORY_LIMIT,
   isUpstreamGlobalConversationKey,
   PREFERENCES_PANE_ID,
 } from "./constants";
+import {
+  isAtAutoFollowBottom,
+  resolveStreamingScrollFollowAction,
+} from "./scrollFollowPolicy";
+import { createContextIcon } from "./contextIcons";
 import {
   selectedModelCache,
   selectedReasoningCache,
@@ -132,9 +139,12 @@ import {
   ensureConversationLoaded,
   persistChatScrollSnapshot,
   isScrollUpdateSuspended,
+  requestChatScrollFollowBottom,
+  cancelChatScrollFollowBottomRequest,
   withScrollGuard,
   copyTextToClipboard,
   refreshConversationPanels,
+  clearPendingRequestIdAndSync,
   detectReasoningProvider,
   getReasoningOptions,
   getSelectedReasoningForItem,
@@ -156,14 +166,14 @@ import {
   isNoteContextExpanded,
   refreshNoteChipPreview,
   refreshActiveNoteChipPreview,
-  resolveContextSourceItem,
+  resolveContextSourceItemAsync,
   setNoteContextExpanded,
   setSelectedTextContextEntries,
   setSelectedTextExpandedIndex,
 } from "./contextResolution";
 import {
+  isTextLikeAttachmentSourceMode,
   resolvePaperContextRefFromAttachment,
-  resolvePaperContextRefFromItem,
 } from "./paperAttribution";
 import {
   filterManualPaperContextsAgainstAutoLoaded,
@@ -175,7 +185,12 @@ import {
   shouldRenderDynamicSlashMenu,
   shouldRenderSkillSlashMenu,
 } from "./slashMenuBehavior";
+import { FULL_PDF_UNSUPPORTED_MESSAGE } from "./pdfSupportMessages";
 import { buildPaperKey } from "./pdfContext";
+import {
+  isSupportedContextAttachment,
+  resolveContextAttachmentSupport,
+} from "./contextAttachmentSupport";
 import {
   getPaperModeOverride,
   setPaperModeOverride,
@@ -184,10 +199,21 @@ import {
   getPaperContentSourceOverride,
   setPaperContentSourceOverride,
   clearPaperContentSourceOverrides,
-  getNextContentSourceMode,
   clearSelectedPaperState,
   clearAllRefContextState,
 } from "./contexts/paperContextState";
+import {
+  getMineruBatchState,
+  onBatchStateChange,
+  pauseBatchProcessing,
+  processSelectedItems,
+} from "../mineruBatchProcessor";
+import { getAutoWatchStatus, pauseAutoWatch } from "../mineruAutoWatch";
+import {
+  getItemStatus,
+  onProcessingStatusChange,
+} from "../mineruProcessingStatus";
+import { isMineruEnabled } from "../../utils/mineruConfig";
 import {
   clearSelectedImageState as clearSelectedImageState_,
   retainPinnedImageState as retainPinnedImageState_,
@@ -210,24 +236,9 @@ import {
   removeConversationAttachmentFiles,
 } from "./attachmentStorage";
 import { clearConversationSummary as clearConversationSummaryFromCache } from "./conversationSummaryCache";
+import { conversationRepository } from "../../core/conversations/repository";
 import {
   clearConversation as clearStoredConversation,
-  clearConversationTitle,
-  createGlobalConversation,
-  createPaperConversation,
-  deleteTurnMessages,
-  deleteGlobalConversation,
-  deletePaperConversation,
-  ensureGlobalConversationExists,
-  getGlobalConversationUserTurnCount,
-  getLatestEmptyGlobalConversation,
-  loadConversation,
-  getPaperConversation,
-  listGlobalConversations,
-  listPaperConversations,
-  ensurePaperV1Conversation,
-  setGlobalConversationTitle,
-  setPaperConversationTitle,
   touchPaperConversationTitle,
   touchGlobalConversationTitle,
 } from "../../utils/chatStore";
@@ -270,11 +281,7 @@ import {
   type PaperScopedActionCollectionCandidate,
   type PaperScopedActionProfile,
 } from "./paperScopeCommand";
-import {
-  getAgentApi,
-  getCoreAgentRuntime,
-  initAgentSubsystem,
-} from "../../agent/index";
+import { getAgentApi, initAgentSubsystem } from "../../agent/index";
 import type { ActionRequestContext } from "../../agent/actions";
 import { renderPendingActionCard } from "./agentTrace/render";
 import type {
@@ -296,6 +303,11 @@ import {
   resolveShortcutMode,
 } from "./portalScope";
 import { getPanelDomRefs } from "./setupHandlers/domRefs";
+import {
+  chooseAutoLoadedContextPanelItem,
+  chooseCurrentPaperBaseItemForMode,
+  isAutoLoadedSnapshotForCurrentPaper,
+} from "./paperContextPreloadIdentity";
 import type { SetupHandlersContext } from "./setupHandlers/types";
 import { observeElementDisconnected } from "./setupHandlers/lifecycle";
 import {
@@ -339,6 +351,9 @@ import {
   formatPaperContextCardAttachmentLine,
   formatPaperContextChipLabel,
   formatPaperContextChipTitle,
+  hasPaperChipSourceMenuOption,
+  isPaperContextFullTextOnlySourceMode,
+  isPaperContextReaderFocusableSourceMode,
   normalizePaperContextEntries,
   resolvePaperContextDisplayMetadata,
 } from "./setupHandlers/controllers/composeContextController";
@@ -381,16 +396,15 @@ import {
   createCoalescedFrameScheduler,
   getOrCreateKeyedInFlightTask,
 } from "./setupHandlers/controllers/uiSchedulingController";
+import {
+  resolveMineruSourceOptionState,
+  type MineruSourceAction,
+  type MineruSourceUiState,
+} from "./setupHandlers/controllers/paperSourceOptionsController";
 import { clearAllAgentToolCaches } from "../../agent/tools";
-import { clearAgentMemory } from "../../agent/store/conversationMemory";
-import { clearAgentTranscript } from "../../agent/store/transcriptStore";
-import { clearPersistedAgentEvidence } from "../../agent/context/cacheManagement";
-import { clearPersistedAgentCoverage } from "../../agent/context/coverageLedger";
-import { clearAgentResourceLifecycleState } from "../../agent/context/resourceLifecycle";
+import { clearAgentConversationState } from "./agentConversationCleanup";
 import { renderShortcuts } from "./shortcuts";
 import { loadConversationHistoryScope } from "./historyLoader";
-import { loadClaudeConversationHistoryScope } from "../../claudeCode/historyLoader";
-import { loadCodexConversationHistoryScope } from "../../codexAppServer/historyLoader";
 import {
   buildClaudeScope,
   getClaudeRuntimeModelEntries,
@@ -453,18 +467,7 @@ import {
 import { isClaudePaperPortalItem } from "../../claudeCode/portal";
 import {
   clearClaudeConversation,
-  createClaudeGlobalConversation,
-  createClaudePaperConversation,
-  deleteClaudeConversation,
-  deleteClaudeTurnMessages,
-  ensureClaudePaperConversation,
-  getClaudeConversationSummary,
-  listClaudeGlobalConversations,
-  listClaudePaperConversations,
-  loadClaudeConversation,
-  setClaudeConversationTitle,
   touchClaudeConversationTitle,
-  upsertClaudeConversationSummary,
 } from "../../claudeCode/store";
 import {
   createClaudeGlobalPortalItem,
@@ -472,23 +475,14 @@ import {
 } from "../../claudeCode/portal";
 import {
   clearCodexConversation,
-  createCodexGlobalConversation,
-  createCodexPaperConversation,
-  deleteCodexConversation,
-  deleteCodexTurnMessages,
-  ensureCodexPaperConversation,
-  getCodexConversationSummary,
-  listCodexGlobalConversations,
-  listCodexPaperConversations,
-  loadCodexConversation,
-  setCodexConversationTitle,
   touchCodexConversationTitle,
-  upsertCodexConversationSummary,
 } from "../../codexAppServer/store";
 import {
   createCodexGlobalPortalItem,
   createCodexPaperPortalItem,
 } from "../../codexAppServer/portal";
+import { resolveConversationStorageSystem } from "../../shared/conversationStorageRouting";
+import { validateConversationScope } from "../../shared/conversationRegistry";
 
 setQueuedFollowUpBodySyncCallback((body) => {
   try {
@@ -531,6 +525,12 @@ export function setupHandlers(
   });
   const rawPanelItem =
     activeContextPanelRawItems.get(body) || initialItem || null;
+  const resolveLiveRawPanelItem = (): Zotero.Item | null => {
+    if (activeContextPanelRawItems.has(body)) {
+      return activeContextPanelRawItems.get(body) || null;
+    }
+    return rawPanelItem;
+  };
   let item = resolvedInitialState.item;
   let basePaperItem =
     resolvedInitialState.basePaperItem ||
@@ -612,6 +612,7 @@ export function setupHandlers(
     actionPicker,
     actionPickerList,
     actionHitlPanel,
+    shortcutMenu,
     queueBar,
     responseMenu,
     responseMenuCopyBtn,
@@ -643,10 +644,13 @@ export function setupHandlers(
   // the stamp is only present when setupHandlers is called twice on the
   // same DOM tree without an intervening rebuild.
   const thisGen = String(++setupHandlersGeneration);
-  if (panelRoot.dataset.handlersAttached) {
+  if (panelRoot.dataset.handlersInitialized) {
     return;
   }
   panelRoot.dataset.handlersAttached = thisGen;
+  panelRoot.dataset.rawContextItemId = rawPanelItem
+    ? `${Number(rawPanelItem.id || 0) || ""}`
+    : "";
 
   activeContextPanels.set(body, () => item);
   let isWebChatModeActive = () => panelRoot.dataset.webchatMode === "true";
@@ -679,6 +683,13 @@ export function setupHandlers(
   if (prevObservers) {
     for (const obs of prevObservers) obs.disconnect();
     delete (body as any).__llmResizeObservers;
+  }
+  const prevResizeSchedulers = (body as any).__llmResizeSchedulers as
+    | Array<{ cancel?: () => void }>
+    | undefined;
+  if (prevResizeSchedulers) {
+    for (const scheduler of prevResizeSchedulers) scheduler.cancel?.();
+    delete (body as any).__llmResizeSchedulers;
   }
 
   let renderQueuedFollowUpInputs: () => void = () => {};
@@ -960,11 +971,16 @@ export function setupHandlers(
   const warmClaudeModeCaches = () => {
     if (!isClaudeModeAvailable() || isNoteSession()) return;
     if (claudeWarmupInFlight) return;
-    const coreRuntime = getCoreAgentRuntime();
-    claudeWarmupInFlight = Promise.allSettled([
-      refreshClaudeSlashCommands(coreRuntime, false),
-      listClaudeEfforts(coreRuntime, getSelectedClaudeRuntimeEntry().model),
-    ])
+    claudeWarmupInFlight = initAgentSubsystem()
+      .then((coreRuntime) =>
+        Promise.allSettled([
+          refreshClaudeSlashCommands(coreRuntime, false),
+          listClaudeEfforts(coreRuntime, getSelectedClaudeRuntimeEntry().model),
+        ]),
+      )
+      .catch((err: unknown) => {
+        ztoolkit.log("LLM: Failed to warm Claude mode caches", err);
+      })
       .finally(() => {
         claudeWarmupInFlight = null;
       })
@@ -998,16 +1014,16 @@ export function setupHandlers(
   let refreshGlobalHistoryHeader: () => Promise<void> = async () => {};
   let switchGlobalConversation: (
     nextConversationKey: number,
-  ) => Promise<void> = async () => {};
+  ) => Promise<boolean> = async () => false;
   let switchPaperConversation: (
     nextConversationKey?: number,
-  ) => Promise<void> = async () => {};
+  ) => Promise<boolean | void> = async () => {};
   let createAndSwitchGlobalConversation: (
     forceFresh?: boolean,
-  ) => Promise<void> = async () => {};
+  ) => Promise<boolean | void> = async () => {};
   let createAndSwitchPaperConversation: (
     forceFresh?: boolean,
-  ) => Promise<void> = async () => {};
+  ) => Promise<boolean | void> = async () => {};
   let queueTurnDeletion: (target: {
     conversationKey: number;
     userTimestamp: number;
@@ -1085,9 +1101,10 @@ export function setupHandlers(
                 const activeKey = Number(
                   activeGlobalConversationByLibrary.get(libraryID) || 0,
                 );
-                return isUpstreamGlobalConversationKey(activeKey)
-                  ? Math.floor(activeKey)
-                  : 0;
+                if (!isUpstreamGlobalConversationKey(activeKey)) return 0;
+                return activeKey === GLOBAL_CONVERSATION_KEY_BASE
+                  ? buildDefaultUpstreamGlobalConversationKey(libraryID)
+                  : Math.floor(activeKey);
               })();
       if (nextConversationKey > 0) {
         await switchGlobalConversation(nextConversationKey);
@@ -1133,48 +1150,18 @@ export function setupHandlers(
     updateClaudeSystemToggle();
     void refreshGlobalHistoryHeader();
   };
-  const ensureClaudeConversationCatalogEntry = async (params: {
-    conversationKey: number;
-    libraryID: number;
-    kind: "global" | "paper";
-    paperItemID?: number;
-  }) => {
-    const existing = await getClaudeConversationSummary(params.conversationKey);
-    if (existing) return existing;
-    await upsertClaudeConversationSummary({
-      conversationKey: params.conversationKey,
-      libraryID: params.libraryID,
-      kind: params.kind,
-      paperItemID: params.paperItemID,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    });
-    return getClaudeConversationSummary(params.conversationKey);
-  };
-  const ensureCodexConversationCatalogEntry = async (params: {
-    conversationKey: number;
-    libraryID: number;
-    kind: "global" | "paper";
-    paperItemID?: number;
-  }) => {
-    const existing = await getCodexConversationSummary(params.conversationKey);
-    if (existing) return existing;
-    await upsertCodexConversationSummary({
-      conversationKey: params.conversationKey,
-      libraryID: params.libraryID,
-      kind: params.kind,
-      paperItemID: params.paperItemID,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    });
-    return getCodexConversationSummary(params.conversationKey);
-  };
   const isClaudeConversationDraft = async (conversationKey: number) => {
-    const summary = await getClaudeConversationSummary(conversationKey);
+    const summary = await conversationRepository.getCatalogEntry({
+      system: "claude_code",
+      conversationKey,
+    });
     return Boolean(summary && (summary.userTurnCount || 0) === 0);
   };
   const isCodexConversationDraft = async (conversationKey: number) => {
-    const summary = await getCodexConversationSummary(conversationKey);
+    const summary = await conversationRepository.getCatalogEntry({
+      system: "codex",
+      conversationKey,
+    });
     return Boolean(summary && (summary.userTurnCount || 0) === 0);
   };
   const resolveCurrentNoteParentItem = (): Zotero.Item | null => {
@@ -1182,6 +1169,20 @@ export function setupHandlers(
     if (!noteSession?.parentItemId) return null;
     const parentItem = Zotero.Items.get(noteSession.parentItemId) || null;
     return parentItem?.isRegularItem?.() ? parentItem : null;
+  };
+  const resolveRegularPaperBaseItem = (
+    candidate: Zotero.Item | null | undefined,
+  ): Zotero.Item | null => {
+    const resolved = resolveConversationBaseItem(candidate);
+    return resolved?.isRegularItem?.() ? resolved : null;
+  };
+  const resolveActiveReaderPaperBaseItem = (): Zotero.Item | null => {
+    const activeContext = getActiveContextAttachmentFromTabs();
+    const resolvedFromContext =
+      activeContext && activeContext.parentID
+        ? Zotero.Items.get(activeContext.parentID) || null
+        : null;
+    return resolvedFromContext?.isRegularItem?.() ? resolvedFromContext : null;
   };
   const resolveCurrentPaperBaseItem = (): Zotero.Item | null => {
     const noteSession = resolveCurrentNoteSession();
@@ -1195,20 +1196,18 @@ export function setupHandlers(
     if (noteSession) {
       return null;
     }
-    if (basePaperItem?.isRegularItem?.()) return basePaperItem;
-    const resolvedFromItem = resolveConversationBaseItem(item);
-    if (resolvedFromItem?.isRegularItem?.()) {
-      basePaperItem = resolvedFromItem;
-      return resolvedFromItem;
-    }
-    const activeContext = getActiveContextAttachmentFromTabs();
-    const resolvedFromContext =
-      activeContext && activeContext.parentID
-        ? Zotero.Items.get(activeContext.parentID) || null
-        : null;
-    if (resolvedFromContext?.isRegularItem?.()) {
-      basePaperItem = resolvedFromContext;
-      return resolvedFromContext;
+    const resolvedBaseItem = chooseCurrentPaperBaseItemForMode({
+      isGlobalMode: isGlobalMode(),
+      liveRawBaseItem: resolveRegularPaperBaseItem(resolveLiveRawPanelItem()),
+      activeReaderBaseItem: resolveActiveReaderPaperBaseItem(),
+      cachedBasePaperItem: basePaperItem?.isRegularItem?.()
+        ? basePaperItem
+        : null,
+      currentItemBaseItem: resolveRegularPaperBaseItem(item),
+    });
+    if (resolvedBaseItem?.isRegularItem?.()) {
+      basePaperItem = resolvedBaseItem;
+      return resolvedBaseItem;
     }
     return null;
   };
@@ -1387,6 +1386,7 @@ export function setupHandlers(
   // Keep the agent mode toggle in sync when the preference is changed in the
   // Preferences window (which runs in a separate window context).
   let cleanupPrefObservers: (() => void) | null = null;
+  let cleanupMineruPaperSourceObservers: (() => void) | null = null;
   {
     const agentPrefKey = `${config.prefsPrefix}.enableAgentMode`;
     const claudeModePrefKey = `${config.prefsPrefix}.enableClaudeCodeMode`;
@@ -1424,14 +1424,14 @@ export function setupHandlers(
       }
       if (!getClaudeCodeModeEnabled()) {
         void releaseClaudeRuntimeForBody(body);
-        void invalidateAllClaudeHotRuntimes(getCoreAgentRuntime()).catch(
-          (err: unknown) => {
+        void initAgentSubsystem()
+          .then((coreRuntime) => invalidateAllClaudeHotRuntimes(coreRuntime))
+          .catch((err: unknown) => {
             ztoolkit.log(
               "LLM: Failed to invalidate all Claude hot runtimes",
               err,
             );
-          },
-        );
+          });
         setConversationSystemPref("upstream");
         if (isClaudeConversationSystem()) {
           void switchConversationSystem("upstream");
@@ -1548,8 +1548,45 @@ export function setupHandlers(
   const captureChatBoxViewportState = () => {
     chatBoxViewportState = buildChatBoxViewportState();
   };
+  const isCurrentConversationStreaming = (): boolean => {
+    if (!item) return false;
+    const conversationKey = getConversationKey(item);
+    return (chatHistory.get(conversationKey) || []).some((msg) =>
+      Boolean(msg.streaming),
+    );
+  };
+  const requestStreamingFollowBottom = () => {
+    if (!item || !chatBox) return;
+    if (!isCurrentConversationStreaming()) return;
+    requestChatScrollFollowBottom(body, item, chatBox);
+    captureChatBoxViewportState();
+  };
 
   if (item && chatBox) {
+    const handleStreamingFollowWheel = (event: WheelEvent) => {
+      if (!item || !chatBox) return;
+      if (!isCurrentConversationStreaming()) return;
+      if (event.deltaY < 0) {
+        cancelChatScrollFollowBottomRequest(item);
+        return;
+      }
+      if (event.deltaY <= 0) return;
+
+      const checkAfterNativeScroll = () => {
+        const current = buildChatBoxViewportState();
+        if (!current) return;
+        const distanceFromBottom = current.maxScrollTop - current.scrollTop;
+        if (isAtAutoFollowBottom(distanceFromBottom)) {
+          requestStreamingFollowBottom();
+        }
+      };
+      const win = body.ownerDocument?.defaultView;
+      if (win) {
+        win.setTimeout(checkAfterNativeScroll, 0);
+      } else {
+        checkAfterNativeScroll();
+      }
+    };
     const persistScroll = () => {
       if (!item) return;
       if (!chatBox.childElementCount) return;
@@ -1573,9 +1610,31 @@ export function setupHandlers(
         captureChatBoxViewportState();
         return;
       }
+      const currentViewport = buildChatBoxViewportState();
+      if (previousViewport && currentViewport) {
+        const scrollDelta =
+          currentViewport.scrollTop - previousViewport.scrollTop;
+        const distanceFromBottom =
+          currentViewport.maxScrollTop - currentViewport.scrollTop;
+        const followAction = resolveStreamingScrollFollowAction({
+          scrollDelta,
+          distanceFromBottom,
+          isStreaming: isCurrentConversationStreaming(),
+        });
+        if (followAction === "cancel") {
+          cancelChatScrollFollowBottomRequest(item);
+        } else if (followAction === "follow") {
+          requestChatScrollFollowBottom(body, item, chatBox);
+          captureChatBoxViewportState();
+          return;
+        }
+      }
       persistChatScrollSnapshot(item, chatBox);
       captureChatBoxViewportState();
     };
+    chatBox.addEventListener("wheel", handleStreamingFollowWheel, {
+      passive: false,
+    });
     chatBox.addEventListener("scroll", persistScroll, { passive: true });
   }
 
@@ -1746,15 +1805,29 @@ export function setupHandlers(
     sendBtn,
     cancelBtn,
   });
+  let lastUserContextAlignmentPanelWidth = -1;
+  const getRoundedPanelWidth = () =>
+    Math.ceil(
+      panelRoot.getBoundingClientRect?.().width || panelRoot.clientWidth || 0,
+    );
   const responsiveLayoutScheduler = createCoalescedFrameScheduler({
     getWindow: () => body.ownerDocument?.defaultView || null,
     run: () => {
+      const panelWidth = getRoundedPanelWidth();
       withScrollGuard(
         chatBox,
         conversationKey,
         () => {
           applyResponsiveActionButtonsLayout();
-          syncUserContextAlignmentWidths(body);
+          if (
+            panelWidth <= 0 ||
+            panelWidth !== lastUserContextAlignmentPanelWidth
+          ) {
+            syncUserContextAlignmentWidths(body);
+            if (panelWidth > 0) {
+              lastUserContextAlignmentPanelWidth = panelWidth;
+            }
+          }
         },
         "relative",
       );
@@ -1766,6 +1839,59 @@ export function setupHandlers(
   const flushResponsiveLayoutSyncNow = () => {
     responsiveLayoutScheduler.flush();
   };
+  let pendingChatBoxResizePreviousState: ChatBoxViewportState | null = null;
+  const chatBoxViewportResizeScheduler = createCoalescedFrameScheduler({
+    getWindow: () => body.ownerDocument?.defaultView || null,
+    run: () => {
+      const previous =
+        pendingChatBoxResizePreviousState || chatBoxViewportState;
+      pendingChatBoxResizePreviousState = null;
+      if (!chatBox) return;
+      if (!isChatViewportVisible(chatBox)) return;
+      const current = buildChatBoxViewportState();
+      if (!current) return;
+      const viewportChanged = Boolean(
+        previous &&
+        (current.width !== previous.width ||
+          current.height !== previous.height),
+      );
+      if (viewportChanged && previous && previous.nearBottom) {
+        const targetBottom = Math.max(
+          0,
+          chatBox.scrollHeight - chatBox.clientHeight,
+        );
+        if (Math.abs(chatBox.scrollTop - targetBottom) > 1) {
+          chatBox.scrollTop = chatBox.scrollHeight;
+        }
+        captureChatBoxViewportState();
+        if (item && chatBox.childElementCount) {
+          persistChatScrollSnapshot(item, chatBox);
+        }
+        return;
+      }
+      if (
+        viewportChanged &&
+        previous &&
+        !previous.nearBottom &&
+        previous.maxScrollTop > 0
+      ) {
+        const progress = Math.max(
+          0,
+          Math.min(1, previous.scrollTop / previous.maxScrollTop),
+        );
+        const targetScrollTop = Math.round(current.maxScrollTop * progress);
+        if (Math.abs(chatBox.scrollTop - targetScrollTop) > 1) {
+          chatBox.scrollTop = targetScrollTop;
+        }
+        captureChatBoxViewportState();
+        if (item && chatBox.childElementCount) {
+          persistChatScrollSnapshot(item, chatBox);
+        }
+        return;
+      }
+      chatBoxViewportState = current;
+    },
+  });
 
   const clearSelectedImageState = (itemId: number) =>
     clearSelectedImageState_(pinnedImageKeys, itemId);
@@ -1826,10 +1952,20 @@ export function setupHandlers(
     // [webchat] Always use PDF content source — webchat sends raw PDF via drag-and-drop
     if (isWebChatMode()) return "pdf";
     const explicit = getPaperContentSourceOverride(itemId, paperContext);
-    return explicit || (isPaperContextMineru(paperContext) ? "mineru" : "text");
+    return (
+      explicit ||
+      paperContext.contentSourceMode ||
+      (isPaperContextMineru(paperContext) ? "mineru" : "text")
+    );
   };
 
-  // getNextContentSourceMode → imported from ./contexts/paperContextState
+  const withResolvedPaperContentSourceMode = (
+    itemId: number,
+    paperContext: PaperContextRef,
+  ): PaperContextRef => ({
+    ...paperContext,
+    contentSourceMode: resolvePaperContentSourceMode(itemId, paperContext),
+  });
 
   // Lightweight sync cache: once checkAndApplyMineruChipStyle confirms MinerU
   // exists on disk, the contextItemId is added here so isPaperContextMineru
@@ -1838,18 +1974,15 @@ export function setupHandlers(
   const pendingMineruAvailabilityChecks = new Map<number, Promise<void>>();
   let mineruChipStyleDepsPromise: Promise<{
     getMineruAvailabilityForAttachmentId: typeof import("./mineruSync").getMineruAvailabilityForAttachmentId;
-    isMineruEnabled: typeof import("../../utils/mineruConfig").isMineruEnabled;
   }> | null = null;
   const loadMineruChipStyleDeps = () => {
     if (!mineruChipStyleDepsPromise) {
-      mineruChipStyleDepsPromise = Promise.all([
-        import("./mineruSync"),
-        import("../../utils/mineruConfig"),
-      ]).then(([mineruSync, mineruConfig]) => ({
-        getMineruAvailabilityForAttachmentId:
-          mineruSync.getMineruAvailabilityForAttachmentId,
-        isMineruEnabled: mineruConfig.isMineruEnabled,
-      }));
+      mineruChipStyleDepsPromise = import("./mineruSync").then(
+        (mineruSync) => ({
+          getMineruAvailabilityForAttachmentId:
+            mineruSync.getMineruAvailabilityForAttachmentId,
+        }),
+      );
     }
     return mineruChipStyleDepsPromise;
   };
@@ -1879,9 +2012,8 @@ export function setupHandlers(
       async () => {
         try {
           if (mineruAvailableIds.has(contextItemId)) return;
-          const { getMineruAvailabilityForAttachmentId, isMineruEnabled } =
+          const { getMineruAvailabilityForAttachmentId } =
             await loadMineruChipStyleDeps();
-          if (!isMineruEnabled()) return;
           const availability = await getMineruAvailabilityForAttachmentId(
             contextItemId,
             {
@@ -1890,8 +2022,10 @@ export function setupHandlers(
           );
           if (availability.status === "missing") return;
           mineruAvailableIds.add(contextItemId);
+          upgradePaperContextsToMineruForAttachment(contextItemId);
           // MinerU is now available; re-render chips so the default mode flips.
           schedulePanelStateRefresh();
+          refreshOpenPaperChipMenu();
         } catch {
           /* ignore */
         }
@@ -1903,6 +2037,13 @@ export function setupHandlers(
     itemId: number,
     paperContext: PaperContextRef,
   ): PaperContextSendMode => {
+    if (
+      isPaperContextFullTextOnlySourceMode(
+        resolvePaperContentSourceMode(itemId, paperContext),
+      )
+    ) {
+      return "full-sticky";
+    }
     const explicitMode = getPaperModeOverride(itemId, paperContext);
     if (explicitMode) return explicitMode;
     const autoLoadedPaperContext =
@@ -1957,23 +2098,25 @@ export function setupHandlers(
     return normalizePaperContextEntries([
       ...(autoLoadedPaperContext ? [autoLoadedPaperContext] : []),
       ...selectedPapers,
-    ]);
+    ]).map((paperContext) =>
+      withResolvedPaperContentSourceMode(currentItem.id, paperContext),
+    );
   };
 
   const getEffectiveFullTextPaperContexts = (
     currentItem: Zotero.Item,
     selectedPaperContexts?: PaperContextRef[],
   ): PaperContextRef[] => {
-    return getAllEffectivePaperContexts(
-      currentItem,
-      selectedPaperContexts,
-    ).filter(
-      (paperContext) =>
-        resolvePaperContentSourceMode(currentItem.id, paperContext) !== "pdf" &&
-        isPaperContextFullTextMode(
-          resolvePaperContextNextSendMode(currentItem.id, paperContext),
-        ),
-    ).slice(0, MAX_FULL_TEXT_PAPER_CONTEXTS);
+    return getAllEffectivePaperContexts(currentItem, selectedPaperContexts)
+      .filter(
+        (paperContext) =>
+          resolvePaperContentSourceMode(currentItem.id, paperContext) !==
+            "pdf" &&
+          isPaperContextFullTextMode(
+            resolvePaperContextNextSendMode(currentItem.id, paperContext),
+          ),
+      )
+      .slice(0, MAX_FULL_TEXT_PAPER_CONTEXTS);
   };
 
   const getEffectivePdfModePaperContexts = (
@@ -2106,7 +2249,134 @@ export function setupHandlers(
     return { conversationKey: key, pair };
   };
 
-  const resolveAutoLoadedPaperContext = (): PaperContextRef | null => {
+  let autoLoadedContextSourceItemSnapshot: Zotero.Item | null | undefined;
+  let autoLoadedPaperContextSnapshot: PaperContextRef | null | undefined;
+  let autoLoadedPaperContextOwnerItemId: number | null = null;
+  let autoLoadedPaperContextItemId: number | null = null;
+  let autoLoadedPaperContextContentSourceMode: string | null = null;
+  let autoLoadedContextPanelItemKey: string | null = null;
+  let autoLoadedPaperContextGeneration = 0;
+  let autoLoadedPaperContextPromise: Promise<PaperContextRef | null> | null =
+    null;
+  let requestAutoLoadedPaperContextRefresh: (() => void) | null = null;
+
+  const writeAutoLoadedContextItemId = (
+    contextSourceItem: Zotero.Item | null,
+    paperContext: PaperContextRef | null,
+  ) => {
+    const contextItemId = Math.floor(
+      Number(paperContext?.contextItemId || contextSourceItem?.id || 0),
+    );
+    panelRoot.dataset.contextItemId =
+      Number.isFinite(contextItemId) && contextItemId > 0
+        ? `${contextItemId}`
+        : "";
+  };
+
+  const setAutoLoadedContextSnapshot = (
+    contextSourceItem: Zotero.Item | null,
+    paperContext: PaperContextRef | null,
+    contextPanelItem?: Zotero.Item | null,
+  ) => {
+    if (isGlobalMode()) {
+      panelRoot.dataset.contextItemId = "";
+      return;
+    }
+    const ownerItemId = Math.floor(
+      Number(paperContext?.itemId || resolveCurrentPaperBaseItem()?.id || 0),
+    );
+    autoLoadedPaperContextOwnerItemId =
+      Number.isFinite(ownerItemId) && ownerItemId > 0 ? ownerItemId : null;
+    const contextItemId = Math.floor(
+      Number(paperContext?.contextItemId || contextSourceItem?.id || 0),
+    );
+    autoLoadedPaperContextItemId =
+      Number.isFinite(contextItemId) && contextItemId > 0
+        ? contextItemId
+        : null;
+    autoLoadedPaperContextContentSourceMode =
+      paperContext?.contentSourceMode || null;
+    const contextPanelItemId = Math.floor(
+      Number(contextPanelItem?.id || contextSourceItem?.id || 0),
+    );
+    autoLoadedContextPanelItemKey =
+      Number.isFinite(contextPanelItemId) && contextPanelItemId > 0
+        ? `${contextPanelItemId}`
+        : null;
+    autoLoadedContextSourceItemSnapshot = contextSourceItem;
+    autoLoadedPaperContextSnapshot = paperContext;
+    writeAutoLoadedContextItemId(contextSourceItem, paperContext);
+    requestAutoLoadedPaperContextRefresh?.();
+  };
+
+  const clearAutoLoadedContextSnapshot = () => {
+    autoLoadedPaperContextGeneration += 1;
+    autoLoadedContextSourceItemSnapshot = undefined;
+    autoLoadedPaperContextSnapshot = undefined;
+    autoLoadedPaperContextOwnerItemId = null;
+    autoLoadedPaperContextItemId = null;
+    autoLoadedPaperContextContentSourceMode = null;
+    autoLoadedContextPanelItemKey = null;
+    autoLoadedPaperContextPromise = null;
+    panelRoot.dataset.contextItemId = "";
+  };
+
+  const getCurrentAutoLoadedPaperOwnerItemId = (): number | null => {
+    if (!item || isGlobalMode()) return null;
+    const ownerItemId = Math.floor(
+      Number(resolveCurrentPaperBaseItem()?.id || 0),
+    );
+    return Number.isFinite(ownerItemId) && ownerItemId > 0 ? ownerItemId : null;
+  };
+
+  const isAutoLoadedContextSnapshotCurrent = (): boolean => {
+    const currentPanelItem = resolveAutoLoadedContextPanelItem();
+    const currentPanelItemId = Math.floor(Number(currentPanelItem?.id || 0));
+    const currentPanelItemKey =
+      Number.isFinite(currentPanelItemId) && currentPanelItemId > 0
+        ? `${currentPanelItemId}`
+        : null;
+    if (
+      autoLoadedContextPanelItemKey &&
+      currentPanelItemKey &&
+      autoLoadedContextPanelItemKey !== currentPanelItemKey
+    ) {
+      return false;
+    }
+    const currentContextSourceItem =
+      resolveAutoLoadedContextSourceItemSync(currentPanelItem);
+    const currentPaperContext = resolvePaperContextRefFromAttachment(
+      currentContextSourceItem,
+    );
+    return isAutoLoadedSnapshotForCurrentPaper({
+      currentOwnerItemId: getCurrentAutoLoadedPaperOwnerItemId(),
+      snapshotOwnerItemId: autoLoadedPaperContextOwnerItemId,
+      currentContextItemId:
+        currentPaperContext?.contextItemId ||
+        (currentContextSourceItem
+          ? Math.floor(Number(currentContextSourceItem.id || 0))
+          : null),
+      snapshotContextItemId: autoLoadedPaperContextItemId,
+      currentContentSourceMode: currentPaperContext?.contentSourceMode || null,
+      snapshotContentSourceMode: autoLoadedPaperContextContentSourceMode,
+    });
+  };
+
+  const resolveAutoLoadedContextPanelItem = (): Zotero.Item | null => {
+    const liveRawPanelItem = resolveLiveRawPanelItem();
+    return chooseAutoLoadedContextPanelItem({
+      isGlobalMode: isGlobalMode(),
+      currentItem: item,
+      currentPaperBaseItem: resolveCurrentPaperBaseItem(),
+      liveRawPanelItem,
+      liveRawPanelItemIsSupportedAttachment:
+        isSupportedContextAttachment(liveRawPanelItem),
+    });
+  };
+
+  const resolveAutoLoadedContextSourceItemSync = (
+    panelItemOverride?: Zotero.Item | null,
+  ): Zotero.Item | null => {
     if (!item) return null;
     const noteSession = resolveCurrentNoteSession();
     if (noteSession?.noteKind === "standalone") return null;
@@ -2115,19 +2385,109 @@ export function setupHandlers(
       if (!parentItem) return null;
       const activeReaderAttachment = getActiveContextAttachmentFromTabs();
       if (activeReaderAttachment?.parentID === parentItem.id) {
-        return (
-          resolvePaperContextRefFromAttachment(activeReaderAttachment) ||
-          resolvePaperContextRefFromItem(parentItem)
-        );
+        return activeReaderAttachment;
       }
-      return resolvePaperContextRefFromItem(parentItem);
+      return null;
     }
     if (isGlobalMode()) return null;
-    const contextSource = resolveContextSourceItem(rawPanelItem || item);
-    return (
-      resolvePaperContextRefFromAttachment(contextSource.contextItem) ||
-      resolvePaperContextRefFromItem(resolveCurrentPaperBaseItem())
+    const sourceItem =
+      panelItemOverride === undefined
+        ? resolveAutoLoadedContextPanelItem()
+        : panelItemOverride;
+    const activeReaderAttachment = getActiveContextAttachmentFromTabs();
+    if (activeReaderAttachment) return activeReaderAttachment;
+    if (
+      sourceItem?.isAttachment?.() &&
+      resolvePaperContextRefFromAttachment(sourceItem)
+    ) {
+      return sourceItem;
+    }
+    return null;
+  };
+
+  const resolveAutoLoadedPaperContext = (): PaperContextRef | null => {
+    if (isGlobalMode()) {
+      panelRoot.dataset.contextItemId = "";
+      return null;
+    }
+    if (autoLoadedPaperContextSnapshot !== undefined) {
+      if (isAutoLoadedContextSnapshotCurrent()) {
+        writeAutoLoadedContextItemId(
+          autoLoadedContextSourceItemSnapshot ?? null,
+          autoLoadedPaperContextSnapshot,
+        );
+        return autoLoadedPaperContextSnapshot;
+      }
+      clearAutoLoadedContextSnapshot();
+    }
+    return resolvePaperContextRefFromAttachment(
+      resolveAutoLoadedContextSourceItemSync(),
     );
+  };
+
+  const resolveAutoLoadedPaperContextAsync =
+    async (): Promise<PaperContextRef | null> => {
+      if (!item) return null;
+      if (isGlobalMode()) {
+        panelRoot.dataset.contextItemId = "";
+        return null;
+      }
+      if (autoLoadedPaperContextSnapshot !== undefined) {
+        if (isAutoLoadedContextSnapshotCurrent()) {
+          writeAutoLoadedContextItemId(
+            autoLoadedContextSourceItemSnapshot ?? null,
+            autoLoadedPaperContextSnapshot,
+          );
+          return autoLoadedPaperContextSnapshot;
+        }
+        clearAutoLoadedContextSnapshot();
+      }
+      if (autoLoadedPaperContextPromise) return autoLoadedPaperContextPromise;
+      const requestGeneration = autoLoadedPaperContextGeneration;
+      autoLoadedPaperContextPromise = (async () => {
+        const panelItem = resolveAutoLoadedContextPanelItem();
+        if (!panelItem) return null;
+        const contextSource = await resolveContextSourceItemAsync(panelItem);
+        const contextSourceItem = contextSource.contextItem;
+        const paperContext =
+          resolvePaperContextRefFromAttachment(contextSourceItem);
+        if (
+          panelRoot.dataset.handlersAttached === thisGen &&
+          requestGeneration === autoLoadedPaperContextGeneration
+        ) {
+          setAutoLoadedContextSnapshot(
+            contextSourceItem,
+            paperContext,
+            panelItem,
+          );
+        }
+        return paperContext;
+      })();
+      try {
+        return await autoLoadedPaperContextPromise;
+      } finally {
+        autoLoadedPaperContextPromise = null;
+      }
+    };
+
+  const resolveAutoLoadedContextSourceItemAsync =
+    async (): Promise<Zotero.Item | null> => {
+      await resolveAutoLoadedPaperContextAsync();
+      return autoLoadedContextSourceItemSnapshot ?? null;
+    };
+
+  const refreshAutoLoadedPaperContextForCurrentItem = () => {
+    clearAutoLoadedContextSnapshot();
+    if (!item || isGlobalMode()) return;
+    const panelItem = resolveAutoLoadedContextPanelItem();
+    const contextSourceItem = resolveAutoLoadedContextSourceItemSync(panelItem);
+    const paperContext =
+      resolvePaperContextRefFromAttachment(contextSourceItem);
+    if (paperContext) {
+      setAutoLoadedContextSnapshot(contextSourceItem, paperContext, panelItem);
+      return;
+    }
+    void resolveAutoLoadedPaperContextAsync();
   };
 
   let paperChipMenu: HTMLDivElement | null = null;
@@ -2135,6 +2495,7 @@ export function setupHandlers(
   let paperChipMenuSticky = false;
   let paperChipMenuTarget: PaperContextRef | null = null;
   let paperChipMenuHideTimer: number | null = null;
+  let refreshOpenPaperChipMenu = () => {};
   const clearPaperChipMenuHideTimer = () => {
     if (paperChipMenuHideTimer === null) return;
     const win = body.ownerDocument?.defaultView;
@@ -2152,36 +2513,370 @@ export function setupHandlers(
     if (paperChipMenu) {
       paperChipMenu.style.display = "none";
     }
+    paperChipMenuAnchor?.classList.remove("llm-paper-context-chip-menu-open");
     paperChipMenuAnchor = null;
     paperChipMenuTarget = null;
     paperChipMenuSticky = false;
   };
   const buildPaperMetaText = (paper: {
-    citationKey?: string;
     firstCreator?: string;
     year?: string;
   }): string => {
-    const parts = [
-      paper.firstCreator || "",
-      paper.year || "",
-      paper.citationKey || "",
-    ].filter(Boolean);
+    const parts = [paper.firstCreator || "", paper.year || ""].filter(Boolean);
     return parts.join(" · ");
   };
+
+  type PaperSourceOption = {
+    mode: PaperContentSourceMode;
+    badge: string;
+    paperContext: PaperContextRef;
+    title: string;
+    description: string;
+    disabledReason?: string;
+    mineruState?: MineruSourceUiState;
+    mineruAction?: MineruSourceAction;
+    mineruActionTitle?: string;
+    hideTextSource?: boolean;
+  };
+
+  const getAttachmentFilename = (attachment: Zotero.Item): string =>
+    sanitizeText(
+      String(
+        (attachment as unknown as { attachmentFilename?: unknown })
+          .attachmentFilename || "",
+      ),
+    ).trim();
+
+  const getAttachmentCardTitle = (attachment: Zotero.Item): string =>
+    sanitizeText(
+      String(
+        attachment.getField("title") ||
+          getAttachmentFilename(attachment) ||
+          `Attachment ${attachment.id}`,
+      ),
+    ).trim();
+
+  const resolveParentItemForSourcePicker = (
+    paperContext: PaperContextRef,
+  ): Zotero.Item | null => {
+    const parent = Zotero.Items.get(paperContext.itemId) || null;
+    if (parent?.isRegularItem?.()) return parent;
+    const attachment = Zotero.Items.get(paperContext.contextItemId) || null;
+    if (attachment?.isAttachment?.() && attachment.parentID) {
+      const attachmentParent = Zotero.Items.get(attachment.parentID) || null;
+      if (attachmentParent?.isRegularItem?.()) return attachmentParent;
+    }
+    return null;
+  };
+
+  const buildPaperContextForChildAttachment = (
+    parentItem: Zotero.Item,
+    attachment: Zotero.Item,
+    mode: PaperContentSourceMode,
+  ): PaperContextRef | null => {
+    const normalizedParentId = Math.floor(Number(parentItem.id));
+    const normalizedAttachmentId = Math.floor(Number(attachment.id));
+    if (
+      !Number.isFinite(normalizedParentId) ||
+      normalizedParentId <= 0 ||
+      !Number.isFinite(normalizedAttachmentId) ||
+      normalizedAttachmentId <= 0
+    ) {
+      return null;
+    }
+    const title = sanitizeText(
+      String(parentItem.getField("title") || `Paper ${normalizedParentId}`),
+    ).trim();
+    const firstCreator = sanitizeText(
+      String(
+        parentItem.getField("firstCreator") ||
+          (parentItem as Zotero.Item).firstCreator ||
+          "",
+      ),
+    ).trim();
+    const year = sanitizeText(
+      String(
+        parentItem.getField("year") ||
+          parentItem.getField("date") ||
+          parentItem.getField("issued") ||
+          "",
+      ),
+    ).trim();
+    const citationKey = sanitizeText(
+      String(parentItem.getField("citationKey") || ""),
+    ).trim();
+    return {
+      itemId: normalizedParentId,
+      contextItemId: normalizedAttachmentId,
+      contentSourceMode: mode,
+      title: title || `Paper ${normalizedParentId}`,
+      attachmentTitle: getAttachmentCardTitle(attachment) || undefined,
+      citationKey: citationKey || undefined,
+      firstCreator: firstCreator || undefined,
+      year: year || undefined,
+    };
+  };
+
+  const resolveCurrentPdfSupport = () => {
+    const selectedProfile = getSelectedProfile();
+    const modelName = (
+      selectedProfile?.model ||
+      getSelectedModelInfo().currentModel ||
+      ""
+    ).trim();
+    return getModelPdfSupport(
+      modelName,
+      selectedProfile?.providerProtocol,
+      selectedProfile?.authMode,
+      selectedProfile?.apiBase,
+    );
+  };
+
+  const getMineruSourceDescription = (
+    attachmentTitle: string,
+    state: MineruSourceUiState,
+    disabledReason?: string,
+  ): string => {
+    if (disabledReason) {
+      return `${attachmentTitle} · ${disabledReason}`;
+    }
+    if (state === "processing") {
+      return `${attachmentTitle} · ${t("MinerU parsing…")}`;
+    }
+    if (state === "failed") {
+      return `${attachmentTitle} · ${t("MinerU parsing failed. Click to retry")}`;
+    }
+    if (state === "idle") {
+      return `${attachmentTitle} · ${t("Click to do MinerU parsing")}`;
+    }
+    return `${attachmentTitle} · MinerU`;
+  };
+
+  const getMineruDisabledParsingMessage = (): string =>
+    t("⚠️ enable MinerU to start PDF parsing");
+
+  const shouldDisableMineruParsingAction = (
+    action?: MineruSourceAction,
+  ): boolean => {
+    return !isMineruEnabled() && (action === "start" || action === "retry");
+  };
+
+  const getMineruActionTitle = (
+    state: MineruSourceUiState,
+    disabledReason?: string,
+  ): string => {
+    if (disabledReason) return disabledReason;
+    if (state === "processing") return t("Click to stop MinerU parsing");
+    if (state === "failed") return t("MinerU parsing failed. Click to retry");
+    if (state === "idle" && !isMineruEnabled()) {
+      return getMineruDisabledParsingMessage();
+    }
+    if (state === "idle") return t("Click to do MinerU parsing");
+    return "MinerU";
+  };
+
+  const resolveMineruOptionState = (
+    paperContext: PaperContextRef,
+  ): ReturnType<typeof resolveMineruSourceOptionState> => {
+    const itemStatus = getItemStatus(paperContext.contextItemId);
+    const hasUsableMineru =
+      mineruAvailableIds.has(paperContext.contextItemId) ||
+      itemStatus?.status === "cached" ||
+      isPaperContextMineru(paperContext);
+    const state = resolveMineruSourceOptionState({
+      hasUsableMineru,
+      itemStatus,
+    });
+    if (state.hideTextSource) {
+      mineruAvailableIds.add(paperContext.contextItemId);
+    }
+    return state;
+  };
+
+  const buildPaperSourceOptions = (
+    paperContext: PaperContextRef,
+  ): PaperSourceOption[] => {
+    const parentItem = resolveParentItemForSourcePicker(paperContext);
+    if (!parentItem) {
+      const fallbackMode = paperContext.contentSourceMode || "text";
+      return [
+        {
+          mode: fallbackMode,
+          badge:
+            fallbackMode === "mineru"
+              ? "MD"
+              : fallbackMode === "pdf"
+                ? "PDF"
+                : "Text",
+          paperContext: { ...paperContext, contentSourceMode: fallbackMode },
+          title: paperContext.title,
+          description: formatPaperContextCardAttachmentLine(
+            paperContext,
+            fallbackMode,
+          ),
+        },
+      ];
+    }
+
+    const pdfSupport = resolveCurrentPdfSupport();
+    const attachmentIds = parentItem.getAttachments?.() || [];
+    const options: PaperSourceOption[] = [];
+    for (const attachmentId of attachmentIds) {
+      const attachment = Zotero.Items.get(attachmentId) || null;
+      if (!attachment?.isAttachment?.()) continue;
+      const attachmentTitle = getAttachmentCardTitle(attachment);
+      const attachmentSupport = resolveContextAttachmentSupport(attachment);
+      if (attachmentSupport?.kind === "pdf") {
+        const baseContext = buildPaperContextForChildAttachment(
+          parentItem,
+          attachment,
+          "text",
+        );
+        if (!baseContext) continue;
+        const mineruOptionState = resolveMineruOptionState(baseContext);
+        const mineruDisabledReason = shouldDisableMineruParsingAction(
+          mineruOptionState.action,
+        )
+          ? getMineruDisabledParsingMessage()
+          : undefined;
+        options.push({
+          mode: "mineru",
+          badge: "MD",
+          paperContext: { ...baseContext, contentSourceMode: "mineru" },
+          title: baseContext.title,
+          description: getMineruSourceDescription(
+            attachmentTitle,
+            mineruOptionState.state,
+            mineruDisabledReason,
+          ),
+          disabledReason: mineruDisabledReason,
+          mineruState: mineruOptionState.state,
+          mineruAction: mineruOptionState.action,
+          mineruActionTitle: getMineruActionTitle(
+            mineruOptionState.state,
+            mineruDisabledReason,
+          ),
+          hideTextSource: mineruOptionState.hideTextSource,
+        });
+        if (!mineruOptionState.hideTextSource) {
+          options.push({
+            mode: "text",
+            badge: "Text",
+            paperContext: { ...baseContext, contentSourceMode: "text" },
+            title: baseContext.title,
+            description: `${attachmentTitle} · extracted text`,
+          });
+        }
+        options.push({
+          mode: "pdf",
+          badge: "PDF",
+          paperContext: { ...baseContext, contentSourceMode: "pdf" },
+          title: baseContext.title,
+          description: `${attachmentTitle} · PDF`,
+          disabledReason:
+            pdfSupport === "native" || isWebChatMode()
+              ? undefined
+              : FULL_PDF_UNSUPPORTED_MESSAGE,
+        });
+        continue;
+      }
+      if (attachmentSupport?.kind !== "text") continue;
+      const textSourceMode = attachmentSupport.contentSourceMode;
+      const context = buildPaperContextForChildAttachment(
+        parentItem,
+        attachment,
+        textSourceMode,
+      );
+      if (!context) continue;
+      const badge =
+        textSourceMode === "markdown"
+          ? "MD"
+          : textSourceMode === "html"
+            ? "HTML"
+            : textSourceMode === "txt"
+              ? "TXT"
+              : "DOCX";
+      const label =
+        textSourceMode === "markdown"
+          ? "Markdown attachment"
+          : textSourceMode === "html"
+            ? "HTML attachment"
+            : textSourceMode === "txt"
+              ? "TXT attachment"
+              : "Word attachment";
+      options.push({
+        mode: textSourceMode,
+        badge,
+        paperContext: { ...context, contentSourceMode: textSourceMode },
+        title: attachmentTitle,
+        description: `${attachmentTitle} · ${label}`,
+      });
+    }
+    return options;
+  };
+
+  const paperSourceClassName = (mode?: PaperContentSourceMode): string => {
+    if (mode === "mineru" || mode === "markdown") {
+      return "llm-paper-context-chip-mineru";
+    }
+    if (mode === "pdf") return "llm-paper-context-chip-pdf";
+    if (mode === "html") return "llm-paper-context-chip-html";
+    return "llm-paper-context-chip-text";
+  };
+
   const buildPaperChipMenuCard = (
     ownerDoc: Document,
     paperContext: PaperContextRef,
-    options?: { contentSourceMode?: PaperContentSourceMode },
+    options?: {
+      contentSourceMode?: PaperContentSourceMode;
+      badge?: string;
+      title?: string;
+      description?: string;
+      disabledReason?: string;
+      selected?: boolean;
+      sourceOption?: boolean;
+      mineruState?: MineruSourceUiState;
+      mineruAction?: MineruSourceAction;
+      mineruActionTitle?: string;
+    },
   ): HTMLButtonElement => {
     const card = createElement(
       ownerDoc,
       "button",
-      "llm-paper-picker-item llm-paper-picker-group-row llm-paper-chip-menu-row",
+      `llm-paper-picker-item llm-paper-picker-group-row llm-paper-chip-menu-row ${paperSourceClassName(options?.contentSourceMode)}`,
       {
         type: "button",
-        title: `Jump to ${paperContext.title}`,
+        title: options?.sourceOption
+          ? options.description || options.title || paperContext.title
+          : `Jump to ${paperContext.title}`,
       },
     ) as HTMLButtonElement;
+    if (options?.sourceOption) {
+      card.dataset.sourceMode = options.contentSourceMode || "";
+      card.dataset.contextItemId = `${paperContext.contextItemId}`;
+      card.dataset.paperItemId = `${paperContext.itemId}`;
+    }
+    if (options?.mineruState) {
+      card.dataset.mineruState = options.mineruState;
+      card.classList.add(
+        `llm-paper-chip-menu-row-mineru-${options.mineruState}`,
+      );
+      if (options.mineruAction && options.mineruAction !== "select") {
+        card.dataset.mineruAction = options.mineruAction;
+      }
+      if (options.mineruActionTitle) {
+        card.title = options.mineruActionTitle;
+      }
+    }
+    if (options?.disabledReason) {
+      card.disabled = true;
+      card.setAttribute("aria-disabled", "true");
+      card.classList.add("llm-paper-chip-menu-row-disabled");
+      card.title = options.disabledReason;
+    }
+    if (options?.selected) {
+      card.setAttribute("aria-selected", "true");
+    }
     const rowMain = createElement(
       ownerDoc,
       "div",
@@ -2193,28 +2888,37 @@ export function setupHandlers(
       "llm-paper-picker-group-title-line",
     );
     const title = createElement(ownerDoc, "span", "llm-paper-picker-title", {
-      textContent: paperContext.title,
-      title: paperContext.title,
+      textContent: options?.title || paperContext.title,
+      title: options?.title || paperContext.title,
     });
     titleLine.appendChild(title);
     const mode = options?.contentSourceMode;
     const badgeText =
-      mode === "mineru"
+      options?.badge ||
+      (mode === "mineru" || mode === "markdown"
         ? "MD"
         : mode === "pdf"
           ? "PDF"
           : mode === "text"
             ? "Text"
-            : null;
+            : mode === "html"
+              ? "HTML"
+              : mode === "txt"
+                ? "TXT"
+                : mode === "docx"
+                  ? "DOCX"
+                  : null);
     if (badgeText) {
-      titleLine.appendChild(
-        createElement(ownerDoc, "span", "llm-paper-picker-badge", {
-          textContent: badgeText,
-        }),
-      );
+      const badge = createElement(ownerDoc, "span", "llm-paper-picker-badge", {
+        textContent: badgeText,
+        title: options?.mineruActionTitle,
+      });
+      titleLine.appendChild(badge);
     }
     rowMain.appendChild(titleLine);
-    const metaText = buildPaperMetaText(paperContext);
+    const metaText = isTextLikeAttachmentSourceMode(mode)
+      ? ""
+      : buildPaperMetaText(paperContext);
     if (metaText) {
       rowMain.appendChild(
         createElement(ownerDoc, "span", "llm-paper-picker-meta", {
@@ -2223,10 +2927,13 @@ export function setupHandlers(
         }),
       );
     }
-    const displayAttachmentText = formatPaperContextCardAttachmentLine(
-      paperContext,
-      mode,
-    );
+    const displayAttachmentText =
+      options?.description ||
+      formatPaperContextCardAttachmentLine(paperContext, mode);
+    const disabledReasonAlreadyShown =
+      !!options?.disabledReason &&
+      (displayAttachmentText === options.disabledReason ||
+        displayAttachmentText.endsWith(`· ${options.disabledReason}`));
     if (displayAttachmentText) {
       rowMain.appendChild(
         createElement(
@@ -2240,9 +2947,144 @@ export function setupHandlers(
         ),
       );
     }
+    if (options?.disabledReason && !disabledReasonAlreadyShown) {
+      rowMain.appendChild(
+        createElement(
+          ownerDoc,
+          "span",
+          "llm-paper-picker-meta llm-paper-chip-disabled-reason",
+          {
+            textContent: options.disabledReason,
+            title: options.disabledReason,
+          },
+        ),
+      );
+    }
     card.appendChild(rowMain);
     return card;
   };
+
+  const upgradePaperContextsToMineruForAttachment = (
+    contextItemId: number,
+  ): boolean => {
+    if (!item || !Number.isFinite(contextItemId) || contextItemId <= 0) {
+      return false;
+    }
+    const currentItem = item;
+    let didUpgrade = false;
+    const autoLoadedPaperContext = resolveAutoLoadedPaperContext();
+
+    if (autoLoadedPaperContext?.contextItemId === contextItemId) {
+      const currentMode = resolvePaperContentSourceMode(
+        currentItem.id,
+        autoLoadedPaperContext,
+      );
+      if (currentMode !== "pdf" && currentMode !== "mineru") {
+        setPaperContentSourceOverride(
+          currentItem.id,
+          autoLoadedPaperContext,
+          "mineru",
+        );
+        didUpgrade = true;
+      }
+    }
+
+    const selectedPapers = getManualPaperContextsForItem(
+      currentItem.id,
+      autoLoadedPaperContext,
+    );
+    if (!selectedPapers.length) return didUpgrade;
+
+    const nextPapers = selectedPapers.map((paperContext) => {
+      if (paperContext.contextItemId !== contextItemId) return paperContext;
+      const currentMode = resolvePaperContentSourceMode(
+        currentItem.id,
+        paperContext,
+      );
+      if (currentMode === "pdf" || currentMode === "mineru") {
+        return paperContext;
+      }
+      didUpgrade = true;
+      const nextContext: PaperContextRef = {
+        ...paperContext,
+        contentSourceMode: "mineru",
+      };
+      setPaperContentSourceOverride(currentItem.id, nextContext, "mineru");
+      return nextContext;
+    });
+
+    if (didUpgrade) {
+      selectedPaperContextCache.set(currentItem.id, nextPapers);
+    }
+    return didUpgrade;
+  };
+
+  const syncMineruPaperSourceState = (): void => {
+    if (!item) return;
+    const autoLoadedPaperContext = resolveAutoLoadedPaperContext();
+    const selectedPapers = getManualPaperContextsForItem(
+      item.id,
+      autoLoadedPaperContext,
+    );
+    const paperContexts = [
+      ...(autoLoadedPaperContext ? [autoLoadedPaperContext] : []),
+      ...selectedPapers,
+    ];
+    let didRefresh = false;
+    for (const paperContext of paperContexts) {
+      const status = getItemStatus(paperContext.contextItemId);
+      if (status?.status !== "cached") continue;
+      mineruAvailableIds.add(paperContext.contextItemId);
+      if (
+        upgradePaperContextsToMineruForAttachment(paperContext.contextItemId)
+      ) {
+        didRefresh = true;
+      }
+    }
+    if (didRefresh) {
+      updatePaperPreviewPreservingScroll();
+    }
+  };
+
+  const handleMineruSourceAction = async (
+    sourceOption: PaperSourceOption,
+  ): Promise<void> => {
+    const action = sourceOption.mineruAction;
+    if (!action || action === "select") return;
+    const attachmentId = sourceOption.paperContext.contextItemId;
+
+    if (action === "pause") {
+      const batchState = getMineruBatchState();
+      if (batchState.running && !batchState.paused) {
+        pauseBatchProcessing();
+      } else {
+        const autoWatchStatus = getAutoWatchStatus();
+        if (autoWatchStatus.isProcessing && !autoWatchStatus.isPaused) {
+          pauseAutoWatch();
+        }
+      }
+      if (status) setStatus(status, t("Click to do MinerU parsing"), "ready");
+      return;
+    }
+
+    if (!isMineruEnabled()) {
+      if (status) {
+        setStatus(status, getMineruDisabledParsingMessage(), "warning");
+      }
+      return;
+    }
+
+    const batchState = getMineruBatchState();
+    if (batchState.running) {
+      if (status) setStatus(status, t("MinerU parsing…"), "warning");
+      return;
+    }
+
+    if (status) setStatus(status, t("MinerU parsing…"), "ready");
+    await processSelectedItems([attachmentId], { overrideEligibility: true });
+    refreshOpenPaperChipMenu();
+  };
+
   const ensurePaperChipMenu = (): HTMLDivElement | null => {
     if (paperChipMenu?.isConnected) return paperChipMenu;
     const ownerDoc = body.ownerDocument;
@@ -2278,18 +3120,66 @@ export function setupHandlers(
       if (!card || !paperChipMenuTarget) return;
       e.preventDefault();
       e.stopPropagation();
-      void focusPaperContextInActiveTab(paperChipMenuTarget)
-        .then((focused) => {
-          if (!focused && status) {
-            setStatus(status, t("Could not focus this paper"), "error");
-          }
-        })
-        .catch((err) => {
-          ztoolkit.log("LLM: Failed to focus paper context from menu", err);
-          if (status) {
-            setStatus(status, t("Could not focus this paper"), "error");
-          }
-        });
+      if (card.disabled || card.getAttribute("aria-disabled") === "true") {
+        if (status && card.title) setStatus(status, card.title, "error");
+        return;
+      }
+      const mode = card.dataset.sourceMode as PaperContentSourceMode | "";
+      const contextItemId = Number.parseInt(
+        card.dataset.contextItemId || "",
+        10,
+      );
+      const paperItemId = Number.parseInt(card.dataset.paperItemId || "", 10);
+      if (!mode || !Number.isFinite(contextItemId) || contextItemId <= 0) {
+        return;
+      }
+      const option = buildPaperSourceOptions(paperChipMenuTarget).find(
+        (candidate) =>
+          candidate.mode === mode &&
+          candidate.paperContext.contextItemId === contextItemId &&
+          candidate.paperContext.itemId === paperItemId,
+      );
+      if (!option || option.disabledReason) {
+        if (status && option?.disabledReason) {
+          setStatus(status, option.disabledReason, "error");
+        }
+        return;
+      }
+      if (option.mineruAction && option.mineruAction !== "select") {
+        void handleMineruSourceAction(option);
+        return;
+      }
+      const currentItem = item;
+      if (!currentItem) return;
+      const selectedContext = option.paperContext;
+      if (paperChipMenuAnchor?.dataset.autoLoaded === "true") {
+        const contextItem =
+          Zotero.Items.get(selectedContext.contextItemId) || null;
+        setAutoLoadedContextSnapshot(contextItem, selectedContext);
+      } else {
+        const selectedPapers = getManualPaperContextsForItem(
+          currentItem.id,
+          resolveAutoLoadedPaperContext(),
+        );
+        const currentIndex = selectedPapers.findIndex(
+          (paper) =>
+            paper.itemId === paperChipMenuTarget?.itemId &&
+            paper.contextItemId === paperChipMenuTarget?.contextItemId,
+        );
+        const nextPapers =
+          currentIndex >= 0
+            ? selectedPapers.map((paper, index) =>
+                index === currentIndex ? selectedContext : paper,
+              )
+            : [...selectedPapers, selectedContext];
+        selectedPaperContextCache.set(currentItem.id, nextPapers);
+      }
+      setPaperContentSourceOverride(currentItem.id, selectedContext, mode);
+      closePaperChipMenu();
+      updatePaperPreviewPreservingScroll();
+      if (status) {
+        setStatus(status, `${t("Content source:")} ${option.badge}`, "ready");
+      }
     });
     body.appendChild(menu);
     paperChipMenu = menu;
@@ -2363,22 +3253,74 @@ export function setupHandlers(
     paperContext: PaperContextRef,
     options?: { sticky?: boolean },
   ) => {
-    const menu = ensurePaperChipMenu();
     const ownerDoc = body.ownerDocument;
-    if (!menu || !ownerDoc) return;
+    if (!ownerDoc) return;
+    const currentMode =
+      (chip.dataset.contentSource as PaperContentSourceMode) ||
+      paperContext.contentSourceMode ||
+      "text";
+    const sourceOptions = buildPaperSourceOptions(paperContext);
+    if (!hasPaperChipSourceMenuOption(sourceOptions)) {
+      closePaperChipMenu();
+      return;
+    }
+    const menu = ensurePaperChipMenu();
+    if (!menu) return;
     clearPaperChipMenuHideTimer();
+    if (paperChipMenuAnchor && paperChipMenuAnchor !== chip) {
+      paperChipMenuAnchor.classList.remove("llm-paper-context-chip-menu-open");
+    }
     paperChipMenuAnchor = chip;
+    chip.classList.add("llm-paper-context-chip-menu-open");
+    chip.classList.remove("expanded");
+    chip.classList.add("collapsed");
+    if (item) {
+      selectedPaperPreviewExpandedCache.delete(item.id);
+    }
     paperChipMenuSticky = options?.sticky === true;
     paperChipMenuTarget = paperContext;
     menu.innerHTML = "";
-    menu.appendChild(
-      buildPaperChipMenuCard(ownerDoc, paperContext, {
-        contentSourceMode:
-          (chip.dataset.contentSource as PaperContentSourceMode) || "text",
-      }),
-    );
+    for (const sourceOption of sourceOptions) {
+      menu.appendChild(
+        buildPaperChipMenuCard(ownerDoc, sourceOption.paperContext, {
+          contentSourceMode: sourceOption.mode,
+          badge: sourceOption.badge,
+          title: sourceOption.title,
+          description: sourceOption.description,
+          disabledReason: sourceOption.disabledReason,
+          mineruState: sourceOption.mineruState,
+          mineruAction: sourceOption.mineruAction,
+          mineruActionTitle: sourceOption.mineruActionTitle,
+          selected:
+            sourceOption.mode === currentMode &&
+            sourceOption.paperContext.contextItemId ===
+              paperContext.contextItemId,
+          sourceOption: true,
+        }),
+      );
+    }
+    if (!menu.childElementCount) {
+      menu.appendChild(
+        buildPaperChipMenuCard(ownerDoc, paperContext, {
+          contentSourceMode: currentMode,
+        }),
+      );
+    }
     positionPaperChipMenuAboveAnchor(menu, chip);
     menu.style.display = "grid";
+  };
+  refreshOpenPaperChipMenu = () => {
+    if (
+      !paperChipMenu ||
+      !paperChipMenuAnchor ||
+      !paperChipMenuTarget ||
+      paperChipMenu.style.display === "none"
+    ) {
+      return;
+    }
+    openPaperChipMenu(paperChipMenuAnchor, paperChipMenuTarget, {
+      sticky: paperChipMenuSticky,
+    });
   };
   const schedulePaperChipMenuClose = () => {
     if (paperChipMenuSticky) return;
@@ -2467,7 +3409,13 @@ export function setupHandlers(
       | undefined;
     if (pane) {
       if (typeof pane.selectItems === "function") {
-        const selected = await pane.selectItems([paperContext.itemId], true);
+        const selectItems = pane.selectItems as (
+          itemIDs: number[],
+          options?: { selectInLibrary?: boolean },
+        ) => unknown;
+        const selected = await selectItems([paperContext.itemId], {
+          selectInLibrary: true,
+        });
         if (selected !== false) return true;
       }
       if (typeof pane.selectItem === "function") {
@@ -2476,10 +3424,13 @@ export function setupHandlers(
       }
       if (paperContext.contextItemId !== paperContext.itemId) {
         if (typeof pane.selectItems === "function") {
-          const selected = await pane.selectItems(
-            [paperContext.contextItemId],
-            true,
-          );
+          const selectItems = pane.selectItems as (
+            itemIDs: number[],
+            options?: { selectInLibrary?: boolean },
+          ) => unknown;
+          const selected = await selectItems([paperContext.contextItemId], {
+            selectInLibrary: true,
+          });
           if (selected !== false) return true;
         }
         if (typeof pane.selectItem === "function") {
@@ -2506,11 +3457,18 @@ export function setupHandlers(
     const removable = options?.removable === true;
     const fullText = options?.fullText === true;
     const contentSourceMode = options?.contentSourceMode || "text";
+    const sourceOptions = buildPaperSourceOptions(paperContext);
+    const hasSourceMenu = hasPaperChipSourceMenuOption(sourceOptions);
+    const hasReaderFocus =
+      isPaperContextReaderFocusableSourceMode(contentSourceMode);
+    const isStaticChip = !hasSourceMenu && !hasReaderFocus;
     const chip = createElement(
       ownerDoc,
       "div",
       "llm-selected-context llm-paper-context-chip",
     );
+    chip.dataset.paperContextMenu = hasSourceMenu ? "true" : "false";
+    chip.classList.toggle("llm-paper-context-chip-static", isStaticChip);
     if (options?.autoLoaded) {
       chip.classList.add("llm-paper-context-chip-autoloaded");
       chip.dataset.autoLoaded = "true";
@@ -2527,12 +3485,18 @@ export function setupHandlers(
       contentSourceMode === "pdf" && (!isWebChatMode() || fullText);
     const showTextChipStyle =
       contentSourceMode === "text" ||
+      contentSourceMode === "txt" ||
+      contentSourceMode === "docx" ||
       (isWebChatMode() && contentSourceMode === "pdf" && !fullText);
     chip.classList.toggle(
       "llm-paper-context-chip-mineru",
-      contentSourceMode === "mineru",
+      contentSourceMode === "mineru" || contentSourceMode === "markdown",
     );
     chip.classList.toggle("llm-paper-context-chip-pdf", showPdfChipStyle);
+    chip.classList.toggle(
+      "llm-paper-context-chip-html",
+      contentSourceMode === "html",
+    );
     chip.classList.toggle("llm-paper-context-chip-text", showTextChipStyle);
     chip.classList.add("collapsed");
 
@@ -2546,13 +3510,26 @@ export function setupHandlers(
       "span",
       "llm-paper-context-chip-label",
       {
+        title: formatPaperContextChipTitle(paperContext, contentSourceMode),
+      },
+    );
+    const chipIcon = createContextIcon(
+      ownerDoc,
+      "paper",
+      "llm-paper-context-chip-icon",
+    );
+    const chipText = createElement(
+      ownerDoc,
+      "span",
+      "llm-paper-context-chip-text",
+      {
         textContent: formatPaperContextChipLabel(
           paperContext,
           contentSourceMode,
         ),
-        title: formatPaperContextChipTitle(paperContext, contentSourceMode),
       },
     );
+    chipLabel.append(chipIcon, chipText);
     chipHeader.append(chipLabel);
 
     if (removable) {
@@ -2580,7 +3557,8 @@ export function setupHandlers(
     chipExpanded.appendChild(
       buildPaperChipMenuCard(ownerDoc, paperContext, { contentSourceMode }),
     );
-    chip.append(chipExpanded, chipHeader);
+    chip.append(chipExpanded);
+    chip.append(chipHeader);
 
     // Restore expanded (sticky) state after re-render
     const currentExpandedId = item
@@ -2611,7 +3589,6 @@ export function setupHandlers(
     chip.dataset.otherRefIndex = `${removableIndex}`;
     chip.classList.add("collapsed");
 
-    const icon = ref.refKind === "figure" ? "🖼" : "📎";
     const chipHeader = createElement(
       ownerDoc,
       "div",
@@ -2622,10 +3599,21 @@ export function setupHandlers(
       "span",
       "llm-other-ref-chip-label",
       {
-        textContent: `${icon} ${ref.title}`,
         title: `${ref.refKind === "figure" ? "Figure" : "File"}: ${ref.title}`,
       },
     );
+    const chipIcon = createContextIcon(
+      ownerDoc,
+      ref.refKind === "figure" ? "image" : "file",
+      "llm-other-ref-chip-icon",
+    );
+    const chipTitle = createElement(
+      ownerDoc,
+      "span",
+      "llm-other-ref-chip-title",
+      { textContent: ref.title },
+    );
+    chipLabel.append(chipIcon, chipTitle);
     const removeBtn = createElement(
       ownerDoc,
       "button",
@@ -2668,10 +3656,21 @@ export function setupHandlers(
       "span",
       "llm-collection-chip-label",
       {
-        textContent: `\u{1F5C2}\uFE0F ${ref.name}`,
         title: `Collection: ${ref.name}`,
       },
     );
+    const chipIcon = createContextIcon(
+      ownerDoc,
+      "collection",
+      "llm-collection-chip-icon",
+    );
+    const chipTitle = createElement(
+      ownerDoc,
+      "span",
+      "llm-collection-chip-title",
+      { textContent: ref.name },
+    );
+    chipLabel.append(chipIcon, chipTitle);
     const removeBtn = createElement(
       ownerDoc,
       "button",
@@ -3090,6 +4089,7 @@ export function setupHandlers(
   const updatePaperPreviewPreservingScroll = () => {
     schedulePanelStateRefresh();
   };
+  requestAutoLoadedPaperContextRefresh = updatePaperPreviewPreservingScroll;
   const updateFilePreviewPreservingScroll = () => {
     schedulePanelStateRefresh();
   };
@@ -3099,6 +4099,20 @@ export function setupHandlers(
   const updateSelectedTextPreviewPreservingScroll = () => {
     schedulePanelStateRefresh();
   };
+  cleanupMineruPaperSourceObservers = (() => {
+    const unsubscribeProcessing = onProcessingStatusChange(() => {
+      syncMineruPaperSourceState();
+      updatePaperPreviewPreservingScroll();
+      refreshOpenPaperChipMenu();
+    });
+    const unsubscribeBatch = onBatchStateChange(() => {
+      refreshOpenPaperChipMenu();
+    });
+    return () => {
+      unsubscribeProcessing();
+      unsubscribeBatch();
+    };
+  })();
   const refreshChatPreservingScroll = () => {
     if (!item) {
       runWithChatScrollGuard(() => {
@@ -3114,16 +4128,6 @@ export function setupHandlers(
     updateFilePreviewPreservingScroll();
     updateImagePreviewPreservingScroll();
     updateSelectedTextPreviewPreservingScroll();
-  };
-
-  const clearAgentConversationState = async (conversationKey: number) => {
-    await Promise.all([
-      clearAgentMemory(conversationKey),
-      clearAgentTranscript(conversationKey),
-      clearPersistedAgentEvidence(conversationKey),
-      clearPersistedAgentCoverage(conversationKey),
-    ]);
-    clearAgentResourceLifecycleState(conversationKey);
   };
 
   const historyLifecycleController = createHistoryLifecycleController({
@@ -3166,6 +4170,7 @@ export function setupHandlers(
     resolveCurrentPaperBaseItem,
     getManualPaperContextsForItem,
     resolveAutoLoadedPaperContext,
+    refreshAutoLoadedPaperContextForCurrentItem,
     persistDraftInputForCurrentConversation,
     restoreDraftInputForCurrentConversation,
     syncConversationIdentity,
@@ -3209,7 +4214,7 @@ export function setupHandlers(
     setActiveEditSession: (value) => {
       activeEditSession = value;
     },
-    getCoreAgentRuntime,
+    getCoreAgentRuntime: initAgentSubsystem,
     clearAgentToolCaches: clearAllAgentToolCaches,
     clearAgentConversationState,
     setStatusMessage: status
@@ -3469,7 +4474,7 @@ export function setupHandlers(
                 setStatus(
                   status,
                   t(
-                    "Full PDF mode is only available for native PDF providers. Switched to Text/MinerU mode.",
+                    "Your current model provider doesn't support direct PDF upload.",
                   ),
                   "warning",
                 );
@@ -4271,6 +5276,19 @@ export function setupHandlers(
     }
   };
 
+  (body as any).__llmRefreshContextSourceForCurrentItem = () => {
+    withScrollGuard(chatBox, conversationKey, () => {
+      refreshAutoLoadedPaperContextForCurrentItem();
+      updatePaperPreviewPreservingScroll();
+      syncModelFromPrefs();
+      flushResponsiveLayoutSyncNow();
+      flushPanelStateRefreshNow();
+      if (item && chatBox && !chatBox.childElementCount) {
+        refreshChat(body, item);
+      }
+    });
+  };
+
   const webChatHistoryController = createWebChatHistoryController({
     body,
     historyMenu,
@@ -4422,15 +5440,11 @@ export function setupHandlers(
     syncRequestUiForCurrentConversation();
   };
 
-  // Initialize preview state
-  updatePaperPreviewPreservingScroll();
-  updateFilePreviewPreservingScroll();
-  updateImagePreviewPreservingScroll();
-  updateSelectedTextPreviewPreservingScroll();
-  flushPanelStateRefreshNow();
+  // Initialize model and preview state.  Keep panel-state DOM refresh queued
+  // until setup-local helpers are ready, then flush once.
+  refreshAutoLoadedPaperContextForCurrentItem();
   syncModelFromPrefs();
   flushResponsiveLayoutSyncNow();
-  flushPanelStateRefreshNow();
   // Set active_target before applyWebChatModeUI so sidebar filters by the correct site
   try {
     if (isWebChatMode()) {
@@ -4446,6 +5460,8 @@ export function setupHandlers(
     /* isWebChatMode may not be ready */
   }
   applyWebChatModeUI();
+  resetComposePreviewUI();
+  flushPanelStateRefreshNow();
   // [webchat] Cold startup → show preload screen so user knows they're in webchat mode
   try {
     if (isWebChatMode()) {
@@ -4521,16 +5537,9 @@ export function setupHandlers(
   if (ResizeObserverCtor && panelRoot && modelBtn) {
     const newObservers: ResizeObserver[] = [];
     const ro = new ResizeObserverCtor(() => {
-      // Keep layout mutations on the guarded scheduler so flex-driven
-      // resize of .llm-messages doesn't corrupt the scroll snapshot.
-      withScrollGuard(
-        chatBox,
-        conversationKey,
-        () => {
-          scheduleResponsiveLayoutSync();
-        },
-        "relative",
-      );
+      // Keep layout mutations on the guarded scheduler so resize callbacks
+      // stay cheap during sidebar drags.
+      scheduleResponsiveLayoutSync();
     });
     newObservers.push(ro);
     ro.observe(panelRoot);
@@ -4540,49 +5549,10 @@ export function setupHandlers(
       const chatBoxResizeObserver = new ResizeObserverCtor(() => {
         if (!chatBox) return;
         if (!isChatViewportVisible(chatBox)) return;
-        const previous = chatBoxViewportState;
-        const current = buildChatBoxViewportState();
-        if (!current) return;
-        const viewportChanged = Boolean(
-          previous &&
-          (current.width !== previous.width ||
-            current.height !== previous.height),
-        );
-        if (viewportChanged && previous && previous.nearBottom) {
-          const targetBottom = Math.max(
-            0,
-            chatBox.scrollHeight - chatBox.clientHeight,
-          );
-          if (Math.abs(chatBox.scrollTop - targetBottom) > 1) {
-            chatBox.scrollTop = chatBox.scrollHeight;
-          }
-          captureChatBoxViewportState();
-          if (item && chatBox.childElementCount) {
-            persistChatScrollSnapshot(item, chatBox);
-          }
-          return;
+        if (!pendingChatBoxResizePreviousState) {
+          pendingChatBoxResizePreviousState = chatBoxViewportState;
         }
-        if (
-          viewportChanged &&
-          previous &&
-          !previous.nearBottom &&
-          previous.maxScrollTop > 0
-        ) {
-          const progress = Math.max(
-            0,
-            Math.min(1, previous.scrollTop / previous.maxScrollTop),
-          );
-          const targetScrollTop = Math.round(current.maxScrollTop * progress);
-          if (Math.abs(chatBox.scrollTop - targetScrollTop) > 1) {
-            chatBox.scrollTop = targetScrollTop;
-          }
-          captureChatBoxViewportState();
-          if (item && chatBox.childElementCount) {
-            persistChatScrollSnapshot(item, chatBox);
-          }
-          return;
-        }
-        chatBoxViewportState = current;
+        chatBoxViewportResizeScheduler.schedule();
       });
       newObservers.push(chatBoxResizeObserver);
       chatBoxResizeObserver.observe(chatBox);
@@ -4590,9 +5560,13 @@ export function setupHandlers(
     // Store observers on body so they can be disconnected on next
     // setupHandlers call (prevents accumulation across tab switches).
     (body as any).__llmResizeObservers = newObservers;
+    (body as any).__llmResizeSchedulers = [
+      responsiveLayoutScheduler,
+      chatBoxViewportResizeScheduler,
+    ];
   }
 
-  const getSelectedProfile = () => {
+  function getSelectedProfile() {
     if (!item) return null;
     if (isClaudeConversationSystem()) {
       return getSelectedClaudeRuntimeEntry();
@@ -4601,7 +5575,7 @@ export function setupHandlers(
       return getSelectedCodexRuntimeEntry();
     }
     return getSelectedModelEntryForItem(item.id);
-  };
+  }
 
   const getAdvancedModelParams = (
     entryId: string | undefined,
@@ -5027,7 +6001,7 @@ export function setupHandlers(
     body,
     inputBox,
     getItem: () => item,
-    getContextSourceItem: () => rawPanelItem || item,
+    resolveContextSourceItem: resolveAutoLoadedContextSourceItemAsync,
     closeSlashMenu,
     closePaperPicker,
     getSelectedTextContextEntries,
@@ -5035,6 +6009,8 @@ export function setupHandlers(
       getManualPaperContextsForItem(
         itemId,
         item && item.id === itemId ? resolveAutoLoadedPaperContext() : null,
+      ).map((paperContext) =>
+        withResolvedPaperContentSourceMode(itemId, paperContext),
       ),
     getSelectedCollectionContexts: (itemId) =>
       selectedCollectionContextCache.get(itemId) || [],
@@ -5146,6 +6122,50 @@ export function setupHandlers(
         clearPendingTurnDeletion();
       }
     },
+    validateConversationScope: async (conversationKey) => {
+      if (!item) return true;
+      const conversationSystem = resolveConversationSystemForItem(item);
+      const storageSystem = resolveConversationStorageSystem({
+        conversationKey,
+        conversationSystem,
+      });
+      const kind = resolveDisplayConversationKind(item);
+      const libraryID = Number(item.libraryID || 0);
+      if (
+        !storageSystem ||
+        !kind ||
+        !Number.isFinite(libraryID) ||
+        libraryID <= 0
+      ) {
+        return true;
+      }
+      if (kind === "global") {
+        return validateConversationScope({
+          conversationKey,
+          system: storageSystem,
+          kind: "global",
+          libraryID: Math.floor(libraryID),
+        });
+      }
+      const baseItem = resolveConversationBaseItem(item);
+      const paperItemID = Number(baseItem?.id || 0);
+      const paperLibraryID = Number(baseItem?.libraryID || libraryID);
+      if (
+        !Number.isFinite(paperItemID) ||
+        paperItemID <= 0 ||
+        !Number.isFinite(paperLibraryID) ||
+        paperLibraryID <= 0
+      ) {
+        return true;
+      }
+      return validateConversationScope({
+        conversationKey,
+        system: storageSystem,
+        kind: "paper",
+        libraryID: Math.floor(paperLibraryID),
+        paperItemID: Math.floor(paperItemID),
+      });
+    },
     clearTransientComposeStateForItem,
     resetComposePreviewUI,
     resetConversationHistory: (conversationKey) => {
@@ -5172,7 +6192,7 @@ export function setupHandlers(
             ? String(baseItem?.getField?.("title") || "").trim() || undefined
             : undefined,
       });
-      await invalidateClaudeConversationSession(getCoreAgentRuntime(), {
+      await invalidateClaudeConversationSession(await initAgentSubsystem(), {
         conversationKey,
         scope,
       });
@@ -5193,11 +6213,10 @@ export function setupHandlers(
           ? clearCodexConversation(conversationKey)
           : clearStoredConversation(conversationKey),
     resetConversationTitle: (conversationKey) =>
-      isClaudeConversationSystem()
-        ? setClaudeConversationTitle(conversationKey, "")
-        : isCodexConversationSystem()
-          ? setCodexConversationTitle(conversationKey, "")
-          : clearConversationTitle(conversationKey),
+      conversationRepository.clearCatalogTitle({
+        system: getConversationSystem(),
+        conversationKey,
+      }),
     clearOwnerAttachmentRefs,
     removeConversationAttachmentFiles,
     refreshChatPreservingScroll,
@@ -5249,6 +6268,7 @@ export function setupHandlers(
           currentItem.id,
         ),
       });
+      const contextSourceItem = await resolveAutoLoadedContextSourceItemAsync();
       const allPaperContexts = getManualPaperContextsForItem(
         currentItem.id,
         currentItem.id === item?.id ? resolveAutoLoadedPaperContext() : null,
@@ -5341,7 +6361,7 @@ export function setupHandlers(
         void editUserTurnAndRetry({
           body,
           item: currentItem,
-          contextSourceItem: rawPanelItem || currentItem,
+          contextSourceItem,
           userTimestamp: editTarget.userTimestamp,
           assistantTimestamp: editTarget.assistantTimestamp,
           newText,
@@ -5727,6 +6747,7 @@ export function setupHandlers(
     historyNewMenu,
     historyRowMenu,
     promptMenu,
+    shortcutMenu,
     paperPicker,
     getPaperChipMenu: () => paperChipMenu,
     getPaperChipMenuSticky: () => paperChipMenuSticky,
@@ -5772,15 +6793,12 @@ export function setupHandlers(
     getManualPaperContextsForItem,
     resolvePaperContentSourceMode,
     resolvePaperContextNextSendMode,
-    isPaperContextMineru,
     isWebChatMode,
-    getCurrentRuntimeMode,
-    getSelectedProfile,
-    getSelectedModelInfo,
     resolveCurrentPaperBaseItem,
     clearSelectedImageState,
     clearSelectedFileState,
     closePaperChipMenu,
+    openPaperChipMenu,
     resolvePaperContextFromChipElement,
     focusPaperContextInActiveTab,
     updatePaperPreviewPreservingScroll,
@@ -5828,7 +6846,7 @@ export function setupHandlers(
           cancelConvKey,
           getPendingRequestId(cancelConvKey),
         );
-        setPendingRequestId(cancelConvKey, 0);
+        clearPendingRequestIdAndSync(cancelConvKey, body, item);
       }
       if (status) setStatus(status, t("Cancelled"), "ready");
       // Immediately mark the last assistant message as not streaming so any
@@ -5914,10 +6932,12 @@ export function setupHandlers(
     cleanupBody.__llmQueuedFollowUpDisconnectCleanup =
       observeElementDisconnected(body, () => {
         cleanupPrefObservers?.();
+        cleanupMineruPaperSourceObservers?.();
         unregisterQueuedFollowUpBody(registeredQueuedFollowUpThreadKey, body);
         queuedFollowUpBody.__llmQueuedFollowUpRegisteredThreadKey = null;
         activeContextPanelStateSync.delete(body);
         delete (body as any).__llmApplyResolvedClaudeEffort;
+        delete (body as any).__llmRefreshContextSourceForCurrentItem;
         delete (body as any)[SCHEDULE_QUEUED_FOLLOW_UP_DRAIN_PROPERTY];
         delete (body as any)[SCHEDULE_QUEUED_FOLLOW_UP_THREAD_DRAIN_PROPERTY];
         delete (body as any).__llmScheduleClaudeQueueDrain;
@@ -5927,4 +6947,5 @@ export function setupHandlers(
         cleanupBody.__llmQueuedFollowUpCleanupRegistered = false;
       });
   }
+  panelRoot.dataset.handlersInitialized = thisGen;
 }

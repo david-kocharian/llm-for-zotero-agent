@@ -1,9 +1,11 @@
 import { AgentToolRegistry } from "./registry";
 import { PdfService } from "../services/pdfService";
 import { RetrievalService } from "../services/retrievalService";
+import { LibraryRetrieveService } from "../services/libraryRetrieveService";
 import { ZoteroGateway } from "../services/zoteroGateway";
 import { createQueryLibraryTool } from "./read/queryLibrary";
 import { createReadLibraryTool } from "./read/readLibrary";
+import { createLibraryRetrieveTool } from "./read/libraryRetrieve";
 import { createPaperReadTool } from "./read/paperRead";
 import { createReadPaperTool } from "./read/readPaper";
 import { createSearchPaperTool } from "./read/searchPaper";
@@ -11,7 +13,7 @@ import { createViewPdfPagesTool } from "./read/viewPdfPages";
 import { createReadAttachmentTool } from "./read/readAttachment";
 import { clearPdfToolCaches } from "./read/pdfToolUtils";
 import { createSearchLiteratureOnlineTool } from "./read/searchLiteratureOnline";
-import { createWebSearchTool } from "./read/webSearch";
+import { createToolResultReadTool } from "./read/toolResultRead";
 import { createDelegatingTool, createRenamedTool } from "./facade";
 
 import { createEditCurrentNoteTool } from "./write/editCurrentNote";
@@ -52,11 +54,11 @@ const LIBRARY_SEARCH_GUIDANCE: ToolGuidance = {
 
 const LITERATURE_SEARCH_GUIDANCE: ToolGuidance = {
   matches: (request) =>
-    /\b(related papers?|similar papers?|find papers?|search (the )?(internet|literature)|citations?|references?|papers? (by|from)|publications? (by|from))\b/i.test(
+    /\b(related papers?|similar papers?|find papers?|search (the )?(internet|online|web|literature)|online search|web search|citations?|references?|papers? (by|from)|publications? (by|from))\b/i.test(
       request.userText || "",
     ),
   instruction:
-    "When the user explicitly asks to discover, find, or search for papers online, call literature_search and let the review card present the result. Do not use this tool for questions about the content of papers already in context (e.g. counting references, summarizing, explaining)." +
+    "When the user explicitly asks to search online or search the literature, call literature_search with workflow:'answer' by default, analyze the scholarly results, and answer in chat with explicit source attribution. Use workflow:'review' only when the user wants to import/add papers to Zotero, save selected search results to a note, refine results inside the card, or review metadata changes. If the request is not answerable from scholarly sources, say that limitation instead of pretending general web search is available. Do not use this tool for questions about the content of papers already in context (e.g. counting references, summarizing, explaining)." +
     "\n\nSource selection:" +
     "\n- recommendations, references, citations modes -> always use source:'openalex' (only OpenAlex supports these)." +
     "\n- search mode -> source:'openalex' (default, broadest coverage), source:'arxiv' (preprints, CS/ML/physics), or source:'europepmc' (biomedical/life sciences)." +
@@ -72,7 +74,7 @@ const LIBRARY_UPDATE_GUIDANCE: ToolGuidance = {
       request.userText || "",
     ),
   instruction:
-    "For library write operations, the confirmation card is the deliverable; call library_update directly instead of stopping with a prose summary. Use kind:'tags' for tag changes, kind:'collections' for collection membership, and kind:'metadata' for item metadata fields. When the user asks to fix, correct, or enrich metadata from external sources, use literature_search with mode:'metadata' first to fetch canonical data, then continue through the review/update flow. Only call library_update with kind:'metadata' directly when the user provides specific field values to set.",
+    "For library write operations, the confirmation card is the deliverable; call library_update directly instead of stopping with a prose summary. Use kind:'tags' for tag changes, kind:'collections' for collection membership, and kind:'metadata' for item metadata fields. When the user asks to fix, correct, or enrich metadata from external sources, use literature_search with workflow:'review' and mode:'metadata' first to fetch canonical data, then continue through the review/update flow. Only call library_update with kind:'metadata' directly when the user provides specific field values to set.",
 };
 
 const NOTE_WRITE_GUIDANCE: ToolGuidance = {
@@ -160,7 +162,8 @@ function createLibraryUpdateTool(tools: {
       }
       const delegateArgs = { ...args };
       delete delegateArgs.kind;
-      if (args.kind === "tags") return ok({ tool: tools.applyTags, args: delegateArgs });
+      if (args.kind === "tags")
+        return ok({ tool: tools.applyTags, args: delegateArgs });
       if (args.kind === "collections") {
         return ok({ tool: tools.moveToCollection, args: delegateArgs });
       }
@@ -272,6 +275,9 @@ export function createBuiltInToolRegistry(
   const registry = new AgentToolRegistry();
   const queryLibrary = createQueryLibraryTool(deps.zoteroGateway);
   const readLibrary = createReadLibraryTool(deps.zoteroGateway);
+  const libraryRetrieve = createLibraryRetrieveTool(
+    new LibraryRetrieveService(deps.zoteroGateway, deps.pdfService),
+  );
   const readPaper = createReadPaperTool(deps.pdfService, deps.zoteroGateway);
   const searchPaper = createSearchPaperTool(
     deps.retrievalService,
@@ -318,9 +324,10 @@ export function createBuiltInToolRegistry(
       name: "library_read",
       label: "Read Library",
       description:
-        "Read structured Zotero item state: metadata, notes, annotations, attachments, collection membership, and note content. Use paper_read for PDF/paper content.",
+        "Read structured Zotero item state: metadata, notes, annotations, attachments, collection membership, and note content. Use paper_read for primary PDF/paper content. For explicit child-attachment requests, enumerate attachments then use read_attachment for Markdown/HTML/TXT/DOCX.",
     }),
   );
+  registry.register(libraryRetrieve);
   registry.register(
     createPaperReadTool(
       deps.pdfService,
@@ -335,11 +342,10 @@ export function createBuiltInToolRegistry(
       name: "literature_search",
       label: "Search Literature",
       description:
-        "Search scholarly sources and fetch external scholarly metadata through Zotero-aware review/import workflows. Use web_search for general web lookup.",
+        "Search scholarly sources and fetch external scholarly metadata. Use workflow:'answer' for source-cited chat answers, or workflow:'review' for Zotero import/review-card workflows.",
       guidance: LITERATURE_SEARCH_GUIDANCE,
     }),
   );
-  registry.register(createWebSearchTool());
   registry.register(
     createLibraryUpdateTool({
       applyTags,
@@ -385,6 +391,7 @@ export function createBuiltInToolRegistry(
   registry.register(markToolTier(fileIO, "advanced"));
   registry.register(markToolTier(runCommand, "advanced"));
   registry.register(markToolTier(zoteroScript, "advanced"));
+  registry.register(createToolResultReadTool());
 
   const legacyTools: AgentToolDefinition<any, any>[] = [
     queryLibrary,

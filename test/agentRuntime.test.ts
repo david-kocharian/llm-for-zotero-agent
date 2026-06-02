@@ -10,7 +10,13 @@ import {
 import { clearAgentCoverageLedger } from "../src/agent/context/coverageLedger";
 import { getAgentRunTrace } from "../src/agent/store/traceStore";
 import { clearAgentTranscriptStore } from "../src/agent/store/transcriptStore";
+import {
+  clearAgentToolResultHandleStore,
+  createAgentToolResultHandleRecord,
+  upsertAgentToolResultHandles,
+} from "../src/agent/store/toolResultHandles";
 import { AgentToolRegistry } from "../src/agent/tools/registry";
+import { createToolResultReadTool } from "../src/agent/tools/read/toolResultRead";
 import { createFileIOTool } from "../src/agent/tools/write/fileIO";
 import {
   MAX_AGENT_ROUNDS,
@@ -133,6 +139,7 @@ describe("AgentRuntime", function () {
     clearAgentReadLedger();
     clearAgentCoverageLedger();
     clearAgentTranscriptStore();
+    clearAgentToolResultHandleStore();
   });
 
   it("falls back when the adapter does not support tools", async function () {
@@ -1900,8 +1907,10 @@ describe("AgentRuntime", function () {
         apiBase: "https://api.openai.com/v1/chat/completions",
         apiKey: "test",
       };
+      const registry = new AgentToolRegistry();
+      registry.register(createToolResultReadTool());
       const firstRuntime = new AgentRuntime({
-        registry: new AgentToolRegistry(),
+        registry,
         adapterFactory: () =>
           new MockAdapter(
             [
@@ -1925,9 +1934,19 @@ describe("AgentRuntime", function () {
       });
       await firstRuntime.runTurn({ request });
 
+      const handleRecord = createAgentToolResultHandleRecord({
+        conversationKey: request.conversationKey,
+        toolName: "library_search",
+        toolCallId: "stored-call",
+        content: { results: [{ itemId: 1, title: "Stored row" }] },
+      });
+      assert.exists(handleRecord);
+      await upsertAgentToolResultHandles([handleRecord!]);
+
       let secondMessages: AgentModelMessage[] = [];
+      let secondToolNames: string[] = [];
       const secondRuntime = new AgentRuntime({
-        registry: new AgentToolRegistry(),
+        registry,
         adapterFactory: () => ({
           getCapabilities: () => ({
             streaming: false,
@@ -1939,6 +1958,7 @@ describe("AgentRuntime", function () {
           supportsTools: () => true,
           async runStep(params: AgentStepParams): Promise<AgentModelStep> {
             secondMessages = params.messages;
+            secondToolNames = params.tools.map((tool) => tool.name);
             return {
               kind: "final",
               text: "Used it.",
@@ -1960,6 +1980,7 @@ describe("AgentRuntime", function () {
       const serialized = JSON.stringify(secondMessages);
       assert.include(serialized, "remember alpha");
       assert.include(serialized, "Alpha is preserved.");
+      assert.include(secondToolNames, "tool_result_read");
     } finally {
       restoreDb();
     }
@@ -1975,12 +1996,85 @@ describe("AgentRuntime", function () {
         model: "gpt-4o-mini",
         apiBase: "https://api.openai.com/v1/chat/completions",
         apiKey: "test",
-        advanced: { inputTokenCap: 256 },
+        advanced: { inputTokenCap: 32000 },
       };
       const longAnswer = `Important older answer. ${"detail ".repeat(1200)}`;
+      const seedRegistry = new AgentToolRegistry();
+      seedRegistry.register({
+        spec: {
+          name: "query_library",
+          description: "query",
+          inputSchema: { type: "object" },
+          mutability: "read",
+          requiresConfirmation: false,
+        },
+        validate: () => ({ ok: true, value: {} }),
+        execute: async () => ({
+          totalCount: 2,
+          returnedCount: 2,
+          results: [
+            { itemId: 1, title: "Compacted handle paper A" },
+            { itemId: 2, title: "Compacted handle paper B" },
+          ],
+        }),
+      });
+      let seedStep = 0;
+      const seedRuntime = new AgentRuntime({
+        registry: seedRegistry,
+        adapterFactory: () => ({
+          getCapabilities: () => ({
+            streaming: false,
+            toolCalls: true,
+            multimodal: false,
+            fileInputs: false,
+            reasoning: true,
+          }),
+          supportsTools: () => true,
+          async runStep(): Promise<AgentModelStep> {
+            seedStep += 1;
+            if (seedStep === 1) {
+              return {
+                kind: "tool_calls",
+                calls: [
+                  {
+                    id: "seed-tool-call",
+                    name: "query_library",
+                    arguments: { entity: "items", mode: "list" },
+                  },
+                ],
+                assistantMessage: {
+                  role: "assistant",
+                  content: "",
+                  tool_calls: [
+                    {
+                      id: "seed-tool-call",
+                      name: "query_library",
+                      arguments: { entity: "items", mode: "list" },
+                    },
+                  ],
+                },
+              };
+            }
+            return {
+              kind: "final",
+              text: "Seeded tool result.",
+              assistantMessage: {
+                role: "assistant",
+                content: "Seeded tool result.",
+              },
+            };
+          },
+        }),
+      });
+      await seedRuntime.runTurn({
+        request: {
+          ...request,
+          userText: "seed tool result",
+        },
+      });
       for (let index = 0; index < 3; index += 1) {
         const runtime = new AgentRuntime({
-          registry: new AgentToolRegistry(),
+          registry: seedRegistry,
           adapterFactory: () =>
             new MockAdapter(
               [
@@ -2012,7 +2106,7 @@ describe("AgentRuntime", function () {
 
       const compactEvents: AgentEvent[] = [];
       const compactRuntime = new AgentRuntime({
-        registry: new AgentToolRegistry(),
+        registry: seedRegistry,
         adapterFactory: () =>
           new MockAdapter([], {
             streaming: false,
@@ -2040,7 +2134,7 @@ describe("AgentRuntime", function () {
 
       let followupMessages: AgentModelMessage[] = [];
       const followupRuntime = new AgentRuntime({
-        registry: new AgentToolRegistry(),
+        registry: seedRegistry,
         adapterFactory: () => ({
           getCapabilities: () => ({
             streaming: false,
@@ -2074,6 +2168,655 @@ describe("AgentRuntime", function () {
         JSON.stringify(followupMessages),
         "Agent transcript compact checkpoint",
       );
+      assert.match(JSON.stringify(followupMessages), /trh_[a-z0-9]+/i);
+    } finally {
+      restoreDb();
+    }
+  });
+
+  it("passes large library tool results through when the full prompt fits", async function () {
+    const restoreDb = installMockDb();
+    try {
+      const registry = new AgentToolRegistry();
+      const fullResult = {
+        entity: "items",
+        mode: "list",
+        totalCount: 120,
+        returnedCount: 120,
+        limited: false,
+        results: Array.from({ length: 120 }, (_, index) => ({
+          itemId: index + 1,
+          itemType: "journalArticle",
+          title: `Large library result ${index}`,
+          firstCreator: `Author ${index}`,
+          year: "2026",
+          abstract: "A".repeat(700),
+          attachments: [
+            { title: "PDF", path: `/tmp/${index}.pdf` },
+            { title: "Supplement", path: `/tmp/${index}-supp.pdf` },
+          ],
+        })),
+      };
+      registry.register({
+        spec: {
+          name: "query_library",
+          description: "query",
+          inputSchema: { type: "object" },
+          mutability: "read",
+          requiresConfirmation: false,
+        },
+        validate: () => ({ ok: true, value: {} }),
+        execute: async () => fullResult,
+      });
+      registry.register(createToolResultReadTool());
+
+      let synthesisMessages: AgentModelMessage[] = [];
+      const toolNamesByStep: string[][] = [];
+      const adapter: AgentModelAdapter = {
+        getCapabilities: () => ({
+          streaming: false,
+          toolCalls: true,
+          multimodal: false,
+          fileInputs: false,
+          reasoning: true,
+        }),
+        supportsTools: () => true,
+        async runStep(params: AgentStepParams): Promise<AgentModelStep> {
+          toolNamesByStep.push(params.tools.map((tool) => tool.name));
+          if (!synthesisMessages.length) {
+            synthesisMessages = params.messages;
+            return {
+              kind: "tool_calls",
+              calls: [
+                {
+                  id: "call-library",
+                  name: "query_library",
+                  arguments: { entity: "items", mode: "list" },
+                },
+              ],
+              assistantMessage: {
+                role: "assistant",
+                content: "",
+                tool_calls: [
+                  {
+                    id: "call-library",
+                    name: "query_library",
+                    arguments: { entity: "items", mode: "list" },
+                  },
+                ],
+              },
+            };
+          }
+          synthesisMessages = params.messages;
+          return {
+            kind: "final",
+            text: "Compacted result used.",
+            assistantMessage: {
+              role: "assistant",
+              content: "Compacted result used.",
+            },
+          };
+        },
+      };
+      const runtime = new AgentRuntime({
+        registry,
+        adapterFactory: () => adapter,
+      });
+      const events: AgentEvent[] = [];
+      const outcome = await runtime.runTurn({
+        request: {
+          conversationKey: 11,
+          mode: "agent",
+          userText: "list my library",
+          model: "claude-haiku-4-5",
+          apiBase: "https://api.anthropic.com/v1/messages",
+          apiKey: "test",
+          advanced: { inputTokenCap: 200_000 },
+        },
+        onEvent: (event) => events.push(event),
+      });
+
+      assert.equal(outcome.kind, "completed");
+      const fullToolEvent = events.find(
+        (event) => event.type === "tool_result",
+      );
+      assert.lengthOf(
+        (
+          (fullToolEvent?.type === "tool_result"
+            ? fullToolEvent.content
+            : {}) as typeof fullResult
+        ).results || [],
+        120,
+      );
+      const toolMessage = synthesisMessages.find(
+        (message) => message.role === "tool",
+      );
+      assert.equal(toolMessage?.role, "tool");
+      const modelFacing = JSON.parse(
+        (toolMessage as { content: string }).content,
+      );
+      assert.notProperty(modelFacing, "modelContextCompacted");
+      assert.lengthOf(modelFacing.results, 120);
+      assert.include(JSON.stringify(modelFacing), "A".repeat(200));
+      assert.isAtLeast(toolNamesByStep.length, 2);
+      assert.notInclude(toolNamesByStep[0], "tool_result_read");
+      assert.notInclude(toolNamesByStep[1], "tool_result_read");
+    } finally {
+      restoreDb();
+    }
+  });
+
+  it("reduces large library tool results only under provider-send pressure", async function () {
+    const restoreDb = installMockDb();
+    try {
+      const registry = new AgentToolRegistry();
+      const fullResult = {
+        entity: "items",
+        mode: "list",
+        filters: { collectionId: 42 },
+        totalCount: 160,
+        returnedCount: 160,
+        limited: false,
+        results: Array.from({ length: 160 }, (_, index) => ({
+          itemId: index + 1,
+          itemType: "journalArticle",
+          title: `Large library result ${index}`,
+          firstCreator: `Author ${index}`,
+          year: "2026",
+          abstract: "A".repeat(700),
+          tags: [`tag-${index % 4}`],
+          collectionIds: [42],
+          attachments: [
+            { title: "PDF", path: `/tmp/${index}.pdf` },
+            { title: "Supplement", path: `/tmp/${index}-supp.pdf` },
+          ],
+        })),
+      };
+      registry.register({
+        spec: {
+          name: "query_library",
+          description: "query",
+          inputSchema: { type: "object" },
+          mutability: "read",
+          requiresConfirmation: false,
+        },
+        validate: () => ({ ok: true, value: {} }),
+        execute: async () => fullResult,
+      });
+      registry.register(createToolResultReadTool());
+
+      let synthesisMessages: AgentModelMessage[] = [];
+      const toolNamesByStep: string[][] = [];
+      const adapter: AgentModelAdapter = {
+        getCapabilities: () => ({
+          streaming: false,
+          toolCalls: true,
+          multimodal: false,
+          fileInputs: false,
+          reasoning: true,
+        }),
+        supportsTools: () => true,
+        async runStep(params: AgentStepParams): Promise<AgentModelStep> {
+          toolNamesByStep.push(params.tools.map((tool) => tool.name));
+          if (!synthesisMessages.length) {
+            synthesisMessages = params.messages;
+            return {
+              kind: "tool_calls",
+              calls: [
+                {
+                  id: "call-library",
+                  name: "query_library",
+                  arguments: { entity: "items", mode: "list" },
+                },
+              ],
+              assistantMessage: {
+                role: "assistant",
+                content: "",
+                tool_calls: [
+                  {
+                    id: "call-library",
+                    name: "query_library",
+                    arguments: { entity: "items", mode: "list" },
+                  },
+                ],
+              },
+            };
+          }
+          synthesisMessages = params.messages;
+          return {
+            kind: "final",
+            text: "Reduced result used.",
+            assistantMessage: {
+              role: "assistant",
+              content: "Reduced result used.",
+            },
+          };
+        },
+      };
+      const runtime = new AgentRuntime({
+        registry,
+        adapterFactory: () => adapter,
+      });
+      const events: AgentEvent[] = [];
+      const outcome = await runtime.runTurn({
+        request: {
+          conversationKey: 13,
+          mode: "agent",
+          userText: "list my library",
+          model: "claude-haiku-4-5",
+          apiBase: "https://api.anthropic.com/v1/messages",
+          apiKey: "test",
+          advanced: { inputTokenCap: 8_000 },
+        },
+        onEvent: (event) => events.push(event),
+      });
+
+      assert.equal(outcome.kind, "completed");
+      const fullToolEvent = events.find(
+        (event) => event.type === "tool_result",
+      );
+      assert.lengthOf(
+        (
+          (fullToolEvent?.type === "tool_result"
+            ? fullToolEvent.content
+            : {}) as typeof fullResult
+        ).results || [],
+        160,
+      );
+      const budgetEvent = events.find(
+        (event) =>
+          event.type === "provider_event" &&
+          event.providerType === "agent_context_budget",
+      );
+      assert.exists(budgetEvent);
+      assert.equal(
+        budgetEvent?.type === "provider_event"
+          ? budgetEvent.payload?.handleCount
+          : undefined,
+        1,
+      );
+      const toolMessage = synthesisMessages.find(
+        (message) => message.role === "tool",
+      );
+      assert.equal(toolMessage?.role, "tool");
+      const modelFacing = JSON.parse(
+        (toolMessage as { content: string }).content,
+      );
+      assert.isTrue(modelFacing.modelContextCompacted);
+      assert.equal(modelFacing.totalCount, 160);
+      assert.equal(modelFacing.filters.collectionId, 42);
+      assert.isBelow(modelFacing.results.length, 160);
+      assert.match(modelFacing.toolResultHandle, /^trh_/);
+      assert.isAtLeast(toolNamesByStep.length, 2);
+      assert.notInclude(toolNamesByStep[0], "tool_result_read");
+      assert.include(toolNamesByStep[1], "tool_result_read");
+      assert.notInclude(JSON.stringify(modelFacing), "A".repeat(200));
+    } finally {
+      restoreDb();
+    }
+  });
+
+  it("lets the model read a compacted tool-result handle in a later step", async function () {
+    const restoreDb = installMockDb();
+    try {
+      const registry = new AgentToolRegistry();
+      const fullResult = {
+        entity: "items",
+        mode: "list",
+        totalCount: 160,
+        returnedCount: 160,
+        limited: false,
+        results: Array.from({ length: 160 }, (_, index) => ({
+          itemId: index + 1,
+          itemType: "journalArticle",
+          title: `Stored row ${index}`,
+          firstCreator: `Author ${index}`,
+          year: "2026",
+          abstract: "A".repeat(500),
+        })),
+      };
+      registry.register({
+        spec: {
+          name: "query_library",
+          description: "query",
+          inputSchema: { type: "object" },
+          mutability: "read",
+          requiresConfirmation: false,
+        },
+        validate: () => ({ ok: true, value: {} }),
+        execute: async () => fullResult,
+      });
+      registry.register(createToolResultReadTool());
+
+      let stepIndex = 0;
+      let storedHandle = "";
+      let readToolMessage: AgentModelMessage | undefined;
+      const toolNamesByStep: string[][] = [];
+      const adapter: AgentModelAdapter = {
+        getCapabilities: () => ({
+          streaming: false,
+          toolCalls: true,
+          multimodal: false,
+          fileInputs: false,
+          reasoning: true,
+        }),
+        supportsTools: () => true,
+        async runStep(params: AgentStepParams): Promise<AgentModelStep> {
+          stepIndex += 1;
+          toolNamesByStep.push(params.tools.map((tool) => tool.name));
+          if (stepIndex === 1) {
+            return {
+              kind: "tool_calls",
+              calls: [
+                {
+                  id: "call-library",
+                  name: "query_library",
+                  arguments: { entity: "items", mode: "list" },
+                },
+              ],
+              assistantMessage: {
+                role: "assistant",
+                content: "",
+                tool_calls: [
+                  {
+                    id: "call-library",
+                    name: "query_library",
+                    arguments: { entity: "items", mode: "list" },
+                  },
+                ],
+              },
+            };
+          }
+          if (stepIndex === 2) {
+            const compactedToolMessage = params.messages.find(
+              (message) =>
+                message.role === "tool" && message.name === "query_library",
+            );
+            assert.equal(compactedToolMessage?.role, "tool");
+            const modelFacing = JSON.parse(
+              (compactedToolMessage as { content: string }).content,
+            );
+            storedHandle = modelFacing.toolResultHandle;
+            assert.match(storedHandle, /^trh_/);
+            return {
+              kind: "tool_calls",
+              calls: [
+                {
+                  id: "call-read",
+                  name: "tool_result_read",
+                  arguments: {
+                    handle: storedHandle,
+                    path: "results",
+                    offset: 50,
+                    limit: 2,
+                  },
+                },
+              ],
+              assistantMessage: {
+                role: "assistant",
+                content: "",
+                tool_calls: [
+                  {
+                    id: "call-read",
+                    name: "tool_result_read",
+                    arguments: {
+                      handle: storedHandle,
+                      path: "results",
+                      offset: 50,
+                      limit: 2,
+                    },
+                  },
+                ],
+              },
+            };
+          }
+          readToolMessage = params.messages.find(
+            (message) =>
+              message.role === "tool" && message.name === "tool_result_read",
+          );
+          return {
+            kind: "final",
+            text: "Read stored rows.",
+            assistantMessage: {
+              role: "assistant",
+              content: "Read stored rows.",
+            },
+          };
+        },
+      };
+      const runtime = new AgentRuntime({
+        registry,
+        adapterFactory: () => adapter,
+      });
+      const outcome = await runtime.runTurn({
+        request: {
+          conversationKey: 15,
+          mode: "agent",
+          userText: "list my library, then inspect omitted rows",
+          model: "claude-haiku-4-5",
+          apiBase: "https://api.anthropic.com/v1/messages",
+          apiKey: "test",
+          advanced: { inputTokenCap: 8_000 },
+        },
+      });
+
+      assert.equal(outcome.kind, "completed");
+      assert.notInclude(toolNamesByStep[0], "tool_result_read");
+      assert.include(toolNamesByStep[1], "tool_result_read");
+      assert.equal(readToolMessage?.role, "tool");
+      const readContent = JSON.parse(
+        (readToolMessage as { content: string }).content,
+      );
+      assert.equal(readContent.handle, storedHandle);
+      assert.equal(readContent.path, "results");
+      assert.equal(readContent.returnedCount, 2);
+      assert.deepEqual(
+        readContent.items.map((item: { itemId: number; title: string }) => ({
+          itemId: item.itemId,
+          title: item.title,
+        })),
+        [
+          { itemId: 51, title: "Stored row 50" },
+          { itemId: 52, title: "Stored row 51" },
+        ],
+      );
+    } finally {
+      restoreDb();
+    }
+  });
+
+  it("preserves library_retrieve evidence anchors when reducing under pressure", async function () {
+    const restoreDb = installMockDb();
+    try {
+      const registry = new AgentToolRegistry();
+      const fullResult = {
+        intent: "enumerate",
+        depth: "evidence",
+        resourcePool: {
+          totalItems: 120,
+          queryCoverage: {
+            metadataInspected: 120,
+            indexedTextScanned: 90,
+            snippetsReturned: 70,
+          },
+        },
+        answerContract: {
+          coverage: "indexed/searchable text scanned for the scoped pool",
+        },
+        paperMatches: Array.from({ length: 70 }, (_, index) => ({
+          itemId: 20_000 + index,
+          contextItemId: 30_000 + index,
+          title: `Evidence paper ${index}`,
+          matchStatus: "matched",
+          score: 0.9,
+        })),
+        snippets: Array.from({ length: 70 }, (_, index) => ({
+          snippetId: `lr_${20_000 + index}_${30_000 + index}_${index}_bm25`,
+          itemId: `${20_000 + index}`,
+          contextItemId: `${30_000 + index}`,
+          chunkIndex: index,
+          title: `Evidence paper ${index}`,
+          sourceKind: "pdf_text",
+          matchMethod: "bm25",
+          sectionLabel: "Results",
+          snippet: `Evidence snippet ${index} ${"B".repeat(900)}`,
+          surroundingText: `Surrounding evidence ${index} ${"C".repeat(900)}`,
+          score: 0.9,
+          whyMatched: "Full-text BM25 retrieval ranked this passage highly",
+          matchedQueryVariant: "representational drift",
+        })),
+        warnings: ["coverage is bounded by indexed text availability"],
+      };
+      registry.register({
+        spec: {
+          name: "library_retrieve",
+          description: "retrieve",
+          inputSchema: { type: "object" },
+          mutability: "read",
+          requiresConfirmation: false,
+        },
+        validate: () => ({ ok: true, value: {} }),
+        execute: async () => fullResult,
+      });
+
+      let synthesisMessages: AgentModelMessage[] = [];
+      const adapter: AgentModelAdapter = {
+        getCapabilities: () => ({
+          streaming: false,
+          toolCalls: true,
+          multimodal: false,
+          fileInputs: false,
+          reasoning: true,
+        }),
+        supportsTools: () => true,
+        async runStep(params: AgentStepParams): Promise<AgentModelStep> {
+          if (!synthesisMessages.length) {
+            synthesisMessages = params.messages;
+            return {
+              kind: "tool_calls",
+              calls: [
+                {
+                  id: "call-retrieve",
+                  name: "library_retrieve",
+                  arguments: { query: "representational drift" },
+                },
+              ],
+              assistantMessage: {
+                role: "assistant",
+                content: "",
+                tool_calls: [
+                  {
+                    id: "call-retrieve",
+                    name: "library_retrieve",
+                    arguments: { query: "representational drift" },
+                  },
+                ],
+              },
+            };
+          }
+          synthesisMessages = params.messages;
+          return {
+            kind: "final",
+            text: "Evidence reduced.",
+            assistantMessage: {
+              role: "assistant",
+              content: "Evidence reduced.",
+            },
+          };
+        },
+      };
+      const runtime = new AgentRuntime({
+        registry,
+        adapterFactory: () => adapter,
+      });
+      const outcome = await runtime.runTurn({
+        request: {
+          conversationKey: 14,
+          mode: "agent",
+          userText: "find evidence",
+          model: "claude-haiku-4-5",
+          apiBase: "https://api.anthropic.com/v1/messages",
+          apiKey: "test",
+          advanced: { inputTokenCap: 10_000 },
+        },
+      });
+
+      assert.equal(outcome.kind, "completed");
+      const toolMessage = synthesisMessages.find(
+        (message) => message.role === "tool",
+      );
+      assert.equal(toolMessage?.role, "tool");
+      const modelFacing = JSON.parse(
+        (toolMessage as { content: string }).content,
+      );
+      assert.isTrue(modelFacing.modelContextCompacted);
+      assert.match(modelFacing.toolResultHandle, /^trh_/);
+      const serialized = JSON.stringify(modelFacing);
+      assert.include(serialized, "queryCoverage");
+      assert.include(modelFacing.snippets[0].text, "Evidence snippet 0");
+      assert.equal(modelFacing.snippets[0].itemId, "20000");
+      assert.equal(modelFacing.snippets[0].contextItemId, "30000");
+      assert.equal(modelFacing.snippets[0].matchMethod, "bm25");
+      assert.equal(modelFacing.snippets[0].paperContext.itemId, "20000");
+      assert.equal(modelFacing.snippets[0].paperContext.contextItemId, "30000");
+    } finally {
+      restoreDb();
+    }
+  });
+
+  it("resets stateful adapters when preflight compacts prompt messages", async function () {
+    const restoreDb = installMockDb();
+    try {
+      let resetCount = 0;
+      let inspectedMessages: AgentModelMessage[] = [];
+      const adapter: AgentModelAdapter = {
+        getCapabilities: () => ({
+          streaming: false,
+          toolCalls: true,
+          multimodal: false,
+          fileInputs: false,
+          reasoning: true,
+        }),
+        supportsTools: () => true,
+        resetState: () => {
+          resetCount += 1;
+        },
+        async runStep(params: AgentStepParams): Promise<AgentModelStep> {
+          inspectedMessages = params.messages;
+          return {
+            kind: "final",
+            text: "Done.",
+            assistantMessage: {
+              role: "assistant",
+              content: "Done.",
+            },
+          };
+        },
+      };
+      const runtime = new AgentRuntime({
+        registry: new AgentToolRegistry(),
+        adapterFactory: () => adapter,
+      });
+      const outcome = await runtime.runTurn({
+        request: {
+          conversationKey: 12,
+          mode: "agent",
+          userText: "current request",
+          model: "claude-haiku-4-5",
+          apiBase: "https://api.anthropic.com/v1/messages",
+          apiKey: "test",
+          advanced: { inputTokenCap: 8_000 },
+          history: [
+            { role: "user", content: "old question" },
+            { role: "assistant", content: "B".repeat(80_000) },
+          ],
+        },
+      });
+
+      assert.equal(outcome.kind, "completed");
+      assert.isAtLeast(resetCount, 1);
+      assert.notInclude(JSON.stringify(inspectedMessages), "B".repeat(1000));
+      assert.include(JSON.stringify(inspectedMessages), "current request");
     } finally {
       restoreDb();
     }

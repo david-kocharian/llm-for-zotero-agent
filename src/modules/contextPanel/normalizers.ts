@@ -1,6 +1,7 @@
 import type {
   CollectionContextRef,
   NoteContextRef,
+  PaperContentSourceMode,
   PaperContextRef,
   SelectedTextSource,
 } from "./types";
@@ -69,7 +70,9 @@ export function normalizePositiveInt(value: unknown): number | null {
   return normalized > 0 ? normalized : null;
 }
 
-export function normalizeSelectedTextSource(value: unknown): SelectedTextSource {
+export function normalizeSelectedTextSource(
+  value: unknown,
+): SelectedTextSource {
   if (value === "model") return "model";
   if (value === "note") return "note";
   if (value === "note-edit") return "note-edit";
@@ -119,9 +122,13 @@ export function normalizeNoteContextRef(
   }
   if (!parentItemKey && parentItemId) {
     const parentItem =
-      (globalThis as {
-        Zotero?: { Items?: { get?: (id: number) => Zotero.Item | null | undefined } };
-      }).Zotero?.Items?.get?.(parentItemId) || null;
+      (
+        globalThis as {
+          Zotero?: {
+            Items?: { get?: (id: number) => Zotero.Item | null | undefined };
+          };
+        }
+      ).Zotero?.Items?.get?.(parentItemId) || null;
     parentItemKey = normalizeLibraryItemKey((parentItem as any)?.key);
   }
   if (!resolvedTitle) {
@@ -175,6 +182,25 @@ export function normalizeAttachmentContentHash(
   return /^[a-f0-9]{64}$/.test(normalized) ? normalized : undefined;
 }
 
+function normalizePaperContentSourceMode(
+  value: unknown,
+): PaperContentSourceMode | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  switch (normalized) {
+    case "text":
+    case "mineru":
+    case "pdf":
+    case "markdown":
+    case "html":
+    case "txt":
+    case "docx":
+      return normalized;
+    default:
+      return undefined;
+  }
+}
+
 export function normalizePaperContextRefs(
   value: unknown,
   options?: {
@@ -197,10 +223,13 @@ export function normalizePaperContextRefs(
     const citationKey = normalizeText(typed.citationKey, sanitize);
     const firstCreator = normalizeText(typed.firstCreator, sanitize);
     const year = normalizeText(typed.year, sanitize);
+    const contentSourceMode = normalizePaperContentSourceMode(
+      typed.contentSourceMode,
+    );
     const dedupeKey = `${itemId}:${contextItemId}`;
     if (seen.has(dedupeKey)) continue;
     seen.add(dedupeKey);
-    out.push({
+    const normalized: PaperContextRef = {
       itemId,
       contextItemId,
       title,
@@ -208,7 +237,9 @@ export function normalizePaperContextRefs(
       citationKey: citationKey || undefined,
       firstCreator: firstCreator || undefined,
       year: year || undefined,
-    });
+    };
+    if (contentSourceMode) normalized.contentSourceMode = contentSourceMode;
+    out.push(normalized);
   }
   return out;
 }
@@ -229,7 +260,8 @@ export function normalizeCollectionContextRefs(
     const collectionId = normalizePositiveInt(typed.collectionId);
     const libraryID = normalizePositiveInt(typed.libraryID);
     if (!collectionId || !libraryID || seen.has(collectionId)) continue;
-    const name = normalizeText(typed.name, sanitize) || `Collection ${collectionId}`;
+    const name =
+      normalizeText(typed.name, sanitize) || `Collection ${collectionId}`;
     seen.add(collectionId);
     out.push({
       collectionId,

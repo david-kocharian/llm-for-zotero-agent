@@ -1,10 +1,13 @@
 import { assert } from "chai";
 import {
+  appendSelectedTextContextForItem,
   getSelectedTextContextEntries,
-  resolveContextSourceItemId,
+  resolvePanelContextLifecycleState,
+  resolveContextSourceItemIdAsync,
   setSelectedTextContextEntries,
   syncSelectedTextContextForSource,
 } from "../src/modules/contextPanel/contextResolution";
+import { resolvePaperContextRefFromAttachment } from "../src/modules/contextPanel/paperAttribution";
 
 describe("contextResolution note-edit sync", function () {
   const itemId = 777;
@@ -25,7 +28,11 @@ describe("contextResolution note-edit sync", function () {
     ]);
 
     assert.isTrue(
-      syncSelectedTextContextForSource(itemId, "Edit this sentence", "note-edit"),
+      syncSelectedTextContextForSource(
+        itemId,
+        "Edit this sentence",
+        "note-edit",
+      ),
     );
     assert.deepEqual(
       getSelectedTextContextEntries(itemId).map((entry) => ({
@@ -54,20 +61,29 @@ describe("contextResolution note-edit sync", function () {
 
   it("does not rewrite state when the note-edit focus is unchanged", function () {
     assert.isTrue(
-      syncSelectedTextContextForSource(itemId, "Tighten this wording", "note-edit"),
+      syncSelectedTextContextForSource(
+        itemId,
+        "Tighten this wording",
+        "note-edit",
+      ),
     );
     assert.isFalse(
-      syncSelectedTextContextForSource(itemId, "Tighten this wording", "note-edit"),
+      syncSelectedTextContextForSource(
+        itemId,
+        "Tighten this wording",
+        "note-edit",
+      ),
     );
   });
 
-  it("resolves library-view context source by selected child attachment", function () {
+  it("resolves parent-item context source by Zotero best attachment", async function () {
     const parentItem = {
       id: 100,
       isAttachment: () => false,
       isRegularItem: () => true,
       getAttachments: () => [101, 102],
       getField: () => "Parent Paper",
+      getBestAttachment: async () => supplementPdf,
     };
     const mainPdf = {
       id: 101,
@@ -103,26 +119,31 @@ describe("contextResolution note-edit sync", function () {
     };
 
     assert.equal(
-      resolveContextSourceItemId(mainPdf as unknown as Zotero.Item),
+      await resolveContextSourceItemIdAsync(mainPdf as unknown as Zotero.Item),
       101,
     );
     assert.equal(
-      resolveContextSourceItemId(supplementPdf as unknown as Zotero.Item),
+      await resolveContextSourceItemIdAsync(
+        supplementPdf as unknown as Zotero.Item,
+      ),
       102,
     );
     assert.equal(
-      resolveContextSourceItemId(parentItem as unknown as Zotero.Item),
-      101,
+      await resolveContextSourceItemIdAsync(
+        parentItem as unknown as Zotero.Item,
+      ),
+      102,
     );
   });
 
-  it("uses the library-pane selected child PDF before first-child fallback", function () {
+  it("uses the library-pane selected child PDF before Zotero best attachment", async function () {
     const parentItem = {
       id: 150,
       isAttachment: () => false,
       isRegularItem: () => true,
       getAttachments: () => [151, 152],
       getField: () => "Parent Paper",
+      getBestAttachment: async () => mainPdf,
     };
     const mainPdf = {
       id: 151,
@@ -161,18 +182,144 @@ describe("contextResolution note-edit sync", function () {
     };
 
     assert.equal(
-      resolveContextSourceItemId(parentItem as unknown as Zotero.Item),
+      await resolveContextSourceItemIdAsync(
+        parentItem as unknown as Zotero.Item,
+      ),
       152,
     );
   });
 
-  it("uses the active reader attachment over the parent item source", function () {
+  it("uses the library-pane selected child Markdown before Zotero best attachment", async function () {
+    const parentItem = {
+      id: 170,
+      isAttachment: () => false,
+      isRegularItem: () => true,
+      getAttachments: () => [171, 172],
+      getField: (field: string) =>
+        field === "firstCreator"
+          ? "Chandra et al."
+          : field === "year"
+            ? "2025"
+            : "Parent Paper",
+      getBestAttachment: async () => mainPdf,
+    };
+    const mainPdf = {
+      id: 171,
+      parentID: 170,
+      attachmentContentType: "application/pdf",
+      isAttachment: () => true,
+      isRegularItem: () => false,
+      getField: () => "Main PDF",
+    };
+    const selectedMarkdown = {
+      id: 172,
+      parentID: 170,
+      attachmentContentType: "text/markdown",
+      attachmentFilename: "test.md",
+      isAttachment: () => true,
+      isRegularItem: () => false,
+      getField: () => "test",
+    };
+    const items = new Map<number, unknown>([
+      [170, parentItem],
+      [171, mainPdf],
+      [172, selectedMarkdown],
+    ]);
+    globalScope.Zotero = {
+      ...(originalZotero || {}),
+      Items: {
+        get: (id: number) => items.get(id) || null,
+      },
+      Tabs: {
+        selectedType: "library",
+        selectedID: "library",
+        _tabs: [],
+      },
+      getActiveZoteroPane: () => ({
+        getSelectedItems: () => [selectedMarkdown],
+      }),
+    };
+
+    assert.equal(
+      await resolveContextSourceItemIdAsync(
+        parentItem as unknown as Zotero.Item,
+      ),
+      172,
+    );
+    const paperContext = resolvePaperContextRefFromAttachment(
+      selectedMarkdown as unknown as Zotero.Item,
+    );
+    assert.equal(paperContext?.itemId, 170);
+    assert.equal(paperContext?.contextItemId, 172);
+    assert.equal(paperContext?.contentSourceMode, "markdown");
+  });
+
+  it("uses a supported selected DOCX attachment directly", async function () {
+    const parentItem = {
+      id: 180,
+      isAttachment: () => false,
+      isRegularItem: () => true,
+      getAttachments: () => [181, 182],
+      getField: () => "Parent Paper",
+      getBestAttachment: async () => mainPdf,
+    };
+    const mainPdf = {
+      id: 181,
+      parentID: 180,
+      attachmentContentType: "application/pdf",
+      isAttachment: () => true,
+      isRegularItem: () => false,
+      getField: () => "Main PDF",
+    };
+    const selectedDocx = {
+      id: 182,
+      parentID: 180,
+      attachmentContentType:
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      attachmentFilename: "notes.docx",
+      isAttachment: () => true,
+      isRegularItem: () => false,
+      getField: () => "notes",
+    };
+    const items = new Map<number, unknown>([
+      [180, parentItem],
+      [181, mainPdf],
+      [182, selectedDocx],
+    ]);
+    globalScope.Zotero = {
+      ...(originalZotero || {}),
+      Items: {
+        get: (id: number) => items.get(id) || null,
+      },
+      Tabs: {
+        selectedType: "library",
+        selectedID: "library",
+        _tabs: [],
+      },
+    };
+
+    assert.equal(
+      await resolveContextSourceItemIdAsync(
+        selectedDocx as unknown as Zotero.Item,
+      ),
+      182,
+    );
+    const paperContext = resolvePaperContextRefFromAttachment(
+      selectedDocx as unknown as Zotero.Item,
+    );
+    assert.equal(paperContext?.itemId, 180);
+    assert.equal(paperContext?.contextItemId, 182);
+    assert.equal(paperContext?.contentSourceMode, "docx");
+  });
+
+  it("uses the active reader attachment over the parent item source", async function () {
     const parentItem = {
       id: 200,
       isAttachment: () => false,
       isRegularItem: () => true,
       getAttachments: () => [201],
       getField: () => "Parent Paper",
+      getBestAttachment: async () => mainPdf,
     };
     const mainPdf = {
       id: 201,
@@ -214,8 +361,182 @@ describe("contextResolution note-edit sync", function () {
     };
 
     assert.equal(
-      resolveContextSourceItemId(parentItem as unknown as Zotero.Item),
+      await resolveContextSourceItemIdAsync(
+        parentItem as unknown as Zotero.Item,
+      ),
       202,
+    );
+  });
+
+  it("preloads parent context when Zotero best attachment is an HTML snapshot", async function () {
+    const parentItem = {
+      id: 250,
+      isAttachment: () => false,
+      isRegularItem: () => true,
+      getAttachments: () => [251],
+      getField: () => "Parent Paper",
+      getBestAttachment: async () => snapshot,
+    };
+    const snapshot = {
+      id: 251,
+      parentID: 250,
+      attachmentContentType: "text/html",
+      isAttachment: () => true,
+      isRegularItem: () => false,
+      getField: () => "Snapshot",
+    };
+    const items = new Map<number, unknown>([
+      [250, parentItem],
+      [251, snapshot],
+    ]);
+    globalScope.Zotero = {
+      ...(originalZotero || {}),
+      Items: {
+        get: (id: number) => items.get(id) || null,
+      },
+      Tabs: {
+        selectedType: "library",
+        selectedID: "library",
+        _tabs: [],
+      },
+    };
+
+    assert.equal(
+      await resolveContextSourceItemIdAsync(
+        parentItem as unknown as Zotero.Item,
+      ),
+      251,
+    );
+    const paperContext = resolvePaperContextRefFromAttachment(
+      snapshot as unknown as Zotero.Item,
+    );
+    assert.equal(paperContext?.itemId, 250);
+    assert.equal(paperContext?.contextItemId, 251);
+    assert.equal(paperContext?.contentSourceMode, "html");
+  });
+
+  it("marks parent lifecycle context as async when sync fallback is only first child", function () {
+    const parentItem = {
+      id: 252,
+      isAttachment: () => false,
+      isRegularItem: () => true,
+      getAttachments: () => [253],
+      getField: () => "Parent Paper",
+      getBestAttachment: async () => snapshot,
+    };
+    const firstPdf = {
+      id: 253,
+      parentID: 252,
+      attachmentContentType: "application/pdf",
+      attachmentFilename: "main.pdf",
+      isAttachment: () => true,
+      isRegularItem: () => false,
+      getField: () => "Main PDF",
+    };
+    const snapshot = {
+      id: 254,
+      parentID: 252,
+      attachmentContentType: "text/html",
+      attachmentFilename: "snapshot.html",
+      isAttachment: () => true,
+      isRegularItem: () => false,
+      getField: () => "Snapshot",
+    };
+    const items = new Map<number, unknown>([
+      [252, parentItem],
+      [253, firstPdf],
+      [254, snapshot],
+    ]);
+    globalScope.Zotero = {
+      ...(originalZotero || {}),
+      Items: {
+        get: (id: number) => items.get(id) || null,
+      },
+      Tabs: {
+        selectedType: "library",
+        selectedID: "library",
+        _tabs: [],
+      },
+    };
+
+    const lifecycle = resolvePanelContextLifecycleState(
+      parentItem as unknown as Zotero.Item,
+    );
+
+    assert.equal(lifecycle?.ownerItemId, 252);
+    assert.equal(lifecycle?.contextItemId, 253);
+    assert.equal(lifecycle?.sourceKind, "first-child");
+    assert.isTrue(lifecycle?.requiresAsyncResolution);
+  });
+
+  it("does not preload parent context when Zotero best attachment is unsupported", async function () {
+    const parentItem = {
+      id: 255,
+      isAttachment: () => false,
+      isRegularItem: () => true,
+      getAttachments: () => [256],
+      getField: () => "Parent Paper",
+      getBestAttachment: async () => image,
+    };
+    const image = {
+      id: 256,
+      parentID: 255,
+      attachmentContentType: "image/png",
+      attachmentFilename: "image.png",
+      isAttachment: () => true,
+      isRegularItem: () => false,
+      getField: () => "Image",
+    };
+    const items = new Map<number, unknown>([
+      [255, parentItem],
+      [256, image],
+    ]);
+    globalScope.Zotero = {
+      ...(originalZotero || {}),
+      Items: {
+        get: (id: number) => items.get(id) || null,
+      },
+      Tabs: {
+        selectedType: "library",
+        selectedID: "library",
+        _tabs: [],
+      },
+    };
+
+    assert.equal(
+      await resolveContextSourceItemIdAsync(
+        parentItem as unknown as Zotero.Item,
+      ),
+      0,
+    );
+  });
+
+  it("does not preload parent context when Zotero has no best attachment", async function () {
+    const parentItem = {
+      id: 260,
+      isAttachment: () => false,
+      isRegularItem: () => true,
+      getAttachments: () => [],
+      getField: () => "Parent Paper",
+      getBestAttachment: async () => false,
+    };
+    globalScope.Zotero = {
+      ...(originalZotero || {}),
+      Items: {
+        get: (id: number) => (id === 260 ? parentItem : null),
+      },
+      Tabs: {
+        selectedType: "library",
+        selectedID: "library",
+        _tabs: [],
+      },
+    };
+
+    assert.equal(
+      await resolveContextSourceItemIdAsync(
+        parentItem as unknown as Zotero.Item,
+      ),
+      0,
     );
   });
 
@@ -270,5 +591,74 @@ describe("contextResolution note-edit sync", function () {
         pageLabel: undefined,
       },
     ]);
+  });
+
+  it("deduplicates selected Zotero notes by note identity", function () {
+    const noteContext = {
+      libraryID: 1,
+      noteItemKey: "ABCD1234",
+      noteItemId: 501,
+      noteKind: "standalone" as const,
+      title: "Context note",
+    };
+
+    assert.isTrue(
+      appendSelectedTextContextForItem(
+        itemId,
+        "Original note body",
+        "note",
+        undefined,
+        { contextItemId: 501 },
+        noteContext,
+      ),
+    );
+    assert.isFalse(
+      appendSelectedTextContextForItem(
+        itemId,
+        "Updated note body",
+        "note",
+        undefined,
+        { contextItemId: 501 },
+        { ...noteContext, title: "Renamed note" },
+      ),
+    );
+
+    const entries = getSelectedTextContextEntries(itemId);
+    assert.lengthOf(entries, 1);
+    assert.equal(entries[0].text, "Original note body");
+    assert.equal(entries[0].noteContext?.noteItemId, 501);
+  });
+
+  it("collapses duplicate note-backed contexts already in state", function () {
+    setSelectedTextContextEntries(itemId, [
+      {
+        text: "First copy",
+        source: "note",
+        contextItemId: 501,
+        noteContext: {
+          libraryID: 1,
+          noteItemKey: "ABCD1234",
+          noteItemId: 501,
+          noteKind: "standalone",
+          title: "Context note",
+        },
+      },
+      {
+        text: "Second copy",
+        source: "note",
+        contextItemId: 501,
+        noteContext: {
+          libraryID: 1,
+          noteItemKey: "ABCD1234",
+          noteItemId: 501,
+          noteKind: "standalone",
+          title: "Context note",
+        },
+      },
+    ]);
+
+    const entries = getSelectedTextContextEntries(itemId);
+    assert.lengthOf(entries, 1);
+    assert.equal(entries[0].text, "First copy");
   });
 });

@@ -24,11 +24,25 @@ import {
   getShortcutOrder,
   setShortcutOrder,
   createCustomShortcutId,
+  migrateShortcutDefaultsIfNeeded,
+  normalizeShortcutOrderForVisibleIds,
   resetShortcutsToDefault,
 } from "./prefHelpers";
 import { setStatus } from "./textUtils";
 
 const shortcutRenderGeneration = new WeakMap<Element, number>();
+
+export function closeShortcutMenu(menu: HTMLDivElement | null): void {
+  if (!menu) return;
+  menu.style.display = "none";
+  menu.dataset.menuKind = "";
+  menu.dataset.shortcutId = "";
+  menu.dataset.shortcutKind = "";
+}
+
+export function isShortcutMenuVisible(menu: HTMLDivElement | null): boolean {
+  return Boolean(menu && menu.style.display !== "none");
+}
 
 export async function loadShortcutText(file: string): Promise<string> {
   if (shortcutTextCache.has(file)) {
@@ -90,6 +104,8 @@ export async function renderShortcuts(
   ) as HTMLButtonElement | null;
   if (!container) return;
 
+  migrateShortcutDefaultsIfNeeded();
+
   const moveMode = shortcutMoveModeState.get(body) === true;
   const overrides = getShortcutOverrides();
   const labelOverrides = getShortcutLabelOverrides();
@@ -146,10 +162,10 @@ export async function renderShortcuts(
   const currentVisibleIds = editableShortcutsRaw.map((shortcut) => shortcut.id);
   const currentVisibleSet = new Set(currentVisibleIds);
   const savedOrder = getShortcutOrder();
-  const normalizedOrder = [
-    ...savedOrder.filter((id) => currentVisibleSet.has(id)),
-    ...currentVisibleIds.filter((id) => !savedOrder.includes(id)),
-  ];
+  const normalizedOrder = normalizeShortcutOrderForVisibleIds(
+    savedOrder,
+    currentVisibleIds,
+  );
   if (
     normalizedOrder.length !== savedOrder.length ||
     normalizedOrder.some((id, index) => id !== savedOrder[index])
@@ -587,7 +603,7 @@ export async function renderShortcuts(
       menu.dataset.shortcutId = "";
       menu.dataset.shortcutKind = "";
       await renderShortcuts(body, item);
-      };
+    };
 
     menuDelete.onclick = async (e: Event) => {
       e.preventDefault();
@@ -644,13 +660,14 @@ export async function renderShortcuts(
         return;
       }
       resetShortcutsToDefault();
+      shortcutTextCache.clear();
       shortcutMoveModeState.set(body, false);
       menu.style.display = "none";
       menu.dataset.menuKind = "";
       menu.dataset.shortcutId = "";
       menu.dataset.shortcutKind = "";
       await renderShortcuts(body, item);
-      };
+    };
 
     const bodyEl = body as HTMLElement;
     if (!bodyEl.dataset.llmShortcutBodyClickAttached) {
@@ -661,10 +678,7 @@ export async function renderShortcuts(
         const clickedShortcutButton = Boolean(
           targetEl?.closest(".llm-shortcut-btn"),
         );
-        menu.style.display = "none";
-        menu.dataset.menuKind = "";
-        menu.dataset.shortcutId = "";
-        menu.dataset.shortcutKind = "";
+        closeShortcutMenu(menu);
         if (
           shortcutMoveModeState.get(body) === true &&
           !clickedShortcutButton
@@ -689,6 +703,11 @@ export async function renderShortcuts(
         (e: Event) => {
           const keyEvent = e as KeyboardEvent;
           if (keyEvent.key !== "Escape") return;
+          if (isShortcutMenuVisible(menu)) {
+            keyEvent.preventDefault();
+            closeShortcutMenu(menu);
+            return;
+          }
           if (shortcutMoveModeState.get(body) !== true) return;
           keyEvent.preventDefault();
           shortcutMoveModeState.set(body, false);

@@ -26,6 +26,7 @@ const zhCN: Record<string, string> = {
   "Note editing": "笔记编辑",
   "Library chat": "文献库对话",
   "Paper chat": "论文对话",
+  Orphan: "孤立对话",
   "Switch to paper chat": "切换到论文对话",
   "Switch to library chat": "切换到文献库对话",
   Settings: "设置",
@@ -104,7 +105,10 @@ const zhCN: Record<string, string> = {
   "Saved chat history to new note": "已将对话历史保存为新笔记",
   "Failed to save chat history": "保存对话历史失败",
   "Could not open plugin settings": "无法打开插件设置",
+  "Could not find this paper": "无法找到此论文",
   "Could not focus this paper": "无法聚焦到此论文",
+  "Could not load this conversation": "无法加载此对话",
+  "This chat's source item was deleted": "此对话的来源条目已被删除",
   "Failed to fully delete turn. Check logs.":
     "未能完全删除对话轮次，请查看日志。",
   "Turn deleted": "已删除对话轮次",
@@ -200,6 +204,10 @@ const zhCN: Record<string, string> = {
   "(MinerU)": "（MinerU）",
   "Failed to fully delete conversation. Check logs.":
     "未能完全删除对话，请查看日志。",
+  "Failed to delete conversation. Codex thread was not archived.":
+    "未能删除对话。Codex 线程尚未归档。",
+  "Failed to delete conversation because its saved identity is inconsistent. Check logs.":
+    "由于保存的对话身份不一致，未能删除对话。请查看日志。",
 
   // ── Constants / count labels ────────────────────────────────────────────
   "Add Text": "添加文本",
@@ -314,6 +322,11 @@ const zhCN: Record<string, string> = {
     "本地 MinerU 缓存和同步包均可用。",
   "Local MinerU cache available.": "本地 MinerU 缓存可用。",
   "No MinerU cache available.": "没有可用的 MinerU 缓存。",
+  "Click to do MinerU parsing": "点击进行 MinerU 解析",
+  "MinerU parsing…": "MinerU 解析中…",
+  "Click to stop MinerU parsing": "点击停止 MinerU 解析",
+  "MinerU parsing failed. Click to retry": "MinerU 解析失败。点击重试",
+  "⚠️ enable MinerU to start PDF parsing": "⚠️ 请启用 MinerU 以开始 PDF 解析",
   "Enable MinerU sync before preparing packages.":
     "请先启用 MinerU 同步，再准备同步包。",
   "No API key needed to start, but a personal key is strongly recommended.":
@@ -346,14 +359,25 @@ const zhCN: Record<string, string> = {
   "Uploading PDF…": "正在上传 PDF…",
   "Uploading to local server… (%s MB)": "正在上传到本地服务…（%s MB）",
   "Upload failed: HTTP %s to %s": "上传失败：HTTP %s 到 %s",
+  "Waiting for MinerU to start…": "正在等待 MinerU 开始处理…",
+  "Waiting for MinerU to start… (%ss)":
+    "正在等待 MinerU 开始处理…（%s 秒）",
+  "Waiting for MinerU upload to be accepted… (%ss)":
+    "正在等待 MinerU 接收上传文件…（%s 秒）",
+  "Waiting for MinerU status… (%ss)":
+    "正在等待 MinerU 状态…（%s 秒）",
   "Processing on server…": "服务器正在处理…",
   "Processing on server… (%ss)": "服务器正在处理…（%s 秒）",
+  "Converting on server… (%ss)": "服务器正在转换…（%s 秒）",
   "Waiting for parser… (%ss)": "等待解析器处理…（%s 秒）",
   "Local MinerU parsing timed out": "本地 MinerU 解析超时",
   "Local parse failed: HTTP %s": "本地解析失败：HTTP %s",
   "Done (%s files extracted)": "完成（已提取 %s 个文件）",
   "Extraction failed on server": "服务器解析失败",
-  "Timed out after 10 minutes": "10 分钟后超时",
+  "Missing ZIP result from server": "服务器未返回 ZIP 结果",
+  "Timed out waiting for MinerU status": "等待 MinerU 状态超时",
+  "Timed out before MinerU started processing":
+    "MinerU 开始处理前等待超时",
   "Local MinerU health check timed out": "本地 MinerU 健康检查超时",
   "Local MinerU health check failed: HTTP %s":
     "本地 MinerU 健康检查失败：HTTP %s",
@@ -798,7 +822,7 @@ export function getWelcomeHtml(): string {
   if (getEffectiveLocale().startsWith("zh")) {
     return `
       <div class="llm-welcome">
-        <div class="llm-welcome-icon">💬</div>
+        <div class="llm-welcome-icon llm-context-svg-icon llm-context-icon-model-chip" aria-hidden="true"></div>
         <div class="llm-welcome-text">
           <div class="llm-welcome-title">开始对话 — 以下是你可以做的。</div>
           <ul class="llm-welcome-list">
@@ -813,7 +837,7 @@ export function getWelcomeHtml(): string {
   }
   return `
     <div class="llm-welcome">
-      <div class="llm-welcome-icon">💬</div>
+      <div class="llm-welcome-icon llm-context-svg-icon llm-context-icon-model-chip" aria-hidden="true"></div>
       <div class="llm-welcome-text">
         <div class="llm-welcome-title">Start chatting — here's what you can do.</div>
         <ul class="llm-welcome-list">
