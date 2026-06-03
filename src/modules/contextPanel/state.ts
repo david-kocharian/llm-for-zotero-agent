@@ -14,6 +14,7 @@ import type {
   ChatRuntimeMode,
   PaperContextSendMode,
   PaperContentSourceMode,
+  GeneratedChatImage,
 } from "./types";
 import { TTLMap } from "./contexts/ttlMap";
 // =============================================================================
@@ -165,6 +166,7 @@ export let responseMenuTarget: {
   assistantTimestamp?: number;
   paperContexts?: PaperContextRef[];
   quoteCitations?: QuoteCitation[];
+  generatedImages?: GeneratedChatImage[];
 } | null = null;
 export function setResponseMenuTarget(value: typeof responseMenuTarget) {
   responseMenuTarget = value;

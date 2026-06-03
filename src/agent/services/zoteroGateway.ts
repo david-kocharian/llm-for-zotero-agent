@@ -16,6 +16,10 @@ import {
   stripNoteHtml,
 } from "../../modules/contextPanel/notes";
 import {
+  importNoteImageAsset,
+  type NoteImageImportInput,
+} from "../../modules/contextPanel/noteImages";
+import {
   getActiveContextAttachmentFromTabs,
   resolveContextSourceItem,
 } from "../../modules/contextPanel/contextResolution";
@@ -24,6 +28,7 @@ import { invalidateCachedContextText } from "../../modules/contextPanel/pdfConte
 import { ensureMineruCacheDirForAttachment } from "../../modules/contextPanel/mineruSync";
 import type { AgentRuntimeRequest } from "../types";
 import type {
+  GeneratedChatImage,
   PaperContentSourceMode,
   PaperContextRef,
   TagContextRef,
@@ -2039,6 +2044,7 @@ export class ZoteroGateway {
     modelName: string;
     target?: "item" | "standalone";
     appendToTrackedNote?: boolean;
+    generatedImages?: GeneratedChatImage[];
   }): Promise<"created" | "appended" | "standalone_created"> {
     if (params.target === "standalone") {
       const libraryID =
@@ -2049,6 +2055,9 @@ export class ZoteroGateway {
         libraryID,
         params.content,
         params.modelName,
+        undefined,
+        undefined,
+        params.generatedImages,
       );
       return "standalone_created";
     }
@@ -2063,6 +2072,7 @@ export class ZoteroGateway {
       {
         appendToTrackedNote: params.appendToTrackedNote === true,
         rememberCreatedNote: params.appendToTrackedNote === true,
+        generatedImages: params.generatedImages,
       },
     );
   }
@@ -2746,58 +2756,10 @@ export class ZoteroGateway {
    * Import an image file as an embedded note attachment and return its key.
    * The key can then be used in note HTML: <img data-attachment-key="KEY" />
    */
-  async importNoteImage(params: {
-    imagePath: string;
-    noteItemId: number;
-  }): Promise<{ key: string } | null> {
-    try {
-      // Read the image file as bytes
-      const IOUtils = (globalThis as any).IOUtils;
-      let bytes: Uint8Array;
-      if (IOUtils?.read) {
-        bytes = new Uint8Array(await IOUtils.read(params.imagePath));
-      } else {
-        const OSFile = (globalThis as any).OS?.File;
-        if (!OSFile?.read) return null;
-        const result = await OSFile.read(params.imagePath);
-        bytes = new Uint8Array(result);
-      }
-
-      // Determine MIME type from extension
-      const ext = params.imagePath.split(".").pop()?.toLowerCase() || "";
-      const mimeMap: Record<string, string> = {
-        png: "image/png",
-        jpg: "image/jpeg",
-        jpeg: "image/jpeg",
-        gif: "image/gif",
-        webp: "image/webp",
-        svg: "image/svg+xml",
-      };
-      const mimeType = mimeMap[ext] || "image/png";
-
-      // Create blob
-      const blobPart = bytes.buffer.slice(
-        bytes.byteOffset,
-        bytes.byteOffset + bytes.byteLength,
-      ) as ArrayBuffer;
-      const blob = new Blob([blobPart], { type: mimeType });
-
-      // Import as embedded image attachment
-      const Attachments = (Zotero as any).Attachments;
-      if (!Attachments?.importEmbeddedImage) return null;
-
-      const attachment = await Attachments.importEmbeddedImage({
-        blob,
-        parentItemID: params.noteItemId,
-      });
-
-      return attachment?.key ? { key: String(attachment.key) } : null;
-    } catch (error) {
-      Zotero.debug?.(
-        `[llm-for-zotero] importNoteImage failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      return null;
-    }
+  async importNoteImage(
+    params: NoteImageImportInput,
+  ): Promise<{ key: string } | null> {
+    return importNoteImageAsset(params);
   }
 
   // ── Import local files ──────────────────────────────────────────

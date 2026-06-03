@@ -8,6 +8,7 @@ import {
   renderAgentTrace,
 } from "../src/modules/contextPanel/agentTrace/render";
 import {
+  resolveAssistantResponseMenuContent,
   renderAssistantMarkdownHtmlForChat,
   renderAssistantGeneratedImagesInto,
   shouldAttachAssistantResponseContextMenu,
@@ -32,6 +33,7 @@ import type {
   AgentRunEventRecord,
 } from "../src/agent/types";
 import { buildQuoteCitation } from "../src/modules/contextPanel/quoteCitations";
+import { resolveGeneratedImageAsset } from "../src/modules/contextPanel/generatedImageAssets";
 
 class FakeClassList {
   private readonly classes = new Set<string>();
@@ -58,9 +60,11 @@ class FakeElement {
   public textContent = "";
   public type = "";
   public title = "";
+  public disabled = false;
   public attributes: Record<string, string> = {};
   private copyableChildren: FakeElement[] = [];
   private html = "";
+  private listeners = new Map<string, Array<(event: any) => void>>();
 
   constructor(public readonly tagName = "div") {}
 
@@ -105,8 +109,60 @@ class FakeElement {
     return null;
   }
 
-  addEventListener(): void {
-    // Test fake only records tree mutations.
+  addEventListener(type: string, listener: (event: any) => void): void {
+    const existing = this.listeners.get(type) || [];
+    existing.push(listener);
+    this.listeners.set(type, existing);
+  }
+
+  dispatchFakeEvent(type: string): {
+    defaultPrevented: boolean;
+    propagationStopped: boolean;
+    immediatePropagationStopped: boolean;
+  } {
+    const event = {
+      defaultPrevented: false,
+      propagationStopped: false,
+      immediatePropagationStopped: false,
+      preventDefault() {
+        this.defaultPrevented = true;
+      },
+      stopPropagation() {
+        this.propagationStopped = true;
+      },
+      stopImmediatePropagation() {
+        this.immediatePropagationStopped = true;
+      },
+    };
+    for (const listener of this.listeners.get(type) || []) {
+      listener(event);
+    }
+    return event;
+  }
+
+  async dispatchFakeEventAsync(type: string): Promise<{
+    defaultPrevented: boolean;
+    propagationStopped: boolean;
+    immediatePropagationStopped: boolean;
+  }> {
+    const event = {
+      defaultPrevented: false,
+      propagationStopped: false,
+      immediatePropagationStopped: false,
+      preventDefault() {
+        this.defaultPrevented = true;
+      },
+      stopPropagation() {
+        this.propagationStopped = true;
+      },
+      stopImmediatePropagation() {
+        this.immediatePropagationStopped = true;
+      },
+    };
+    await Promise.all(
+      (this.listeners.get(type) || []).map((listener) => listener(event)),
+    );
+    return event;
   }
 
   contains(node: unknown): boolean {
@@ -921,6 +977,23 @@ describe("agentTrace render", function () {
     assert.equal(savedImg?.alt, "result.png");
     assert.equal(savedImg?.title, "A concise chart");
     assert.isNull(savedPathRoot.findByClass("llm-user-screenshots-preview"));
+    const savedActions = savedPathRoot.findAllByClass(
+      "llm-generated-image-action",
+    );
+    assert.lengthOf(savedActions, 3);
+    assert.isFalse(
+      (savedPathRoot.findByClass(
+        "llm-generated-image-action-open",
+      ) as FakeElement | null)?.disabled,
+    );
+    const openClick = (
+      savedPathRoot.findByClass(
+        "llm-generated-image-action-open",
+      ) as FakeElement
+    ).dispatchFakeEvent("click");
+    assert.isTrue(openClick.defaultPrevented);
+    assert.isTrue(openClick.propagationStopped);
+    assert.isTrue(openClick.immediatePropagationStopped);
 
     const dataUrlContainer = fakeDocument.createElement("div") as HTMLElement;
     assert.isTrue(
@@ -934,6 +1007,11 @@ describe("agentTrace render", function () {
       "llm-assistant-generated-image",
     ) as unknown as { src?: string } | null;
     assert.equal(dataImg?.src, "data:image/png;base64,abc123");
+    assert.isTrue(
+      ((dataUrlContainer as unknown as FakeElement).findByClass(
+        "llm-generated-image-action-open",
+      ) as FakeElement | null)?.disabled,
+    );
 
     const opaqueContainer = fakeDocument.createElement("div") as HTMLElement;
     assert.isFalse(
@@ -943,6 +1021,334 @@ describe("agentTrace render", function () {
         fakeDocument,
       ),
     );
+  });
+
+  it("saves generated assistant images through the Zotero file picker", async function () {
+    const globalScope = globalThis as typeof globalThis & {
+      IOUtils?: {
+        read?: (path: string) => Promise<Uint8Array>;
+        copy?: (sourcePath: string, destPath: string) => Promise<void>;
+      };
+      Zotero?: {
+        getMainWindow?: () => unknown;
+        FilePicker?: new () => {
+          modeSave: number;
+          returnOK: number;
+          returnReplace: number;
+          filterAll: number;
+          defaultString?: string;
+          defaultExtension?: string;
+          file?: string | { path?: string };
+          init: (parent: unknown, title: string, mode: number) => void;
+          appendFilter: (title: string, filter: string) => void;
+          appendFilters: (filterMask: number) => void;
+          show: () => Promise<number>;
+        };
+      };
+      ztoolkit?: { log?: (...args: unknown[]) => void };
+    };
+    const originalIOUtils = globalScope.IOUtils;
+    const originalZotero = globalScope.Zotero;
+    const originalZtoolkit = globalScope.ztoolkit;
+    const copied: Array<{ sourcePath: string; destPath: string }> = [];
+    let pickerDefaultString = "";
+    globalScope.IOUtils = {
+      read: async (path: string) => {
+        assert.equal(path, "/tmp/result.png");
+        return new Uint8Array([7, 8, 9]);
+      },
+      copy: async (sourcePath: string, destPath: string) => {
+        copied.push({ sourcePath, destPath });
+      },
+    };
+    class FakeFilePicker {
+      modeSave = 1;
+      returnOK = 0;
+      returnReplace = 1;
+      filterAll = 2;
+      file = "/tmp/saved-result.png";
+      defaultExtension = "";
+      set defaultString(value: string) {
+        pickerDefaultString = value;
+      }
+      get defaultString() {
+        return pickerDefaultString;
+      }
+      init(parent: unknown, title: string, mode: number) {
+        assert.equal(parent, fakeMainWindow);
+        assert.equal(title, "Save generated image");
+        assert.equal(mode, 1);
+      }
+      appendFilter(_title: string, _filter: string) {}
+      appendFilters(_filterMask: number) {}
+      async show() {
+        return 0;
+      }
+    }
+    const fakeMainWindow = { browsingContext: { id: "main" } };
+    globalScope.Zotero = {
+      ...(originalZotero || {}),
+      getMainWindow: () => fakeMainWindow,
+      FilePicker: FakeFilePicker,
+    };
+    globalScope.ztoolkit = {
+      ...(originalZtoolkit || {}),
+      log: () => {},
+    };
+
+    try {
+      const container = fakeDocument.createElement("div") as HTMLElement;
+      const statuses: string[] = [];
+      assert.isTrue(
+        renderAssistantGeneratedImagesInto(
+          container,
+          [{ id: "img-save", label: "result.png", path: "/tmp/result.png" }],
+          fakeDocument,
+          {
+            onImageActionStatus: (message) => statuses.push(message),
+          },
+        ),
+      );
+      const saveButton = (container as unknown as FakeElement).findByClass(
+        "llm-generated-image-action-save",
+      ) as FakeElement;
+
+      const saveClick = await saveButton.dispatchFakeEventAsync("click");
+      assert.isTrue(saveClick.defaultPrevented);
+      assert.isTrue(saveClick.propagationStopped);
+      assert.equal(pickerDefaultString, "result.png");
+      assert.deepEqual(copied, [
+        { sourcePath: "/tmp/result.png", destPath: "/tmp/saved-result.png" },
+      ]);
+      assert.deepEqual(statuses, ["Saved image"]);
+    } finally {
+      if (originalIOUtils) {
+        globalScope.IOUtils = originalIOUtils;
+      } else {
+        delete globalScope.IOUtils;
+      }
+      if (originalZotero) {
+        globalScope.Zotero = originalZotero;
+      } else {
+        delete globalScope.Zotero;
+      }
+      if (originalZtoolkit) {
+        globalScope.ztoolkit = originalZtoolkit;
+      } else {
+        delete globalScope.ztoolkit;
+      }
+    }
+  });
+
+  it("passes browsingContext to the XPCOM generated-image save picker fallback", async function () {
+    const globalScope = globalThis as typeof globalThis & {
+      IOUtils?: {
+        read?: (path: string) => Promise<Uint8Array>;
+        copy?: (sourcePath: string, destPath: string) => Promise<void>;
+      };
+      Zotero?: {
+        getMainWindow?: () => unknown;
+        FilePicker?: unknown;
+      };
+      Components?: {
+        classes?: Record<string, { createInstance?: (iface: unknown) => unknown }>;
+        interfaces?: {
+          nsIFilePicker?: {
+            modeSave: number;
+            returnOK: number;
+            returnReplace: number;
+            filterAll: number;
+          };
+        };
+      };
+      ChromeUtils?: {
+        importESModule?: (url: string) => unknown;
+      };
+      ztoolkit?: { log?: (...args: unknown[]) => void };
+    };
+    const originalIOUtils = globalScope.IOUtils;
+    const originalZotero = globalScope.Zotero;
+    const originalComponents = globalScope.Components;
+    const originalChromeUtils = globalScope.ChromeUtils;
+    const originalZtoolkit = globalScope.ztoolkit;
+    const browsingContext = { id: "main-browsing-context" };
+    const copied: Array<{ sourcePath: string; destPath: string }> = [];
+    let initParent: unknown = null;
+    globalScope.IOUtils = {
+      read: async () => new Uint8Array([7, 8, 9]),
+      copy: async (sourcePath: string, destPath: string) => {
+        copied.push({ sourcePath, destPath });
+      },
+    };
+    globalScope.Zotero = {
+      ...(originalZotero || {}),
+      getMainWindow: () => ({ browsingContext }),
+      FilePicker: undefined,
+    };
+    globalScope.ChromeUtils = {
+      importESModule: () => {
+        throw new Error("module import unavailable");
+      },
+    };
+    const nsIFilePicker = {
+      modeSave: 1,
+      returnOK: 0,
+      returnReplace: 2,
+      filterAll: 1,
+    };
+    globalScope.Components = {
+      classes: {
+        "@mozilla.org/filepicker;1": {
+          createInstance: () => ({
+            file: { path: "/tmp/xpcom-saved-result.png" },
+            set defaultString(_value: string) {
+              throw new Error("defaultString unavailable");
+            },
+            init: (parent: unknown, title: string, mode: number) => {
+              initParent = parent;
+              assert.equal(title, "Save generated image");
+              assert.equal(mode, nsIFilePicker.modeSave);
+            },
+            appendFilter: () => {},
+            appendFilters: () => {},
+            open: (callback: (result: number) => void) =>
+              callback(nsIFilePicker.returnOK),
+          }),
+        },
+      },
+      interfaces: { nsIFilePicker },
+    };
+    globalScope.ztoolkit = {
+      ...(originalZtoolkit || {}),
+      log: () => {},
+    };
+
+    try {
+      const container = fakeDocument.createElement("div") as HTMLElement;
+      const statuses: string[] = [];
+      assert.isTrue(
+        renderAssistantGeneratedImagesInto(
+          container,
+          [{ id: "img-xpcom", label: "result.png", path: "/tmp/result.png" }],
+          fakeDocument,
+          {
+            onImageActionStatus: (message) => statuses.push(message),
+          },
+        ),
+      );
+      const saveButton = (container as unknown as FakeElement).findByClass(
+        "llm-generated-image-action-save",
+      ) as FakeElement;
+
+      await saveButton.dispatchFakeEventAsync("click");
+
+      assert.equal(initParent, browsingContext);
+      assert.deepEqual(copied, [
+        {
+          sourcePath: "/tmp/result.png",
+          destPath: "/tmp/xpcom-saved-result.png",
+        },
+      ]);
+      assert.deepEqual(statuses, ["Saved image"]);
+    } finally {
+      if (originalIOUtils) {
+        globalScope.IOUtils = originalIOUtils;
+      } else {
+        delete globalScope.IOUtils;
+      }
+      if (originalZotero) {
+        globalScope.Zotero = originalZotero;
+      } else {
+        delete globalScope.Zotero;
+      }
+      if (originalComponents) {
+        globalScope.Components = originalComponents;
+      } else {
+        delete globalScope.Components;
+      }
+      if (originalChromeUtils) {
+        globalScope.ChromeUtils = originalChromeUtils;
+      } else {
+        delete globalScope.ChromeUtils;
+      }
+      if (originalZtoolkit) {
+        globalScope.ztoolkit = originalZtoolkit;
+      } else {
+        delete globalScope.ztoolkit;
+      }
+    }
+  });
+
+  it("treats image-only assistant responses as response-menu targets", function () {
+    const imageOnly = {
+      text: "",
+      generatedImages: [
+        {
+          id: "img-only",
+          label: "result.png",
+          path: "/tmp/result.png",
+        },
+      ],
+    };
+
+    assert.isTrue(shouldAttachAssistantResponseContextMenu(imageOnly));
+    const fullTarget = resolveAssistantResponseMenuContent(imageOnly);
+    assert.deepEqual(fullTarget, {
+      contentText: "",
+      generatedImages: [
+        {
+          id: "img-only",
+          label: "result.png",
+          path: "/tmp/result.png",
+        },
+      ],
+    });
+
+    const selectedTarget = resolveAssistantResponseMenuContent(
+      imageOnly,
+      "selected words",
+    );
+    assert.deepEqual(selectedTarget, { contentText: "selected words" });
+    assert.isFalse(shouldAttachAssistantResponseContextMenu({ text: "" }));
+  });
+
+  it("resolves generated image assets from paths and data URLs", async function () {
+    const globalScope = globalThis as typeof globalThis & {
+      IOUtils?: { read?: (path: string) => Promise<Uint8Array> };
+    };
+    const originalIOUtils = globalScope.IOUtils;
+    globalScope.IOUtils = {
+      read: async (path: string) => {
+        assert.equal(path, "/tmp/result.png");
+        return new Uint8Array([7, 8, 9]);
+      },
+    };
+    try {
+      const pathAsset = await resolveGeneratedImageAsset({
+        id: "img-path",
+        label: "result.png",
+        path: "/tmp/result.png",
+      });
+      assert.deepEqual(Array.from(pathAsset?.bytes || []), [7, 8, 9]);
+      assert.equal(pathAsset?.mimeType, "image/png");
+      assert.equal(pathAsset?.fileName, "result.png");
+      assert.equal(pathAsset?.fileUrl, "file:///tmp/result.png");
+
+      const dataAsset = await resolveGeneratedImageAsset({
+        id: "img-data",
+        label: "inline",
+        src: "data:image/png;base64,AQID",
+      });
+      assert.deepEqual(Array.from(dataAsset?.bytes || []), [1, 2, 3]);
+      assert.equal(dataAsset?.mimeType, "image/png");
+      assert.equal(dataAsset?.fileName, "inline.png");
+    } finally {
+      if (originalIOUtils) {
+        globalScope.IOUtils = originalIOUtils;
+      } else {
+        delete globalScope.IOUtils;
+      }
+    }
   });
 
   it("renders full expandable details for long Codex trace values", function () {
