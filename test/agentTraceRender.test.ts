@@ -36,7 +36,10 @@ import type {
   AgentRunEventRecord,
 } from "../src/agent/types";
 import { buildQuoteCitation } from "../src/modules/contextPanel/quoteCitations";
-import { resolveGeneratedImageAsset } from "../src/modules/contextPanel/generatedImageAssets";
+import {
+  isEmbeddableGeneratedImage,
+  resolveGeneratedImageAsset,
+} from "../src/modules/contextPanel/generatedImageAssets";
 
 class FakeClassList {
   private readonly classes = new Set<string>();
@@ -1423,7 +1426,7 @@ describe("agentTrace render", function () {
         {
           id: "img-only",
           label: "result.png",
-          path: "/tmp/result.png",
+          src: "file:///tmp/result.png",
         },
       ],
     };
@@ -1436,7 +1439,7 @@ describe("agentTrace render", function () {
         {
           id: "img-only",
           label: "result.png",
-          path: "/tmp/result.png",
+          src: "file:///tmp/result.png",
         },
       ],
     });
@@ -1449,13 +1452,15 @@ describe("agentTrace render", function () {
     assert.isFalse(shouldAttachAssistantResponseContextMenu({ text: "" }));
   });
 
-  it("resolves generated image assets from paths and data URLs", async function () {
+  it("resolves generated image assets from paths, file URLs, and data URLs", async function () {
     const globalScope = globalThis as typeof globalThis & {
       IOUtils?: { read?: (path: string) => Promise<Uint8Array> };
     };
     const originalIOUtils = globalScope.IOUtils;
+    const readPaths: string[] = [];
     globalScope.IOUtils = {
       read: async (path: string) => {
+        readPaths.push(path);
         assert.equal(path, "/tmp/result.png");
         return new Uint8Array([7, 8, 9]);
       },
@@ -1471,6 +1476,19 @@ describe("agentTrace render", function () {
       assert.equal(pathAsset?.fileName, "result.png");
       assert.equal(pathAsset?.fileUrl, "file:///tmp/result.png");
 
+      const fileUrlImage = {
+        id: "img-file-url",
+        label: "result.png",
+        src: "file:///tmp/result.png",
+      };
+      assert.isTrue(isEmbeddableGeneratedImage(fileUrlImage));
+      const fileUrlAsset = await resolveGeneratedImageAsset(fileUrlImage);
+      assert.deepEqual(Array.from(fileUrlAsset?.bytes || []), [7, 8, 9]);
+      assert.equal(fileUrlAsset?.mimeType, "image/png");
+      assert.equal(fileUrlAsset?.fileName, "result.png");
+      assert.equal(fileUrlAsset?.path, "/tmp/result.png");
+      assert.equal(fileUrlAsset?.fileUrl, "file:///tmp/result.png");
+
       const dataAsset = await resolveGeneratedImageAsset({
         id: "img-data",
         label: "inline",
@@ -1479,6 +1497,7 @@ describe("agentTrace render", function () {
       assert.deepEqual(Array.from(dataAsset?.bytes || []), [1, 2, 3]);
       assert.equal(dataAsset?.mimeType, "image/png");
       assert.equal(dataAsset?.fileName, "inline.png");
+      assert.deepEqual(readPaths, ["/tmp/result.png", "/tmp/result.png"]);
     } finally {
       if (originalIOUtils) {
         globalScope.IOUtils = originalIOUtils;

@@ -95,6 +95,22 @@ function normalizeImagePath(path: string | undefined): string {
   return text;
 }
 
+function resolveNormalizedGeneratedImageLocalPath(
+  image: GeneratedChatImage,
+): string {
+  const path = normalizeImagePath(image.path);
+  if (path) return path;
+  const src = cleanText(image.src, Number.MAX_SAFE_INTEGER);
+  return /^file:\/\//i.test(src) ? fileUrlToPath(src) || "" : "";
+}
+
+export function resolveGeneratedImageLocalPath(
+  image: GeneratedChatImage,
+): string {
+  const normalized = normalizeGeneratedChatImages([image])[0];
+  return normalized ? resolveNormalizedGeneratedImageLocalPath(normalized) : "";
+}
+
 function decodeBase64Bytes(base64: string): Uint8Array {
   const normalized = base64.replace(/\s+/g, "");
   const decoder = globalThis.atob;
@@ -114,7 +130,7 @@ export function isEmbeddableGeneratedImage(
 ): boolean {
   const normalized = normalizeGeneratedChatImages([image])[0];
   if (!normalized) return false;
-  if (normalizeImagePath(normalized.path)) return true;
+  if (resolveNormalizedGeneratedImageLocalPath(normalized)) return true;
   const src = cleanText(normalized.src, Number.MAX_SAFE_INTEGER);
   return /^data:image\/[a-z0-9.+-]+;base64,/i.test(src);
 }
@@ -125,15 +141,16 @@ export async function resolveGeneratedImageAsset(
   const normalized = normalizeGeneratedChatImages([image])[0];
   if (!normalized) return null;
 
-  const path = normalizeImagePath(normalized.path);
+  const path = resolveNormalizedGeneratedImageLocalPath(normalized);
   if (path) {
     const bytes = await readAttachmentBytes(path);
     const mimeType = inferGeneratedImageMimeType(path || normalized.label);
+    const imageWithPath = normalized.path ? normalized : { ...normalized, path };
     return {
-      image: normalized,
+      image: imageWithPath,
       bytes,
       mimeType,
-      fileName: getGeneratedImageFileName(normalized, mimeType),
+      fileName: getGeneratedImageFileName(imageWithPath, mimeType),
       path,
       fileUrl: toFileUrl(path),
     };

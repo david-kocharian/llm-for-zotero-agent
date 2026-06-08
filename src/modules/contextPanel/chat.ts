@@ -93,6 +93,7 @@ import {
 import {
   isEmbeddableGeneratedImage,
   resolveGeneratedImageAsset,
+  resolveGeneratedImageLocalPath,
   saveGeneratedImageAssetToPath,
 } from "./generatedImageAssets";
 import { ensureMineruCacheDirForAttachment } from "./mineruSync";
@@ -924,7 +925,7 @@ export function renderAssistantGeneratedImagesInto(
           },
         ),
       );
-      const fileUrl = toFileUrl(image.path);
+      const fileUrl = toFileUrl(resolveGeneratedImageLocalPath(image));
       const openButton = createActionButton(
         "llm-generated-image-action-open",
         "Open image",

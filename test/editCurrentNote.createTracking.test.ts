@@ -455,7 +455,7 @@ describe("editCurrentNote create tracking", function () {
           {
             id: "img-history",
             label: "history.png",
-            path: "/tmp/history.png",
+            src: "file:///tmp/history.png",
           },
         ],
       },
@@ -469,5 +469,6 @@ describe("editCurrentNote create tracking", function () {
     assert.notInclude(note.getNote(), "Generated image embedded");
     assert.notInclude(note.getNote(), "history.png</p>");
     assert.deepEqual(importedImageParents, [100]);
+    assert.deepEqual(importedImagePaths, ["/tmp/history.png"]);
   });
 });
