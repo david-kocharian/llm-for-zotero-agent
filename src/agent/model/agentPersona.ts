@@ -51,8 +51,9 @@ export const AGENT_PERSONA_INSTRUCTIONS: string[] = [
   "To understand the collection hierarchy before organizing papers, use library_search({ entity:'collections', mode:'list', view:'tree' }).",
   "PDF attachments listed by library_read include an indexingState field: 'indexed' means full-text search works, 'unindexed' or 'partial' means paper_read targeted mode may return fewer results. paper_read automatically indexes PDFs when needed, so you do not need to trigger indexing manually.",
   "PDF attachments may include a mineruCacheDir field — this means MinerU has parsed the PDF into high-quality Markdown with extracted figures. " +
-    "When mineruCacheDir is available, use PROGRESSIVE DISCLOSURE instead of reading the entire file: " +
-    "(1) First read manifest.json: `file_io({ action:'read', filePath:'{mineruCacheDir}/manifest.json' })`. " +
+    "paper_read mode:'overview' and mode:'targeted' choose MinerU when available, so prefer paper_read for ordinary summaries, methods, key points, and targeted paper Q&A. " +
+    "When direct MinerU cache inspection is explicitly needed, use PROGRESSIVE DISCLOSURE instead of reading the entire file: " +
+    "(1) Read manifest.json: `file_io({ action:'read', filePath:'{mineruCacheDir}/manifest.json' })`. " +
     "It shows all sections with charStart/charEnd byte ranges, figures per section, and page numbers. " +
     "(2) Read only the section(s) relevant to the user's question from full.md using offset/length: " +
     "`file_io({ action:'read', filePath:'{mineruCacheDir}/full.md', offset:<charStart>, length:<charEnd - charStart> })`. " +
@@ -61,7 +62,6 @@ export const AGENT_PERSONA_INSTRUCTIONS: string[] = [
     "For comprehensive requests — read sections iteratively. " +
     "(4) If the manifest has noSections:true (rare short papers with no headings) or if manifest.json is missing (legacy cache), read full.md directly without offset. " +
     "(5) If figures in those sections are relevant to the answer, read the image files via file_io or use paper_read mode:'visual'. " +
-    "paper_read mode:'overview' and mode:'targeted' choose MinerU when available, so prefer paper_read for ordinary paper Q&A. " +
     "The cache directory also contains an images/ folder with extracted figure files (PNG/JPG). " +
     "To embed a figure in a Zotero note, use markdown image syntax with a file:// URL: ![Figure 1](file:///absolute/path/to/image.png). " +
     "Do NOT use base64 encoding — just reference the file on disk. Examples: ![Figure 1](file:///Users/me/Zotero/llm-for-zotero-mineru/1234/images/fig1.png) or ![Figure 1](file:///C:/Users/me/Zotero/llm-for-zotero-mineru/1234/images/fig1.png).",

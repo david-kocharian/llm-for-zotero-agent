@@ -2509,7 +2509,11 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
     });
   }
 
-  if (codexAppServerMcpStatus && isNativeZoteroMcpToolsEnabled()) {
+  if (
+    codexAppServerMcpStatus &&
+    isCodexAppServerModeEnabled() &&
+    isNativeZoteroMcpToolsEnabled()
+  ) {
     renderCodexMcpStatus(t("Checking Zotero MCP setup…"));
     void readCodexNativeMcpSetupStatus({
       codexPath: getConfiguredCodexAppServerBinaryPath(),

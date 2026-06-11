@@ -38,7 +38,7 @@ export function createReadPaperTool(
       description:
         "Read text content from a PDF. By default reads the opening sections " +
         "(abstract and introduction). Use chunkIndexes to read specific sections " +
-        "by index. Supports up to 20 papers per call. If the paper context or read_library attachment result has mineruCacheDir, prefer file_io on MinerU manifest.json/full.md before using this raw PDF-text fallback.",
+        "by index. Supports up to 20 papers per call. For ordinary paper summaries, methods, key points, and targeted Q&A, use paper_read; use read_paper only as a raw PDF-text fallback.",
       inputSchema: {
         type: "object",
         additionalProperties: false,

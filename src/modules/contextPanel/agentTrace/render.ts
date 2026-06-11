@@ -26,6 +26,7 @@ import {
   isContextIconName,
   NOTE_EDIT_PENCIL_ICON,
 } from "../contextIcons";
+import { summarizeFileIOCall } from "../../../agent/tools/write/fileIO";
 
 type AgentTraceSummaryKind = "plan" | "tool" | "ok" | "skip" | "done";
 
@@ -2492,6 +2493,31 @@ function buildAgentTraceArgsDetails(args: unknown): AgentTraceDetail[] {
   return detail ? [detail] : [];
 }
 
+function readTraceStringField(
+  args: Record<string, unknown>,
+  fields: readonly string[],
+): string | null {
+  for (const field of fields) {
+    const value = args[field];
+    if (typeof value === "string" && value.trim()) return value;
+  }
+  return null;
+}
+
+function buildFileIoTraceCodeBlock(args: Record<string, unknown>): string | undefined {
+  const filePath = readTraceStringField(args, [
+    "filePath",
+    "path",
+    "file_path",
+    "filepath",
+  ]);
+  if (!filePath) return undefined;
+  const action =
+    readTraceStringField(args, ["action", "mode", "operation", "op"]) ||
+    "access";
+  return `${action} ${filePath}`;
+}
+
 function summarizeAgentTraceToolCall(
   name: string,
   args: unknown,
@@ -2504,18 +2530,22 @@ function summarizeAgentTraceToolCall(
     name === "Skill" && typeof a.skill === "string" && a.skill.trim()
       ? a.skill.trim()
       : null;
+  const fallbackFileIoSummary =
+    name === "file_io" ? summarizeFileIOCall(args) : null;
   const text =
     resolveToolPresentationSummary(
       getToolDefinition(name)?.presentation?.summaries?.onCall,
       { label, args, request },
-    ) || (skillName ? `Using Skill: ${skillName}` : `Using ${label}`);
+    ) ||
+    fallbackFileIoSummary ||
+    (skillName ? `Using Skill: ${skillName}` : `Using ${label}`);
 
   // Show code block for shell commands and file I/O
   let codeBlock: string | undefined;
   if (name === "run_command" && typeof a.command === "string") {
     codeBlock = a.command;
-  } else if (name === "file_io" && typeof a.filePath === "string") {
-    codeBlock = `${a.action || "access"} ${a.filePath}`;
+  } else if (name === "file_io") {
+    codeBlock = buildFileIoTraceCodeBlock(a);
   }
 
   return {

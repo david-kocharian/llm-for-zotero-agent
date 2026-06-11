@@ -229,15 +229,81 @@ describe("tool validation compatibility", function () {
     assert.equal(operationAlias.value.action, "read");
     assert.equal(operationAlias.value.filePath, "/tmp/read-alias.md");
 
+    const actionlessMineruFullMd = tool.validate({
+      filePath: "/tmp/llm-for-zotero-mineru/51/full.md",
+      offset: 128,
+      length: 4096,
+    });
+    assert.isTrue(actionlessMineruFullMd.ok);
+    if (!actionlessMineruFullMd.ok) return;
+    assert.equal(actionlessMineruFullMd.value.action, "read");
+    assert.equal(
+      actionlessMineruFullMd.value.filePath,
+      "/tmp/llm-for-zotero-mineru/51/full.md",
+    );
+    assert.isFalse(
+      await tool.shouldRequireConfirmation?.(
+        actionlessMineruFullMd.value,
+        baseContext,
+      ),
+    );
+
+    const actionlessMineruManifest = tool.validate({
+      path: "/tmp/llm-for-zotero-mineru/51/manifest.json",
+    });
+    assert.isTrue(actionlessMineruManifest.ok);
+    if (!actionlessMineruManifest.ok) return;
+    assert.equal(actionlessMineruManifest.value.action, "read");
+    assert.equal(
+      actionlessMineruManifest.value.filePath,
+      "/tmp/llm-for-zotero-mineru/51/manifest.json",
+    );
+
+    const accessAlias = tool.validate({
+      action: "access",
+      filePath: "/tmp/arbitrary-read.md",
+    });
+    assert.isTrue(accessAlias.ok);
+    if (!accessAlias.ok) return;
+    assert.equal(accessAlias.value.action, "read");
+
+    const inspectAlias = tool.validate({
+      operation: "inspect",
+      file_path: "/tmp/inspect-read.md",
+    });
+    assert.isTrue(inspectAlias.ok);
+    if (!inspectAlias.ok) return;
+    assert.equal(inspectAlias.value.action, "read");
+    assert.equal(inspectAlias.value.filePath, "/tmp/inspect-read.md");
+
     const missingAction = tool.validate({
       filePath: "/tmp/no-action.md",
     });
     assert.isFalse(missingAction.ok);
 
+    const actionlessWriteLike = tool.validate({
+      filePath: "/tmp/llm-for-zotero-mineru/51/full.md",
+      content: "unsafe",
+    });
+    assert.isFalse(actionlessWriteLike.ok);
+    if (!actionlessWriteLike.ok) {
+      assert.include(actionlessWriteLike.error, "action must be");
+    }
+
+    const contentlessReadAliasWithContent = tool.validate({
+      action: "access",
+      filePath: "/tmp/not-a-read.md",
+      content: "unsafe",
+    });
+    assert.isFalse(contentlessReadAliasWithContent.ok);
+    if (!contentlessReadAliasWithContent.ok) {
+      assert.include(contentlessReadAliasWithContent.error, "action must be");
+    }
+
     for (const action of ["append", "edit", "update", "delete", "execute"]) {
       const unsupported = tool.validate({
         action,
-        filePath: `/tmp/${action}.md`,
+        filePath: "/tmp/llm-for-zotero-mineru/51/full.md",
         content: "unsafe",
       });
       assert.isFalse(unsupported.ok);

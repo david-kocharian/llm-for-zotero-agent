@@ -105,6 +105,75 @@ describe("tool guidance contracts", function () {
     assert.deepEqual(failures, []);
   });
 
+  it("keeps ordinary paper QA guidance on paper_read instead of direct MinerU file_io", function () {
+    const staleMineruFirstPatterns: Array<{ label: string; pattern: RegExp }> = [
+      {
+        label: "first use file_io on MinerU",
+        pattern: /first use file_io on MinerU/i,
+      },
+      {
+        label: "use file_io on MinerU markdown first",
+        pattern: /use file_io on MinerU markdown first/i,
+      },
+      {
+        label: "prefer reading MinerU markdown with file_io first",
+        pattern: /prefer reading (?:that )?MinerU markdown with file_io/i,
+      },
+      {
+        label: "prefer file_io manifest/full before paper tools",
+        pattern: /prefer file_io on MinerU manifest\.json\/full\.md/i,
+      },
+      {
+        label: "file_io first for MinerU caches",
+        pattern: /Use this first for MinerU paper caches/i,
+      },
+    ];
+    const failures: string[] = [];
+    const sources = readSourceFiles();
+    for (const source of sources) {
+      for (const { label, pattern } of staleMineruFirstPatterns) {
+        if (pattern.test(source.content)) {
+          failures.push(`${source.path}: ${label}`);
+        }
+      }
+    }
+    assert.deepEqual(failures, []);
+
+    const agentPersona = sources.find(
+      (source) => source.path === "src/agent/model/agentPersona.ts",
+    )?.content;
+    const fileIoTool = sources.find(
+      (source) => source.path === "src/agent/tools/write/fileIO.ts",
+    )?.content;
+
+    assert.isString(agentPersona);
+    assert.isString(fileIoTool);
+    if (typeof agentPersona !== "string" || typeof fileIoTool !== "string") {
+      return;
+    }
+    assert.include(
+      agentPersona,
+      "prefer paper_read for ordinary summaries, methods, key points, and targeted paper Q&A",
+    );
+    assert.include(
+      fileIoTool,
+      "For ordinary Zotero paper summaries, methods, key points, and targeted Q&A, use paper_read",
+    );
+    assert.include(
+      agentPersona,
+      "When direct MinerU cache inspection is explicitly needed",
+    );
+    assert.include(
+      agentPersona,
+      "file_io({ action:'read', filePath:'{mineruCacheDir}/manifest.json' })",
+    );
+    assert.include(
+      agentPersona,
+      "file_io({ action:'read', filePath:'{mineruCacheDir}/full.md'",
+    );
+    assert.include(agentPersona, "read the image files via file_io");
+  });
+
   it("does not expose hidden legacy call targets in model-visible guidance", function () {
     const registry = createBuiltInToolRegistry({
       zoteroGateway: {} as never,

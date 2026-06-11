@@ -2953,6 +2953,95 @@ describe("agentTrace render", function () {
     assert.include(actionTexts, "Response ready");
   });
 
+  it("summarizes file_io aliases and malformed actions without false write labels", function () {
+    const events: AgentRunEventRecord[] = [
+      {
+        runId: "run-1",
+        seq: 1,
+        eventType: "tool_call",
+        payload: {
+          type: "tool_call",
+          callId: "call-1",
+          name: "file_io",
+          args: {
+            filePath: "/tmp/llm-for-zotero-mineru/51/full.md",
+          },
+        },
+        createdAt: 1,
+      },
+      {
+        runId: "run-1",
+        seq: 2,
+        eventType: "tool_call",
+        payload: {
+          type: "tool_call",
+          callId: "call-2",
+          name: "file_io",
+          args: {
+            mode: "read",
+            path: "/tmp/llm-for-zotero-mineru/51/manifest.json",
+          },
+        },
+        createdAt: 2,
+      },
+      {
+        runId: "run-1",
+        seq: 3,
+        eventType: "tool_call",
+        payload: {
+          type: "tool_call",
+          callId: "call-3",
+          name: "file_io",
+          args: {
+            operation: "read_file",
+            file_path: "/tmp/llm-for-zotero-mineru/51/full.md",
+            offset: 64,
+          },
+        },
+        createdAt: 3,
+      },
+      {
+        runId: "run-1",
+        seq: 4,
+        eventType: "tool_call",
+        payload: {
+          type: "tool_call",
+          callId: "call-4",
+          name: "file_io",
+          args: {
+            action: "frobnicate",
+            filePath: "/tmp/llm-for-zotero-mineru/51/full.md",
+          },
+        },
+        createdAt: 4,
+      },
+    ];
+
+    const { items } = buildAgentTraceDisplayItems(events, null);
+    const rows = items
+      .filter(
+        (item): item is Extract<(typeof items)[number], { type: "action" }> =>
+          item.type === "action",
+      )
+      .map((item) => item.row);
+    const rowTexts = rows.map((row) => row.text);
+    const codeBlocks = rows.map((row) => row.codeBlock);
+
+    assert.include(rowTexts, "Reading full.md");
+    assert.include(rowTexts, "Reading paper structure");
+    assert.include(rowTexts, "Reading paper section");
+    assert.include(rowTexts, "Accessing full.md");
+    assert.notInclude(rowTexts, "Writing full.md");
+    assert.include(
+      codeBlocks,
+      "read /tmp/llm-for-zotero-mineru/51/manifest.json",
+    );
+    assert.include(
+      codeBlocks,
+      "read_file /tmp/llm-for-zotero-mineru/51/full.md",
+    );
+  });
+
   it("shows concrete skill names instead of a generic skill label", function () {
     const events: AgentRunEventRecord[] = [
       {
