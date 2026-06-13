@@ -247,8 +247,9 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
       const textContextConversationKey = deps.getConversationKey(item);
       const draftText = deps.inputBox.value.trim();
       const earlyProfile = deps.getSelectedProfile();
+      const rawSubmittedText = (options?.overrideText ?? draftText).trim();
       const codexNativeSkillText = resolveCodexNativeSkillText(
-        (options?.overrideText ?? draftText).trim(),
+        rawSubmittedText,
         earlyProfile?.authMode,
       );
       const text = codexNativeSkillText.text;
@@ -454,10 +455,10 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
           : `/${commandAction}`
         : primarySelectedText
           ? resolvedPromptText
-          : text || resolvedPromptText;
+          : rawSubmittedText || resolvedPromptText;
 
       const titleSeed =
-        deps.normalizeConversationTitleSeed(text) ||
+        deps.normalizeConversationTitleSeed(rawSubmittedText) ||
         deps.normalizeConversationTitleSeed(resolvedPromptText);
       if (titleSeed) {
         const touchTitle = deps.isClaudeConversationSystem()

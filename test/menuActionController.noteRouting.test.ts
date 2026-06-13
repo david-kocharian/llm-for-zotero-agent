@@ -361,19 +361,27 @@ describe("menu action controller note routing", function () {
     assert.isEmpty(logErrors);
   });
 
-  it("maps footer copy to the response-menu action without prior right-click state and keeps markdown source", async function () {
+  it("maps footer copy to the response-menu action and preserves rich response copy", async function () {
     const body = new FakeElement();
     const responseMenu = new FakeElement();
     const responseMenuCopyBtn = new FakeElement();
     const responseMenuNoteBtn = new FakeElement();
     const status = new FakeElement();
-    let copiedText = "";
+    let richClipboardItems: Record<string, Blob> | null = null;
+    let plainFallbackText = "";
+    class FakeClipboardItem {
+      constructor(public readonly items: Record<string, Blob>) {}
+    }
     body.ownerDocument = {
       defaultView: {
+        ClipboardItem: FakeClipboardItem,
         navigator: {
           clipboard: {
+            write: async (items: FakeClipboardItem[]) => {
+              richClipboardItems = items[0]?.items || null;
+            },
             writeText: async (value: string) => {
-              copiedText = value;
+              plainFallbackText = value;
             },
           },
         },
@@ -451,8 +459,19 @@ describe("menu action controller note routing", function () {
     await flushAsyncEvents();
 
     assert.isTrue(invoked);
-    assert.equal(copiedText, markdown);
-    assert.include(copiedText, "```svg");
+    assert.isNotNull(richClipboardItems);
+    assert.deepEqual(Object.keys(richClipboardItems || {}).sort(), [
+      "text/html",
+      "text/plain",
+    ]);
+    const plainText = await richClipboardItems!["text/plain"].text();
+    const htmlText = await richClipboardItems!["text/html"].text();
+    assert.equal(plainText, markdown);
+    assert.include(plainText, "```svg");
+    assert.include(htmlText, "<pre");
+    assert.include(htmlText, "Here is the source.");
+    assert.notEqual(htmlText, plainText);
+    assert.equal(plainFallbackText, "");
     assert.equal(status.textContent, "Copied response");
   });
 

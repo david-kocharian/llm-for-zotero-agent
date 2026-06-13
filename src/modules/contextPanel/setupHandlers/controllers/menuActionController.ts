@@ -1,7 +1,7 @@
 import { t } from "../../../../utils/i18n";
 import {
   copyGeneratedImageToClipboard,
-  buildPlainMarkdownClipboardText,
+  copyRenderedMarkdownToClipboard,
   copyTextToClipboard,
   resolveAssistantResponseMenuContent,
 } from "../../chat";
@@ -187,12 +187,12 @@ async function copyResponseTarget(
   ) => void,
 ): Promise<void> {
   if (!target) return;
-  const markdownText = buildPlainMarkdownClipboardText(
-    target.contentText,
-    target.quoteCitations,
-  );
-  if (markdownText) {
-    await copyTextToClipboard(deps.body, markdownText);
+  if (target.contentText.trim()) {
+    await copyRenderedMarkdownToClipboard(
+      deps.body,
+      target.contentText,
+      target.quoteCitations,
+    );
     setStatusMessage(t("Copied response"), "ready");
   } else if (target.generatedImages?.length) {
     const result = await copyGeneratedImageToClipboard(

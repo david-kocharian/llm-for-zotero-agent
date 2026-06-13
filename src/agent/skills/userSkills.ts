@@ -255,6 +255,10 @@ function dirname(path: string): string {
   return path.replace(/[\\/][^\\/]*$/, "");
 }
 
+function isSafeSkillIdForPath(skillId: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(skillId);
+}
+
 function resolveBuiltinFilenameForSkillId(skillId: string): string | null {
   for (const [filename, raw] of Object.entries(BUILTIN_SKILL_FILES)) {
     try {
@@ -366,6 +370,7 @@ async function migrateLegacyFlatSkills(
       const filename = basename(filePath);
       if (
         skill.id === "unknown" ||
+        !isSafeSkillIdForPath(skill.id) ||
         OBSOLETE_SKILL_FILENAMES.has(filename) ||
         OBSOLETE_SKILL_IDS.has(skill.id)
       ) {

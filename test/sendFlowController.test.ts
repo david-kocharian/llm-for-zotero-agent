@@ -1028,6 +1028,10 @@ describe("sendFlowController", function () {
       lastSend.lastSentQuestion,
       "$write-note\n\nplease draft this note",
     );
+    assert.equal(
+      lastSend.lastSentDisplayQuestion,
+      "/write-note please draft this note",
+    );
     assert.deepEqual(lastSend.lastSentForcedSkillIds, ["write-note"]);
   });
 

@@ -226,6 +226,36 @@ describe("user skill bootstrap upgrades", function () {
     assert.equal(files[evidencePath], OLD_EVIDENCE_BASED_QA);
   });
 
+  it("skips legacy skills with unsafe path-like ids", async function () {
+    const baseDir = "/tmp/llm-for-zotero-unsafe-skill-id-test";
+    installMockSkillEnvironment(baseDir, {}, new Map<string, string>());
+    const skillsDir = getLegacyUserSkillsDir();
+    const unsafePath = `${skillsDir}/unsafe.md`;
+    const unsafeTarget = getCanonicalSkillFilePath("../../escape");
+    const unsafeContent = [
+      "---",
+      "id: ../../escape",
+      "description: Unsafe skill id",
+      "version: 1",
+      "contexts: any",
+      "activation: auto",
+      "---",
+      "",
+      "This should not be migrated into a path-like skill id.",
+    ].join("\n");
+    const files: Record<string, string> = {
+      [unsafePath]: unsafeContent,
+    };
+    const prefs = new Map<string, string>();
+
+    installMockSkillEnvironment(baseDir, files, prefs);
+
+    await initUserSkills();
+
+    assert.equal(files[unsafePath], unsafeContent);
+    assert.notProperty(files, unsafeTarget);
+  });
+
   it("recovers a default skill body already tracked by the failed bootstrap path", async function () {
     const baseDir = "/tmp/llm-for-zotero-bootstrap-recovery-test";
     installMockSkillEnvironment(baseDir, {}, new Map<string, string>());
