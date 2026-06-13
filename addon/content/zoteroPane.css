@@ -5496,11 +5496,50 @@ label.llm-search-results-item:hover {
 }
 
 .llm-rendered-markdown .llm-codeblock-lang {
+  flex: 1 1 auto;
+  min-width: 0;
   color: var(--llm-codeblock-header-text);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 13px;
   font-weight: 600;
   line-height: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.llm-rendered-markdown .llm-codeblock-source-toggle {
+  appearance: none;
+  -moz-appearance: none;
+  flex: 0 0 auto;
+  min-width: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--llm-codeblock-copy);
+  cursor: pointer;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: var(--llm-fs-11);
+  font-weight: 600;
+  line-height: 1;
+  padding: 5px 7px;
+}
+
+.llm-rendered-markdown .llm-codeblock-source-toggle:hover {
+  background: color-mix(in srgb, var(--fill-quinary) 75%, transparent);
+  color: var(--llm-codeblock-copy-hover);
+}
+
+.llm-rendered-markdown .llm-codeblock-source-toggle:focus-visible {
+  outline: 1px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+.llm-rendered-markdown
+  .llm-codeblock-shell[data-source-collapsed="true"]
+  > .llm-codeblock-body {
+  display: none;
 }
 
 .llm-rendered-markdown .llm-codeblock-body pre {
@@ -5574,6 +5613,7 @@ label.llm-search-results-item:hover {
 }
 
 .llm-rendered-markdown .llm-svg-preview {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;

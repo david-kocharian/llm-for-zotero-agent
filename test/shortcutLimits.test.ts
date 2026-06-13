@@ -5,7 +5,7 @@ import {
 } from "../src/modules/contextPanel/constants";
 
 describe("shortcut limits", function () {
-  it("keeps enough custom slots after adding the Mermaid diagram shortcut", function () {
+  it("keeps enough custom slots after adding the Diagram shortcut", function () {
     const visibleCustomSlots =
       MAX_EDITABLE_SHORTCUTS - BUILTIN_SHORTCUT_FILES.length;
 

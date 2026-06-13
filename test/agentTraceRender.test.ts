@@ -17,6 +17,8 @@ import {
   shouldSuppressAssistantResponseContextMenu,
 } from "../src/modules/contextPanel/chat";
 import {
+  attachRenderedCodeBlockControls,
+  attachRenderedCopyButtons,
   extractRenderedMermaidSvg,
   isSafeRenderedMarkdownAttributeForTests,
   isSafeRenderedMarkdownElementForTests,
@@ -63,6 +65,7 @@ class FakeElement {
   public readonly classList = new FakeClassList();
   public readonly dataset: Record<string, string | undefined> = {};
   public readonly children: FakeElement[] = [];
+  public id = "";
   public textContent = "";
   public type = "";
   public title = "";
@@ -99,7 +102,15 @@ class FakeElement {
 
   querySelectorAll(selector: string): FakeElement[] {
     if (selector === ".llm-copyable[data-llm-copy-source]") {
-      return this.copyableChildren;
+      return [
+        ...this.copyableChildren,
+        ...this.findAllByClass("llm-copyable").filter(
+          (element) => element.dataset.llmCopySource !== undefined,
+        ),
+      ];
+    }
+    if (selector === ".llm-codeblock-shell") {
+      return this.findAllByClass("llm-codeblock-shell");
     }
     return [];
   }
@@ -111,6 +122,9 @@ class FakeElement {
           child.classList.contains("llm-render-copy-btn"),
         ) || null
       );
+    }
+    if (selector === ":scope .llm-codeblock-shell") {
+      return this.findByClass("llm-codeblock-shell");
     }
     return null;
   }
@@ -290,6 +304,43 @@ const throwingTemplateDocument = {
   createElementNS: (_namespace: string, tagName: string) =>
     new FakeElement(tagName),
 } as unknown as Document;
+
+function createFakeCodeBlockShell(options?: {
+  lang?: string;
+  previewClass?: string;
+}): {
+  root: FakeElement;
+  shell: FakeElement;
+  header: FakeElement;
+  body: FakeElement;
+} {
+  const root = new FakeElement("div");
+  const shell = new FakeElement("div");
+  shell.className = "llm-codeblock-shell";
+  shell.dataset.codeLang = options?.lang || "text";
+
+  const header = new FakeElement("div");
+  header.className = "llm-codeblock-header";
+
+  const lang = new FakeElement("span");
+  lang.className = "llm-codeblock-lang";
+  lang.textContent = options?.lang || "text";
+  header.appendChild(lang);
+
+  const body = new FakeElement("div");
+  body.className = "llm-codeblock-body";
+
+  shell.appendChild(header);
+  if (options?.previewClass) {
+    const preview = new FakeElement("div");
+    preview.className = options.previewClass;
+    shell.appendChild(preview);
+  }
+  shell.appendChild(body);
+  root.appendChild(shell);
+
+  return { root, shell, header, body };
+}
 
 function collectFakeText(element: FakeElement | null | undefined): string {
   if (!element) return "";
@@ -644,6 +695,118 @@ describe("Mermaid rendering helpers", function () {
   });
 });
 
+describe("rendered Markdown code block source controls", function () {
+  it("collapses safe SVG source by default while keeping the preview shell visible", function () {
+    const { root, shell, header, body } = createFakeCodeBlockShell({
+      lang: "svg",
+      previewClass: "llm-svg-preview",
+    });
+
+    attachRenderedCodeBlockControls(
+      root as unknown as ParentNode,
+      fakeDocument,
+    );
+
+    const toggle = header.findByClass("llm-codeblock-source-toggle");
+    assert.exists(toggle);
+    assert.equal(shell.dataset.sourceCollapsed, "true");
+    assert.equal(body.attributes["aria-hidden"], "true");
+    assert.equal(toggle?.attributes["aria-expanded"], "false");
+    assert.equal(toggle?.textContent, "Show source");
+    assert.isNotEmpty(body.id);
+
+    toggle?.dispatchFakeEvent("click");
+
+    assert.equal(shell.dataset.sourceCollapsed, "false");
+    assert.equal(body.attributes["aria-hidden"], "false");
+    assert.equal(toggle?.attributes["aria-expanded"], "true");
+    assert.equal(toggle?.textContent, "Hide source");
+  });
+
+  it("collapses Mermaid source by default", function () {
+    const { root, shell, header, body } = createFakeCodeBlockShell({
+      lang: "mermaid",
+      previewClass: "llm-mermaid-preview",
+    });
+
+    attachRenderedCodeBlockControls(
+      root as unknown as ParentNode,
+      fakeDocument,
+    );
+
+    const toggle = header.findByClass("llm-codeblock-source-toggle");
+    assert.equal(shell.dataset.sourceCollapsed, "true");
+    assert.equal(body.attributes["aria-hidden"], "true");
+    assert.equal(toggle?.attributes["aria-expanded"], "false");
+    assert.equal(toggle?.textContent, "Show source");
+  });
+
+  it("keeps ordinary code source expanded by default but collapsible", function () {
+    const { root, shell, header, body } = createFakeCodeBlockShell({
+      lang: "ts",
+    });
+
+    attachRenderedCodeBlockControls(
+      root as unknown as ParentNode,
+      fakeDocument,
+    );
+
+    const toggle = header.findByClass("llm-codeblock-source-toggle");
+    assert.equal(shell.dataset.sourceCollapsed, "false");
+    assert.equal(body.attributes["aria-hidden"], "false");
+    assert.equal(toggle?.attributes["aria-expanded"], "true");
+    assert.equal(toggle?.textContent, "Hide source");
+
+    toggle?.dispatchFakeEvent("click");
+
+    assert.equal(shell.dataset.sourceCollapsed, "true");
+    assert.equal(body.attributes["aria-hidden"], "true");
+    assert.equal(toggle?.attributes["aria-expanded"], "false");
+    assert.equal(toggle?.textContent, "Show source");
+  });
+
+  it("treats unsafe SVG without a preview like ordinary expanded code", function () {
+    const { root, shell, body } = createFakeCodeBlockShell({ lang: "svg" });
+
+    attachRenderedCodeBlockControls(
+      root as unknown as ParentNode,
+      fakeDocument,
+    );
+
+    assert.equal(shell.dataset.sourceCollapsed, "false");
+    assert.equal(body.attributes["aria-hidden"], "false");
+  });
+
+  it("keeps copy controls bound to the original fenced source when source is collapsed", function () {
+    const copySource = '```svg\n<svg width="10" height="10"></svg>\n```';
+    const root = new FakeElement("div");
+    const copyable = new FakeElement("div");
+    copyable.className = "llm-copyable llm-copyable-code";
+    copyable.dataset.llmCopySource = copySource;
+
+    const { shell } = createFakeCodeBlockShell({
+      lang: "svg",
+      previewClass: "llm-svg-preview",
+    });
+    copyable.appendChild(shell);
+    root.appendChild(copyable);
+
+    attachRenderedCodeBlockControls(
+      root as unknown as ParentNode,
+      fakeDocument,
+    );
+    attachRenderedCopyButtons(root as unknown as ParentNode, fakeDocument);
+
+    const copyButton = copyable.children.find((child) =>
+      child.classList.contains("llm-render-copy-btn"),
+    );
+    assert.exists(copyButton);
+    assert.equal(copyable.dataset.llmCopySource, copySource);
+    assert.equal(shell.dataset.sourceCollapsed, "true");
+    assert.equal(copyButton?.attributes["aria-label"], "Copy SVG code");
+  });
+});
+
 describe("agentTrace render", function () {
   it("preserves known quote anchors before agent trace DOM decoration", function () {
     const quoteCitation = buildQuoteCitation({
@@ -910,6 +1073,25 @@ describe("agentTrace render", function () {
         `${name}=${value}`,
       );
     }
+  });
+
+  it("allows base64 SVG preview image sources in rendered Markdown", function () {
+    const img = createSanitizerElement("img");
+
+    assert.isTrue(
+      isSafeRenderedMarkdownAttributeForTests(
+        img,
+        "src",
+        "data:image/svg+xml;base64,PHN2Zy8+",
+      ),
+    );
+    assert.isFalse(
+      isSafeRenderedMarkdownAttributeForTests(
+        img,
+        "src",
+        "data:image/svg+xml;charset=utf-8,%3Csvg%2F%3E",
+      ),
+    );
   });
 
   it("preserves whitespace when compacting reasoning deltas", function () {

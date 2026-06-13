@@ -2,6 +2,8 @@ import { assert } from "chai";
 import { readdirSync, readFileSync, statSync } from "fs";
 import { join, relative } from "path";
 import { createBuiltInToolRegistry } from "../src/agent/tools";
+import { AGENT_PERSONA_INSTRUCTIONS } from "../src/agent/model/agentPersona";
+import { DEFAULT_SYSTEM_PROMPT } from "../src/utils/llmDefaults";
 
 const root = process.cwd();
 
@@ -105,29 +107,73 @@ describe("tool guidance contracts", function () {
     assert.deepEqual(failures, []);
   });
 
+  it("keeps direct chat and agent guidance selective about Mermaid overviews and local SVG", function () {
+    for (const prompt of [
+      DEFAULT_SYSTEM_PROMPT,
+      AGENT_PERSONA_INSTRUCTIONS.join("\n"),
+    ]) {
+      assert.include(prompt, "Use diagrams selectively");
+      assert.include(prompt, "when visual structure materially improves");
+      assert.include(
+        prompt,
+        "For whole-paper overview diagrams, use fenced Mermaid flowcharts by default",
+      );
+      assert.include(prompt, "Use fenced SVG for local mechanism");
+      assert.include(
+        prompt,
+        "keep SVG focused on one mechanism, step, or module",
+      );
+      assert.include(prompt, "not a poster-style whole-paper map");
+      assert.include(prompt, "Do not add diagrams to every answer");
+      assert.include(prompt, "Do not invent visual structure unsupported");
+      assert.notInclude(prompt, "Use fenced SVG diagrams as the default");
+      assert.notInclude(
+        prompt,
+        "Use fenced Mermaid only when the user explicitly asks for Mermaid",
+      );
+    }
+  });
+
+  it("keeps the Diagram shortcut ID and makes its prompt Mermaid and compact", function () {
+    const shortcut = readFileSync(
+      join(root, "addon/content/shortcuts/mermaid-diagram.txt"),
+      "utf8",
+    );
+
+    assert.include(shortcut, "Generate a Mermaid flowchart");
+    assert.include(shortcut, "Keep it compact and high-level");
+    assert.include(shortcut, "Avoid poster-style detail dumps");
+    assert.include(
+      shortcut,
+      "Do not invent structure unsupported by the paper",
+    );
+    assert.notInclude(shortcut, "Generate a fenced SVG diagram");
+  });
+
   it("keeps ordinary paper QA guidance on paper_read instead of direct MinerU file_io", function () {
-    const staleMineruFirstPatterns: Array<{ label: string; pattern: RegExp }> = [
-      {
-        label: "first use file_io on MinerU",
-        pattern: /first use file_io on MinerU/i,
-      },
-      {
-        label: "use file_io on MinerU markdown first",
-        pattern: /use file_io on MinerU markdown first/i,
-      },
-      {
-        label: "prefer reading MinerU markdown with file_io first",
-        pattern: /prefer reading (?:that )?MinerU markdown with file_io/i,
-      },
-      {
-        label: "prefer file_io manifest/full before paper tools",
-        pattern: /prefer file_io on MinerU manifest\.json\/full\.md/i,
-      },
-      {
-        label: "file_io first for MinerU caches",
-        pattern: /Use this first for MinerU paper caches/i,
-      },
-    ];
+    const staleMineruFirstPatterns: Array<{ label: string; pattern: RegExp }> =
+      [
+        {
+          label: "first use file_io on MinerU",
+          pattern: /first use file_io on MinerU/i,
+        },
+        {
+          label: "use file_io on MinerU markdown first",
+          pattern: /use file_io on MinerU markdown first/i,
+        },
+        {
+          label: "prefer reading MinerU markdown with file_io first",
+          pattern: /prefer reading (?:that )?MinerU markdown with file_io/i,
+        },
+        {
+          label: "prefer file_io manifest/full before paper tools",
+          pattern: /prefer file_io on MinerU manifest\.json\/full\.md/i,
+        },
+        {
+          label: "file_io first for MinerU caches",
+          pattern: /Use this first for MinerU paper caches/i,
+        },
+      ];
     const failures: string[] = [];
     const sources = readSourceFiles();
     for (const source of sources) {

@@ -229,7 +229,9 @@ function renderSafeRawHtmlAttributes(
   const attrs = readRawHtmlAttributes(rawAttrs);
 
   if (tagName === "a") {
-    const safeHref = attrs.href ? sanitizeMarkdownUrl(attrs.href, "link") : null;
+    const safeHref = attrs.href
+      ? sanitizeMarkdownUrl(attrs.href, "link")
+      : null;
     const hrefAttr = safeHref ? ` href="${escapeAttribute(safeHref)}"` : "";
     const titleAttr = attrs.title
       ? ` title="${escapeAttribute(attrs.title)}"`
@@ -509,7 +511,19 @@ function hasUnsafeSvgUrl(svg: string): boolean {
   return false;
 }
 
-export function buildSafeSvgDataUri(
+function encodeBase64Utf8(value: string): string {
+  const bytes = new TextEncoder().encode(value);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(
+      ...bytes.subarray(offset, offset + chunkSize),
+    );
+  }
+  return btoa(binary);
+}
+
+export function buildSafeSvgMarkup(
   code: string,
   maxChars = SVG_PREVIEW_MAX_CHARS,
 ): string | null {
@@ -534,7 +548,16 @@ export function buildSafeSvgDataUri(
     svg = svg.replace(/^<svg\b/i, '<svg xmlns="http://www.w3.org/2000/svg"');
   }
 
-  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+  return svg;
+}
+
+export function buildSafeSvgDataUri(
+  code: string,
+  maxChars = SVG_PREVIEW_MAX_CHARS,
+): string | null {
+  const svg = buildSafeSvgMarkup(code, maxChars);
+  if (!svg) return null;
+  return `data:image/svg+xml;base64,${encodeBase64Utf8(svg)}`;
 }
 
 function renderMermaidPreview(code: string): string {
@@ -1439,10 +1462,14 @@ function renderCodeBlock(code: string, raw: string): string {
   }
   const codeHtml = renderCodeHtml(code, lang);
 
-  const svgPreviewUri = lang === "svg" ? buildSafeSvgDataUri(code) : null;
-  const svgPreview = svgPreviewUri
-    ? `<div class="llm-svg-preview" aria-label="SVG preview"><img src="${escapeAttribute(svgPreviewUri)}" alt="SVG preview" /></div>`
-    : "";
+  const safeSvgMarkup = lang === "svg" ? buildSafeSvgMarkup(code) : null;
+  const svgPreviewUri = safeSvgMarkup
+    ? buildSafeSvgDataUri(safeSvgMarkup)
+    : null;
+  const svgPreview =
+    safeSvgMarkup && svgPreviewUri
+      ? `<div class="llm-svg-preview" data-llm-svg-source="${escapeAttribute(safeSvgMarkup)}" aria-label="SVG preview"><img src="${escapeAttribute(svgPreviewUri)}" alt="SVG preview" /></div>`
+      : "";
   const mermaidPreview = isMermaidFenceLanguage(lang)
     ? renderMermaidPreview(code)
     : "";
@@ -1943,7 +1970,8 @@ function createMarkedRenderer(
         (row) =>
           `<tr>${row
             .map(
-              (cell) => `<td>${parseInlineTokens(this.parser, cell.tokens)}</td>`,
+              (cell) =>
+                `<td>${parseInlineTokens(this.parser, cell.tokens)}</td>`,
             )
             .join("")}</tr>`,
       )

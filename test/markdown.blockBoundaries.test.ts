@@ -387,9 +387,7 @@ describe("renderMarkdown with inline block tokens", function () {
     assert.include(html, "<br/>Done.");
     assert.notInclude(html, "&lt;strong&gt;");
 
-    const unsafe = renderMarkdown(
-      '<strong onclick="alert(1)">Core</strong>',
-    );
+    const unsafe = renderMarkdown('<strong onclick="alert(1)">Core</strong>');
     assert.include(unsafe, "<strong>Core</strong>");
     assert.notInclude(unsafe, "<strong onclick");
   });
@@ -469,7 +467,7 @@ describe("renderMarkdown with inline block tokens", function () {
     assert.include(html, "<p>Safe text</p>");
     assert.include(html, "&lt;script&gt;");
     assert.include(html, "alert(&quot;x&quot;)");
-    assert.include(html, "<a target=\"_blank\" rel=\"noopener\">link</a>");
+    assert.include(html, '<a target="_blank" rel="noopener">link</a>');
     assert.notInclude(html, "onclick");
     assert.notInclude(html.toLowerCase(), "javascript:");
     assert.notInclude(html, "<script>");
@@ -532,7 +530,9 @@ describe("renderMarkdown code block presentation", function () {
     assert.include(html, "llm-codeblock-shell");
     assert.include(html, 'data-code-lang="svg"');
     assert.include(html, "llm-svg-preview");
-    assert.include(html, "data:image/svg+xml;charset=utf-8,");
+    assert.include(html, "data:image/svg+xml;base64,");
+    assert.include(html, "data-llm-svg-source=");
+    assert.notInclude(html, "data:image/svg+xml;charset=utf-8,");
     assert.include(html, "&lt;circle");
     assert.include(html, 'data-llm-copy-source="```svg&#10;');
   });
