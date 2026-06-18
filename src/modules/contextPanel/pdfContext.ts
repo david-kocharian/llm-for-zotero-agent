@@ -61,8 +61,8 @@ import type {
 import {
   extractTextAttachmentContent,
   resolveTextAttachmentSourceModeFromMetadata,
-  type TextAttachmentSourceMode,
 } from "./textAttachmentExtraction";
+import type { TextAttachmentSourceMode } from "./contextAttachmentTypes";
 import { isPdfContextAttachment } from "./contextAttachmentSupport";
 import { config } from "./constants";
 

@@ -3,6 +3,7 @@ import type {
   AgentToolDefinition,
   AgentToolResult,
 } from "../../types";
+import type { QuoteCitation } from "../../../shared/types";
 import type { PdfService } from "../../services/pdfService";
 import type { PdfPageService } from "../../services/pdfPageService";
 import { parsePageSelectionValue } from "../../services/pdfPageService";
@@ -53,6 +54,9 @@ type PaperReadInput = {
 
 const MAX_OVERVIEW_TARGETS = 5;
 const MAX_TARGETED_TARGETS = 10;
+const MAX_OVERVIEW_QUOTES_PER_RESULT = 3;
+const MIN_OVERVIEW_QUOTE_CHARS = 40;
+const MAX_OVERVIEW_QUOTE_CHARS = 360;
 
 function normalizeMode(value: unknown): PaperReadMode {
   return value === "targeted" ||
@@ -327,6 +331,102 @@ function buildQuoteCitationsForResults(
     if (citation) citations.push(citation);
   }
   return mergeQuoteCitations(citations);
+}
+
+function splitOverviewQuoteCandidates(text: string): string[] {
+  const withoutChunkMarkers = text.replace(/^\s*\[chunk\s+\d+\]\s*$/gim, "");
+  const blocks = withoutChunkMarkers
+    .split(/\n{2,}/)
+    .map((block) =>
+      block
+        .split("\n")
+        .map((line) => line.replace(/^#{1,6}\s+/, "").trim())
+        .filter(Boolean)
+        .join(" "),
+    )
+    .map((block) => block.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const block of blocks) {
+    const sentences = block.match(/[^.!?。！？]+[.!?。！？]+(?=\s|$)/g) || [
+      block,
+    ];
+    let candidate = "";
+    for (const sentence of sentences) {
+      const next = `${candidate}${candidate ? " " : ""}${sentence.trim()}`;
+      if (next.length > MAX_OVERVIEW_QUOTE_CHARS) break;
+      candidate = next;
+      if (candidate.length >= MIN_OVERVIEW_QUOTE_CHARS) break;
+    }
+    candidate = candidate || block;
+    if (
+      candidate.length < MIN_OVERVIEW_QUOTE_CHARS ||
+      candidate.length > MAX_OVERVIEW_QUOTE_CHARS
+    ) {
+      continue;
+    }
+    if (/^(?:title|authors?|date|publication|doi|abstract):/i.test(candidate)) {
+      continue;
+    }
+    const key = candidate.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(candidate);
+    if (out.length >= MAX_OVERVIEW_QUOTES_PER_RESULT) break;
+  }
+  return out;
+}
+
+function buildOverviewQuoteCitationPack(
+  results: Array<Record<string, unknown>>,
+): {
+  results: Array<Record<string, unknown>>;
+  quoteCitations: QuoteCitation[];
+} {
+  const quoteCitations: QuoteCitation[] = [];
+  const resultsWithAnchors = results.map((result) => {
+    if (
+      normalizeString(result.backend) === "zotero_metadata" ||
+      normalizeString(result.sourceKind) === "zotero_metadata"
+    ) {
+      return result;
+    }
+    const paperContext = validateObject<Record<string, unknown>>(
+      result.paperContext,
+    )
+      ? result.paperContext
+      : undefined;
+    const quoteTexts = splitOverviewQuoteCandidates(
+      normalizeString(result.text) || "",
+    );
+    const resultCitations = quoteTexts
+      .map((quoteText) =>
+        buildQuoteCitation({
+          quoteText,
+          citationLabel:
+            normalizeString(result.sourceLabel) ||
+            normalizeString(result.citationLabel),
+          contextItemId: paperContext?.contextItemId,
+          itemId: paperContext?.itemId,
+        }),
+      )
+      .filter((entry): entry is QuoteCitation => Boolean(entry));
+    quoteCitations.push(...resultCitations);
+    return resultCitations.length
+      ? {
+          ...result,
+          quoteCitationIds: resultCitations.map((citation) => citation.id),
+          quoteAnchors: resultCitations.map(
+            (citation) => `[[quote:${citation.id}]]`,
+          ),
+        }
+      : result;
+  });
+  return {
+    results: resultsWithAnchors,
+    quoteCitations: mergeQuoteCitations(quoteCitations),
+  };
 }
 
 function getUniqueSourceLabels(entries: unknown[]): string[] {
@@ -652,9 +752,13 @@ export function createPaperReadTool(
             }
           }
         }
+        const overviewQuotePack = buildOverviewQuoteCitationPack(
+          results as Array<Record<string, unknown>>,
+        );
         return {
           mode: input.mode,
-          results,
+          results: overviewQuotePack.results,
+          quoteCitations: overviewQuotePack.quoteCitations,
         };
       }
 

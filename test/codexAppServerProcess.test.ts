@@ -1112,6 +1112,95 @@ describe("codexAppServerProcess", function () {
     );
   });
 
+  it("redacts transport context from usermessage item events", async function () {
+    const proc = createProcess();
+    const started: unknown[] = [];
+    const completed: unknown[] = [];
+    const prefixedUserMessage = [
+      "Zotero context for this turn:",
+      "Library scope: libraryID=1",
+      'Paper 1: title="Hidden Context Paper"',
+      "",
+      "User request:",
+      "What is the actual question?",
+    ].join("\n");
+
+    setTimeout(() => {
+      void (
+        proc as unknown as {
+          handleMessage: (msg: Record<string, unknown>) => void;
+        }
+      ).handleMessage({
+        method: "item/started",
+        params: {
+          turnId: "turn-user-redaction",
+          item: {
+            id: "user-1",
+            type: "usermessage",
+            text: prefixedUserMessage,
+          },
+        },
+      });
+    }, 5);
+    setTimeout(() => {
+      void (
+        proc as unknown as {
+          handleMessage: (msg: Record<string, unknown>) => void;
+        }
+      ).handleMessage({
+        method: "item/completed",
+        params: {
+          turnId: "turn-user-redaction",
+          item: {
+            id: "user-1",
+            type: "usermessage",
+            content: prefixedUserMessage,
+          },
+        },
+      });
+    }, 10);
+    setTimeout(() => {
+      void (
+        proc as unknown as {
+          handleMessage: (msg: Record<string, unknown>) => void;
+        }
+      ).handleMessage({
+        method: "turn/completed",
+        params: {
+          turnId: "turn-user-redaction",
+          status: "completed",
+        },
+      });
+    }, 15);
+
+    await waitForCodexAppServerTurnCompletion({
+      proc,
+      turnId: "turn-user-redaction",
+      onItemStarted: async (event) => {
+        started.push(event);
+      },
+      onItemCompleted: async (event) => {
+        completed.push(event);
+      },
+      timeoutMs: 50,
+    });
+
+    assert.deepInclude(started[0] as Record<string, unknown>, {
+      id: "user-1",
+      type: "usermessage",
+      details: "What is the actual question?",
+    });
+    assert.deepInclude(completed[0] as Record<string, unknown>, {
+      id: "user-1",
+      type: "usermessage",
+      details: "What is the actual question?",
+    });
+    assert.notInclude(
+      JSON.stringify([started[0], completed[0]]),
+      "Hidden Context Paper",
+    );
+  });
+
   it("preserves image generation metadata from app-server item events", async function () {
     const proc = createProcess();
     const completed: unknown[] = [];

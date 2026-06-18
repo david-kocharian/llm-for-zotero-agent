@@ -1,11 +1,23 @@
 import type { AgentToolDefinition } from "../../types";
 import {
+  buildPagedReviewActionConfig,
+  buildPageSizeSelectField,
+  readPagedOperationLabel,
+  readPagedOperationMeta,
+} from "../../actions/pagedWorkflow";
+import {
   LibraryMutationService,
   type MoveToCollectionOperation,
   type RemoveFromCollectionOperation,
 } from "../../services/libraryMutationService";
 import type { ZoteroGateway } from "../../services/zoteroGateway";
-import { ok, fail, validateObject, normalizePositiveInt, normalizePositiveIntArray } from "../shared";
+import {
+  ok,
+  fail,
+  validateObject,
+  normalizePositiveInt,
+  normalizePositiveIntArray,
+} from "../shared";
 import {
   buildMoveAssignmentField,
   normalizeMoveAssignmentsFromResolution,
@@ -35,7 +47,13 @@ export function createMoveToCollectionTool(
             type: "string",
             enum: ["add", "remove"],
             default: "add",
-            description: "Whether to add items to or remove items from a collection.",
+            description:
+              "Whether to add items to or remove items from a collection.",
+          },
+          id: {
+            type: "string",
+            description:
+              "Optional operation ID used by native action workflows.",
           },
           itemIds: {
             type: "array",
@@ -48,11 +66,13 @@ export function createMoveToCollectionTool(
           },
           targetCollectionName: {
             type: "string",
-            description: "Target collection name (resolved via the confirmation card).",
+            description:
+              "Target collection name (resolved via the confirmation card).",
           },
           collectionId: {
             type: "number",
-            description: "Collection ID to remove items from (for action 'remove').",
+            description:
+              "Collection ID to remove items from (for action 'remove').",
           },
           assignments: {
             type: "array",
@@ -88,11 +108,17 @@ export function createMoveToCollectionTool(
 
     validate: (args) => {
       if (!validateObject<Record<string, unknown>>(args)) {
-        return fail("Expected an object with action, itemIds, and collection details.");
+        return fail(
+          "Expected an object with action, itemIds, and collection details.",
+        );
       }
 
       const action =
         args.action === "remove" ? "remove" : ("add" as "add" | "remove");
+      const id =
+        typeof args.id === "string" && args.id.trim()
+          ? args.id.trim()
+          : undefined;
 
       if (action === "remove") {
         const itemIds = normalizePositiveIntArray(args.itemIds);
@@ -108,6 +134,7 @@ export function createMoveToCollectionTool(
           );
         }
         const operation: RemoveFromCollectionOperation = {
+          id,
           type: "remove_from_collection",
           itemIds,
           collectionId,
@@ -126,11 +153,13 @@ export function createMoveToCollectionTool(
 
       const targetCollectionId = normalizePositiveInt(args.targetCollectionId);
       const targetCollectionName =
-        typeof args.targetCollectionName === "string" && args.targetCollectionName.trim()
+        typeof args.targetCollectionName === "string" &&
+        args.targetCollectionName.trim()
           ? args.targetCollectionName.trim()
           : undefined;
 
       const operation: MoveToCollectionOperation = {
+        id,
         type: "move_to_collection",
         assignments: assignments?.length ? assignments : undefined,
         itemIds: itemIds || undefined,
@@ -143,6 +172,8 @@ export function createMoveToCollectionTool(
     createPendingAction: (input, context) => {
       if (input.action === "remove") {
         const op = input.operation as RemoveFromCollectionOperation;
+        const pageMeta = readPagedOperationMeta(op.id);
+        const pageLabel = readPagedOperationLabel(op.id);
         const collection = zoteroGateway.getCollectionSummary(op.collectionId);
         const collectionLabel = collection
           ? collection.path || collection.name
@@ -150,36 +181,50 @@ export function createMoveToCollectionTool(
         return {
           toolName: "move_to_collection",
           mode: "approval",
-          title: "Remove from collection",
+          title: `${pageLabel ? `${pageLabel}: ` : ""}Remove from collection`,
           description: `Remove ${op.itemIds.length} item${op.itemIds.length === 1 ? "" : "s"} from "${collectionLabel}".`,
           confirmLabel: "Remove",
-          cancelLabel: "Cancel",
-          fields: [],
+          cancelLabel: pageLabel ? "Stop" : "Cancel",
+          fields: pageMeta ? [buildPageSizeSelectField(pageMeta.pageSize)] : [],
+          ...(pageMeta
+            ? buildPagedReviewActionConfig(pageMeta, { includeRefresh: true })
+            : {}),
         };
       }
 
       // action === "add"
       const op = input.operation as MoveToCollectionOperation;
+      const pageMeta = readPagedOperationMeta(op.id);
+      const pageLabel = readPagedOperationLabel(op.id);
       const field = buildMoveAssignmentField(op, zoteroGateway, context);
       if (!field) {
         return {
           toolName: "move_to_collection",
           mode: "approval",
-          title: "Add to collection",
+          title: `${pageLabel ? `${pageLabel}: ` : ""}Add to collection`,
           description: "No items or collections available for assignment.",
           confirmLabel: "Confirm",
-          cancelLabel: "Cancel",
-          fields: [],
+          cancelLabel: pageLabel ? "Stop" : "Cancel",
+          fields: pageMeta ? [buildPageSizeSelectField(pageMeta.pageSize)] : [],
+          ...(pageMeta
+            ? buildPagedReviewActionConfig(pageMeta, { includeRefresh: true })
+            : {}),
         };
       }
       return {
         toolName: "move_to_collection",
         mode: "review",
-        title: "Add to collection",
+        title: `${pageLabel ? `${pageLabel}: ` : ""}Add to collection`,
         description: "Select the destination collection for each paper.",
         confirmLabel: "Move",
-        cancelLabel: "Cancel",
-        fields: [field],
+        cancelLabel: pageLabel ? "Stop" : "Cancel",
+        fields: [
+          field,
+          ...(pageMeta ? [buildPageSizeSelectField(pageMeta.pageSize)] : []),
+        ],
+        ...(pageMeta
+          ? buildPagedReviewActionConfig(pageMeta, { includeRefresh: true })
+          : {}),
       };
     },
 
@@ -225,9 +270,7 @@ export function createMoveToCollectionTool(
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
-function normalizeAssignmentsFromArgs(
-  args: Record<string, unknown>,
-): Array<{
+function normalizeAssignmentsFromArgs(args: Record<string, unknown>): Array<{
   itemId: number;
   targetCollectionId?: number;
   targetCollectionName?: string;
@@ -246,7 +289,8 @@ function normalizeAssignmentsFromArgs(
       itemId,
       targetCollectionId: normalizePositiveInt(entry.targetCollectionId),
       targetCollectionName:
-        typeof entry.targetCollectionName === "string" && entry.targetCollectionName.trim()
+        typeof entry.targetCollectionName === "string" &&
+        entry.targetCollectionName.trim()
           ? entry.targetCollectionName.trim()
           : undefined,
     });

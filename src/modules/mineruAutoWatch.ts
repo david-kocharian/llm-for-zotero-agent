@@ -22,6 +22,7 @@ import {
   getItemStatus,
 } from "./mineruProcessingStatus";
 import {
+  cleanupMineruArtifactsForRemovedAttachment,
   getMineruAvailabilityForAttachment,
   publishMineruCachePackageForAttachment,
 } from "./contextPanel/mineruSync";
@@ -305,6 +306,34 @@ function removeDeletedAttachmentsFromQueue(ids: number[]): void {
   }
 
   notifyProgress();
+}
+
+async function cleanupRemovedAttachmentArtifacts(
+  itemIds: number[],
+): Promise<void> {
+  for (const itemId of itemIds) {
+    const result = await cleanupMineruArtifactsForRemovedAttachment(itemId);
+    if (result.failed > 0) {
+      ztoolkit.log(
+        "MinerU auto-parse: failed to clean removed attachment artifacts",
+        result,
+      );
+    }
+  }
+}
+
+function getRemovedItemIdsForCleanup(
+  event: string,
+  itemIds: number[],
+): number[] {
+  if (event !== "remove") return itemIds;
+  return itemIds.filter((itemId) => {
+    const liveItem = Zotero.Items.get(itemId);
+    return (
+      !liveItem ||
+      Boolean((liveItem as unknown as { deleted?: boolean }).deleted)
+    );
+  });
 }
 
 async function processQueue(): Promise<void> {
@@ -591,8 +620,10 @@ async function handleItemNotification(
     .map(normalizeNotifierId)
     .filter((id): id is number => id !== null);
 
-  if (event === "delete") {
-    removeDeletedAttachmentsFromQueue(itemIds);
+  if (event === "delete" || event === "trash" || event === "remove") {
+    const removedItemIds = getRemovedItemIdsForCleanup(event, itemIds);
+    removeDeletedAttachmentsFromQueue(removedItemIds);
+    await cleanupRemovedAttachmentArtifacts(removedItemIds);
     return;
   }
 

@@ -39,6 +39,7 @@ import {
   runProviderConnectionTest,
   runCodexAppServerConnectionTest,
 } from "../utils/providerConnectionTest";
+import { normalizeAgentPermissionMode } from "../shared/agentPermissionMode";
 import {
   startCopilotDeviceFlow,
   pollCopilotDeviceAuth,
@@ -160,11 +161,11 @@ import {
   getCodexBinaryPathPref,
   getCodexReasoningModePref,
   getCodexRuntimeModelPref,
-  isCodexZoteroMcpToolsEnabled,
   isCodexAppServerModeEnabled,
+  isNativeZoteroMcpToolsEnabled,
   setCodexAppServerModeEnabled,
   setCodexBinaryPathPref,
-  setCodexZoteroMcpToolsEnabled,
+  setNativeZoteroMcpToolsEnabled,
   setCodexReasoningModePref,
   setCodexRuntimeModelPref,
 } from "../codexAppServer/prefs";
@@ -262,12 +263,6 @@ function getProviderProfile(index: number): ProviderProfile {
     modelPlaceholder: "",
     defaultModel: "",
   };
-}
-
-type AgentPermissionMode = "safe" | "yolo";
-
-function normalizeAgentPermissionMode(value: unknown): AgentPermissionMode {
-  return value === "yolo" ? "yolo" : "safe";
 }
 
 const DEFAULT_AGENT_BRIDGE_URL = "http://127.0.0.1:19787";
@@ -2111,9 +2106,9 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
     }
     const standaloneWin = addon?.data?.standaloneWindow as Window | undefined;
     if (standaloneWin && standaloneWin.document) {
-      standaloneWin.document.querySelectorAll("#llm-main").forEach((n: Element) =>
-        push(n as HTMLElement),
-      );
+      standaloneWin.document
+        .querySelectorAll("#llm-main")
+        .forEach((n: Element) => push(n as HTMLElement));
       push(
         standaloneWin.document.getElementById(
           "llmforzotero-standalone-chat-root",
@@ -2461,13 +2456,17 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
   };
 
   if (codexAppServerMcpEnableInput) {
-    codexAppServerMcpEnableInput.checked = isCodexZoteroMcpToolsEnabled();
+    codexAppServerMcpEnableInput.checked = isNativeZoteroMcpToolsEnabled();
     codexAppServerMcpEnableInput.addEventListener("change", () => {
-      setCodexZoteroMcpToolsEnabled(codexAppServerMcpEnableInput.checked);
+      setNativeZoteroMcpToolsEnabled(codexAppServerMcpEnableInput.checked);
       renderCodexMcpStatus(
         codexAppServerMcpEnableInput.checked
-          ? t("Zotero MCP tools will be configured before native Codex turns.")
-          : t("Zotero MCP tools disabled for native Codex turns."),
+          ? t(
+              "Zotero MCP tools enabled for native Codex and Claude Code turns.",
+            )
+          : t(
+              "Zotero MCP tools disabled for native Codex and Claude Code turns.",
+            ),
       );
     });
   }
@@ -2481,7 +2480,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
           const status = await installOrUpdateCodexZoteroMcpConfig({
             codexPath: getConfiguredCodexAppServerBinaryPath(),
           });
-          setCodexZoteroMcpToolsEnabled(true);
+          setNativeZoteroMcpToolsEnabled(true);
           if (codexAppServerMcpEnableInput) {
             codexAppServerMcpEnableInput.checked = true;
           }
@@ -2509,7 +2508,11 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
     });
   }
 
-  if (codexAppServerMcpStatus && isCodexZoteroMcpToolsEnabled()) {
+  if (
+    codexAppServerMcpStatus &&
+    isCodexAppServerModeEnabled() &&
+    isNativeZoteroMcpToolsEnabled()
+  ) {
     renderCodexMcpStatus(t("Checking Zotero MCP setup…"));
     void readCodexNativeMcpSetupStatus({
       codexPath: getConfiguredCodexAppServerBinaryPath(),

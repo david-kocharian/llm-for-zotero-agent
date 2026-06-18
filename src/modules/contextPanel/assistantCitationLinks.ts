@@ -12,6 +12,7 @@ import {
   normalizeSelectedTextPaperContexts,
 } from "./normalizers";
 import {
+  findMatchingTrustedQuoteCitation,
   normalizeQuoteCitations,
   QUOTE_CITATION_PATTERN,
 } from "./quoteCitations";
@@ -19,6 +20,7 @@ import {
   getActiveReaderForSelectedTab,
   resolveContextSourceItem,
 } from "./contextResolution";
+import { isPdfContextAttachment } from "./contextAttachmentSupport";
 import {
   type ExactQuoteJumpResult,
   flashPageInLivePdfReader,
@@ -428,6 +430,38 @@ function getReaderItemId(reader: any): number {
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 0;
 }
 
+function isPdfBackedCitationCandidate(
+  candidate: AssistantCitationPaperCandidate,
+): boolean {
+  if (
+    isTextLikeAttachmentSourceMode(candidate.paperContext.contentSourceMode) ||
+    isTextLikeAttachmentSourceMode(
+      candidate.displayPaperContext.contentSourceMode,
+    )
+  ) {
+    return false;
+  }
+  try {
+    return isPdfContextAttachment(
+      Zotero.Items.get(Math.floor(Number(candidate.contextItemId))) || null,
+    );
+  } catch (_err) {
+    void _err;
+    return false;
+  }
+}
+
+export const isPdfBackedCitationCandidateForTests =
+  isPdfBackedCitationCandidate;
+
+function buildCitationCandidateKey(
+  candidate: AssistantCitationPaperCandidate,
+): string {
+  return `${Math.floor(candidate.paperContext.itemId)}:${Math.floor(
+    candidate.contextItemId,
+  )}`;
+}
+
 function getSelectedTextCount(message: Message | null | undefined): number {
   const selectedTexts = Array.isArray(message?.selectedTexts)
     ? message!.selectedTexts!.filter(
@@ -623,6 +657,74 @@ function getNextElementSibling(element: Element): Element | null {
     current = current.nextElementSibling;
   }
   return null;
+}
+
+function extractedCitationLabelsMatch(
+  left: ExtractedCitationLabel,
+  right: ExtractedCitationLabel,
+): boolean {
+  if (left.normalizedSourceLabel === right.normalizedSourceLabel) return true;
+  if (left.normalizedCitationLabel === right.normalizedCitationLabel)
+    return true;
+  if (
+    left.normalizedDisplayCitationLabel &&
+    left.normalizedDisplayCitationLabel === right.normalizedDisplayCitationLabel
+  ) {
+    return true;
+  }
+  return Boolean(
+    left.normalizedCitationKey &&
+    left.normalizedCitationKey === right.normalizedCitationKey,
+  );
+}
+
+function isStandaloneCitationElementForQuote(
+  element: Element,
+  extractedCitation: ExtractedCitationLabel,
+): boolean {
+  const parsed = extractStandalonePaperSourceLabel(element.textContent || "");
+  return Boolean(
+    parsed && extractedCitationLabelsMatch(parsed, extractedCitation),
+  );
+}
+
+function findConsumedCitationRemovalElement(
+  citationEl: Element,
+  extractedCitation: ExtractedCitationLabel,
+): Element | null {
+  if (!isStandaloneCitationElementForQuote(citationEl, extractedCitation)) {
+    return null;
+  }
+  let removalTarget: Element = citationEl;
+  let parent = citationEl.parentElement;
+  while (parent && !parent.classList.contains("llm-quote-card")) {
+    if (!isStandaloneCitationElementForQuote(parent, extractedCitation)) break;
+    removalTarget = parent;
+    parent = parent.parentElement;
+  }
+  return removalTarget;
+}
+
+function removeConsumedSourceBackedQuoteCitation(params: {
+  quoteCard: Element;
+  citationEl: Element;
+  extractedCitation: ExtractedCitationLabel;
+}): void {
+  const removalTarget = findConsumedCitationRemovalElement(
+    params.citationEl,
+    params.extractedCitation,
+  );
+  removalTarget?.parentNode?.removeChild(removalTarget);
+
+  let next = getNextElementSibling(params.quoteCard);
+  while (
+    next &&
+    isStandaloneCitationElementForQuote(next, params.extractedCitation)
+  ) {
+    const duplicate = next;
+    next = getNextElementSibling(next);
+    duplicate.parentNode?.removeChild(duplicate);
+  }
 }
 
 export function extractStandalonePaperSourceLabel(
@@ -1409,6 +1511,7 @@ function startCitationQuoteLocationCacheWarm(
   if (!normalizedQuoteText || !candidates.length) return;
   const seen = new Set<number>();
   for (const candidate of candidates) {
+    if (!isPdfBackedCitationCandidate(candidate)) continue;
     const contextItemId = Math.floor(Number(candidate.contextItemId));
     if (!Number.isFinite(contextItemId) || contextItemId <= 0) continue;
     if (seen.has(contextItemId)) continue;
@@ -1573,6 +1676,7 @@ function lookupVerifiedCachedCitationPageForButton(
   const normalizedQuoteText = sanitizeText(quoteText || "").trim();
   if (!normalizedQuoteText) return undefined;
   for (const candidate of candidates) {
+    if (!isPdfBackedCitationCandidate(candidate)) continue;
     const cached = citationPageCache.get(
       buildCitationCacheKey(candidate.contextItemId, normalizedQuoteText),
     );
@@ -1754,7 +1858,7 @@ function mergeCitationCandidates(
   const seen = new Set<string>();
   for (const set of candidateSets) {
     for (const candidate of set) {
-      const key = `${Math.floor(candidate.paperContext.itemId)}:${Math.floor(candidate.contextItemId)}`;
+      const key = buildCitationCandidateKey(candidate);
       if (seen.has(key)) continue;
       seen.add(key);
       merged.push(candidate);
@@ -1864,15 +1968,12 @@ async function buildOrderedCitationCandidates(
   // otherwise be outranked by an unrelated library result with a matching
   // romanized name.
   const staticKeySet = new Set(
-    staticCandidates.map(
-      (c) =>
-        `${Math.floor(c.paperContext.itemId)}:${Math.floor(c.contextItemId)}`,
-    ),
+    staticCandidates.map((candidate) => buildCitationCandidateKey(candidate)),
   );
   const activeReaderItemId = getReaderItemId(getActiveReaderForSelectedTab());
   return effectiveCandidates.slice().sort((left, right) => {
-    const leftKey = `${Math.floor(left.paperContext.itemId)}:${Math.floor(left.contextItemId)}`;
-    const rightKey = `${Math.floor(right.paperContext.itemId)}:${Math.floor(right.contextItemId)}`;
+    const leftKey = buildCitationCandidateKey(left);
+    const rightKey = buildCitationCandidateKey(right);
     const leftIsContext = staticKeySet.has(leftKey);
     const rightIsContext = staticKeySet.has(rightKey);
     const leftRank =
@@ -1896,6 +1997,29 @@ async function buildOrderedCitationCandidates(
     );
   });
 }
+
+function resolveAuthoritativeNonPdfCitationCandidate(input: {
+  orderedCandidates: AssistantCitationPaperCandidate[];
+  staticCandidates: AssistantCitationPaperCandidate[];
+  extractedCitation: ExtractedCitationLabel | null;
+}): AssistantCitationPaperCandidate | null {
+  const topCandidate = input.orderedCandidates[0];
+  if (!topCandidate || isPdfBackedCitationCandidate(topCandidate)) return null;
+  const staticCandidateKeys = new Set(
+    input.staticCandidates.map((candidate) =>
+      buildCitationCandidateKey(candidate),
+    ),
+  );
+  if (staticCandidateKeys.has(buildCitationCandidateKey(topCandidate))) {
+    return topCandidate;
+  }
+  return rankCandidateForCitation(input.extractedCitation, topCandidate) > 0
+    ? topCandidate
+    : null;
+}
+
+export const resolveAuthoritativeNonPdfCitationCandidateForTests =
+  resolveAuthoritativeNonPdfCitationCandidate;
 
 async function resolveAndNavigateAssistantCitation(params: {
   body: Element;
@@ -1931,13 +2055,33 @@ async function resolveAndNavigateAssistantCitation(params: {
       staticCandidates,
       { allowLibrarySearch: !staticCandidates.length },
     );
+    const nonPdfCandidate = resolveAuthoritativeNonPdfCitationCandidate({
+      orderedCandidates,
+      staticCandidates,
+      extractedCitation,
+    });
+    if (nonPdfCandidate) {
+      if (status)
+        setStatus(
+          status,
+          "Cited source is not a PDF; page jump is unavailable.",
+          "error",
+        );
+      return;
+    }
     // General inline citations may not have a quote snippet to page-locate.
     // In that case, open the best matching paper directly.
     if (!normalizedQuoteText) {
-      const firstCandidate = orderedCandidates[0];
+      const firstCandidate = orderedCandidates.find((candidate) =>
+        isPdfBackedCitationCandidate(candidate),
+      );
       if (!firstCandidate) {
         if (status)
-          setStatus(status, "No matching cited paper was found.", "error");
+          setStatus(
+            status,
+            "Cited source is not a PDF; page jump is unavailable.",
+            "error",
+          );
         return;
       }
       const opened = await openReaderForItem(firstCandidate.contextItemId);
@@ -1958,6 +2102,7 @@ async function resolveAndNavigateAssistantCitation(params: {
     // Cache check — skip rank-0 candidates to avoid stale entries from
     // whatever PDF happens to be open winning over the actual cited paper.
     for (const candidate of orderedCandidates) {
+      if (!isPdfBackedCitationCandidate(candidate)) continue;
       if (rankCandidateForCitation(extractedCitation, candidate) === 0)
         continue;
       const cached = await navigateToCachedCitationPage(
@@ -2007,6 +2152,7 @@ async function resolveAndNavigateAssistantCitation(params: {
     // navigation jump to the likely page immediately before FindController
     // verifies/refines the paragraph and page label.
     for (const candidate of orderedCandidates) {
+      if (!isPdfBackedCitationCandidate(candidate)) continue;
       if (rankCandidateForCitation(extractedCitation, candidate) === 0)
         continue;
       const hiddenLocation = lookupCachedQuoteLocationForAttachment(
@@ -2060,7 +2206,9 @@ async function resolveAndNavigateAssistantCitation(params: {
     ).trim();
     if (explicitPageLabel) {
       const bestRanked = orderedCandidates.find(
-        (c) => rankCandidateForCitation(extractedCitation, c) > 0,
+        (c) =>
+          isPdfBackedCitationCandidate(c) &&
+          rankCandidateForCitation(extractedCitation, c) > 0,
       );
       if (bestRanked) {
         const target = await openReaderForItem(bestRanked.contextItemId);
@@ -2171,6 +2319,7 @@ async function resolveAndNavigateAssistantCitation(params: {
     // candidate exists.
     for (const pass of [1, 2] as const) {
       for (const candidate of orderedCandidates) {
+        if (!isPdfBackedCitationCandidate(candidate)) continue;
         const rank = rankCandidateForCitation(extractedCitation, candidate);
         if (pass === 1 && rank === 0) continue;
         if (pass === 2 && rank !== 0) continue;
@@ -2551,7 +2700,9 @@ function createQuoteCardElement(params: {
   citationContent: Node;
 }): HTMLElement {
   const wrapper = params.ownerDoc.createElement("div");
-  wrapper.className = "llm-quote-card llm-quote-citation-anchor";
+  wrapper.className = params.quoteCitationId
+    ? "llm-quote-card llm-quote-citation-anchor"
+    : "llm-quote-card";
   wrapper.dataset.expanded = "false";
   if (params.quoteCitationId) {
     wrapper.dataset.quoteCitationId = params.quoteCitationId;
@@ -2851,6 +3002,9 @@ export function decorateAssistantCitationLinks(params: {
   if (!params.assistantMessage.text.trim()) return;
   const ownerDoc = params.bubble.ownerDocument;
   if (!ownerDoc) return;
+  const quoteCitations = normalizeQuoteCitations(
+    params.assistantMessage.quoteCitations,
+  );
   const activeReader = getActiveReaderForSelectedTab();
   if (activeReader) {
     scheduleCitationPageTextCacheWarm(activeReader, ownerDoc);
@@ -2965,8 +3119,61 @@ export function decorateAssistantCitationLinks(params: {
       extractedCitation.sourceLabel,
     );
 
-    // Try to match the citation label against known paper candidates.
-    const matchingCandidates = resolveMatchingCandidatesForExtractedCitation(
+    const trustedQuoteCitation = findMatchingTrustedQuoteCitation({
+      quoteText,
+      citationLabel: extractedCitation.sourceLabel,
+      quoteCitations,
+    });
+    if (!trustedQuoteCitation) {
+      ztoolkit.log(
+        "LLM citation decoration: rendering unanchored source-backed quote card",
+        "source =",
+        extractedCitation.sourceLabel,
+        "quote =",
+        quoteText.slice(0, 120),
+      );
+      const matchingCandidates = resolveMatchingCandidatesForExtractedCitation(
+        extractedCitation,
+        candidates,
+      );
+      const citationElement = createCitationButton({
+        ownerDoc,
+        body: params.body,
+        panelItem: params.panelItem,
+        candidates: matchingCandidates,
+        extractedCitation,
+        quoteText,
+        rawCitationText: extractedCitation.sourceLabel,
+      });
+      const quoteCard = createQuoteCardElement({
+        ownerDoc,
+        quoteText,
+        citationContent: citationElement,
+      });
+      const blockquoteParent = blockquote.parentNode;
+      if (!blockquoteParent) continue;
+      blockquoteParent.replaceChild(quoteCard, blockquote);
+      removeConsumedSourceBackedQuoteCitation({
+        quoteCard,
+        citationEl,
+        extractedCitation,
+      });
+      if (citationRemainder) {
+        const remainderEl = ownerDoc.createElement("p");
+        remainderEl.textContent = citationRemainder;
+        quoteCard.parentElement?.insertBefore(
+          remainderEl,
+          quoteCard.nextSibling,
+        );
+      }
+      continue;
+    }
+    quoteText = trustedQuoteCitation.quoteText;
+    replaceBlockquoteText(blockquote, quoteText);
+
+    // Try to match the trusted quote citation against known paper candidates.
+    const matchingCandidates = resolveQuoteCitationCandidates(
+      trustedQuoteCitation,
       extractedCitation,
       candidates,
     );
@@ -2984,12 +3191,17 @@ export function decorateAssistantCitationLinks(params: {
     const quoteCard = createQuoteCardElement({
       ownerDoc,
       quoteText,
+      quoteCitationId: trustedQuoteCitation.id,
       citationContent: citationElement,
     });
     const blockquoteParent = blockquote.parentNode;
     if (!blockquoteParent) continue;
     blockquoteParent.replaceChild(quoteCard, blockquote);
-    citationEl.parentNode?.removeChild(citationEl);
+    removeConsumedSourceBackedQuoteCitation({
+      quoteCard,
+      citationEl,
+      extractedCitation,
+    });
 
     // If the citation was mixed with continuation text (edge-case leading-line
     // extraction), re-insert the remainder as a new paragraph after this element

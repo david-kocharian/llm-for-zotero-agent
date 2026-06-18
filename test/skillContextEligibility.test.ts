@@ -43,7 +43,7 @@ describe("skill context eligibility", function () {
     setUserSkills([]);
   });
 
-  it("activates simple-paper-qa only when exactly one paper is in context", function () {
+  it("activates simple-paper-qa only for paper-targeted auto routes", function () {
     loadBuiltInSkills();
 
     assert.include(
@@ -57,7 +57,7 @@ describe("skill context eligibility", function () {
       getMatchedSkillIds({ userText: "summarize my library" }),
       "simple-paper-qa",
     );
-    assert.notInclude(
+    assert.include(
       getMatchedSkillIds({
         userText: "summarize these papers",
         selectedPaperContexts: [paperA, paperB],
@@ -66,7 +66,7 @@ describe("skill context eligibility", function () {
     );
   });
 
-  it("uses user wording to resolve one-paper plus collection context", function () {
+  it("prefers library skills for collection and tag summary routes", function () {
     loadBuiltInSkills();
 
     const paperTargeted = getMatchedSkillIds({
@@ -151,6 +151,56 @@ describe("skill context eligibility", function () {
     assert.include(
       getMatchedSkillIds({ userText: "summarize anything" }),
       "custom-summary",
+    );
+  });
+
+  it("always honors explicitly forced slash skills", function () {
+    loadBuiltInSkills();
+
+    assert.deepEqual(
+      getMatchedSkillIds({
+        userText: "answer this without any attached paper context",
+        forcedSkillIds: ["evidence-based-qa"],
+      }),
+      ["evidence-based-qa"],
+    );
+  });
+
+  it("prefers evidence-based paper QA over simple paper QA for automatic overlaps", function () {
+    loadBuiltInSkills();
+
+    assert.deepEqual(
+      getMatchedSkillIds({
+        userText: "what method did they use in this paper",
+        selectedPaperContexts: [paperA],
+      }),
+      ["evidence-based-qa"],
+    );
+  });
+
+  it("does not suppress explicitly selected simple paper QA", function () {
+    loadBuiltInSkills();
+
+    assert.deepEqual(
+      getMatchedSkillIds({
+        userText: "what method did they use in this paper",
+        selectedPaperContexts: [paperA],
+        forcedSkillIds: ["simple-paper-qa"],
+      }),
+      ["simple-paper-qa", "evidence-based-qa"],
+    );
+  });
+
+  it("preserves automatic simple paper QA when evidence QA is explicit", function () {
+    loadBuiltInSkills();
+
+    assert.deepEqual(
+      getMatchedSkillIds({
+        userText: "summarize this paper",
+        selectedPaperContexts: [paperA],
+        forcedSkillIds: ["evidence-based-qa"],
+      }),
+      ["simple-paper-qa", "evidence-based-qa"],
     );
   });
 });

@@ -7,7 +7,8 @@ import { joinLocalPath } from "./localPath";
 export type CodexAppServerUserInput =
   | { type: "text"; text: string }
   | { type: "image"; url: string }
-  | { type: "localImage"; path: string };
+  | { type: "localImage"; path: string }
+  | { type: "skill"; name: string; path: string };
 
 type CodexAppServerHistoryInputPart =
   | { type: "input_text"; text: string }

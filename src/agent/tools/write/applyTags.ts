@@ -4,6 +4,13 @@
  */
 import type { AgentToolDefinition } from "../../types";
 import {
+  buildPagedReviewActionConfig,
+  buildPageSizeSelectField,
+  buildTagsPerPaperSelectField,
+  readPagedOperationLabel,
+  readPagedOperationMeta,
+} from "../../actions/pagedWorkflow";
+import {
   LibraryMutationService,
   type ApplyTagsOperation,
   type RemoveTagsOperation,
@@ -44,6 +51,11 @@ export function createApplyTagsTool(
             type: "string",
             enum: ["add", "remove"],
             description: "Whether to add or remove tags. Defaults to 'add'.",
+          },
+          id: {
+            type: "string",
+            description:
+              "Optional operation ID used by native action workflows.",
           },
           itemIds: {
             type: "array",
@@ -103,6 +115,10 @@ export function createApplyTagsTool(
 
       const action: "add" | "remove" =
         args.action === "remove" ? "remove" : "add";
+      const id =
+        typeof args.id === "string" && args.id.trim()
+          ? args.id.trim()
+          : undefined;
 
       if (action === "remove") {
         const itemIds = normalizePositiveIntArray(args.itemIds);
@@ -118,6 +134,7 @@ export function createApplyTagsTool(
           );
         }
         const operation: RemoveTagsOperation = {
+          id,
           type: "remove_tags",
           itemIds,
           tags,
@@ -137,14 +154,10 @@ export function createApplyTagsTool(
           }
           const itemId = Number(entry.itemId);
           if (!Number.isFinite(itemId) || itemId <= 0) {
-            return fail(
-              "Each assignment must include a valid positive itemId",
-            );
+            return fail("Each assignment must include a valid positive itemId");
           }
           if (!Array.isArray(entry.tags)) {
-            return fail(
-              "Each assignment must include a tags array",
-            );
+            return fail("Each assignment must include a tags array");
           }
           assignments.push({
             itemId: Math.floor(itemId),
@@ -152,6 +165,7 @@ export function createApplyTagsTool(
           });
         }
         const operation: ApplyTagsOperation = {
+          id,
           type: "apply_tags",
           assignments,
         };
@@ -162,6 +176,7 @@ export function createApplyTagsTool(
       const tags = normalizeStringArray(args.tags);
       if (itemIds && tags) {
         const operation: ApplyTagsOperation = {
+          id,
           type: "apply_tags",
           itemIds,
           tags,
@@ -179,30 +194,41 @@ export function createApplyTagsTool(
       if (input.action === "add") {
         const operation = input.operation as ApplyTagsOperation;
         const tagField = buildTagAssignmentField(operation, zoteroGateway);
-        const fields = tagField ? [tagField] : [];
+        const pageMeta = readPagedOperationMeta(operation.id);
+        const fields = [
+          ...(tagField ? [tagField] : []),
+          ...(pageMeta
+            ? [
+                buildTagsPerPaperSelectField(pageMeta.tagsPerPaper),
+                buildPageSizeSelectField(pageMeta.pageSize),
+              ]
+            : []),
+        ];
 
         const assignments = operation.assignments || [];
-        const itemCount =
-          assignments.length || operation.itemIds?.length || 0;
+        const itemCount = assignments.length || operation.itemIds?.length || 0;
+        const pageLabel = readPagedOperationLabel(operation.id);
         const tagSummary = operation.tags?.length
           ? `Tags to add: ${operation.tags.join(", ")}`
           : "Review the suggested per-paper tag additions.";
 
         return {
           toolName: "apply_tags",
-          title: `Add tags to ${itemCount} paper${itemCount === 1 ? "" : "s"}`,
+          title: `${pageLabel ? `${pageLabel}: ` : ""}Add tags to ${itemCount} item${itemCount === 1 ? "" : "s"}`,
           confirmLabel: "Apply",
-          cancelLabel: "Cancel",
+          cancelLabel: pageLabel ? "Stop" : "Cancel",
           description: tagSummary,
           fields,
+          ...(pageMeta
+            ? buildPagedReviewActionConfig(pageMeta, { includeRefresh: true })
+            : {}),
         };
       }
 
       // action === "remove"
       const operation = input.operation as RemoveTagsOperation;
-      const targets = zoteroGateway.getPaperTargetsByItemIds(
-        operation.itemIds,
-      );
+      const pageLabel = readPagedOperationLabel(operation.id);
+      const targets = zoteroGateway.getPaperTargetsByItemIds(operation.itemIds);
       const targetByItemId = new Map(
         targets.map((target) => [target.itemId, target] as const),
       );
@@ -220,11 +246,9 @@ export function createApplyTagsTool(
 
       return {
         toolName: "apply_tags",
-        title: `Remove tags from ${operation.itemIds.length} paper${
-          operation.itemIds.length === 1 ? "" : "s"
-        }`,
+        title: `${pageLabel ? `${pageLabel}: ` : ""}Remove tags from ${operation.itemIds.length} item${operation.itemIds.length === 1 ? "" : "s"}`,
         confirmLabel: "Remove",
-        cancelLabel: "Cancel",
+        cancelLabel: pageLabel ? "Stop" : "Cancel",
         description: `Tags to remove: ${operation.tags.join(", ")}`,
         fields: [
           {
@@ -245,8 +269,7 @@ export function createApplyTagsTool(
         const resolved = data?.[fieldId];
 
         if (resolved !== undefined) {
-          const assignments =
-            normalizeTagAssignmentsFromResolution(resolved);
+          const assignments = normalizeTagAssignmentsFromResolution(resolved);
           if (assignments && assignments.length > 0) {
             const updatedOperation: ApplyTagsOperation = {
               ...operation,

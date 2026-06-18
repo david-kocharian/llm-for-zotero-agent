@@ -21,6 +21,7 @@ import {
   readCachedMineruMd,
   writeMineruCacheFiles,
 } from "../src/modules/contextPanel/mineruCache";
+import { pdfTextCache } from "../src/modules/contextPanel/state";
 import { clearMineruEligibilityCacheForTests } from "../src/modules/mineruParseEligibility";
 
 const encoder = new TextEncoder();
@@ -34,6 +35,7 @@ type MockItem = {
   attachmentContentType?: string;
   attachmentFilename?: string;
   attachmentSyncedHash?: string;
+  deleted?: boolean;
   attachmentIDs?: number[];
   isAttachment: () => boolean;
   isRegularItem?: () => boolean;
@@ -196,6 +198,7 @@ describe("mineruAutoWatch", function () {
     delete (globalThis as unknown as { Zotero?: unknown }).Zotero;
     delete (globalThis as unknown as { ztoolkit?: unknown }).ztoolkit;
     delete (globalThis as unknown as { IOUtils?: unknown }).IOUtils;
+    pdfTextCache.clear();
   });
 
   it("removes a newly queued PDF when Zotero later deletes that attachment", async function () {
@@ -215,6 +218,61 @@ describe("mineruAutoWatch", function () {
 
     assert.lengthOf(getAutoWatchQueueSnapshotForTests(), 0);
     assert.isUndefined(getItemStatus(pdf.id));
+  });
+
+  it("cleans queued, local, and runtime MinerU state when a PDF is trashed", async function () {
+    const parent = createParent();
+    const pdf = createPdf();
+    const items = new Map<number, MockItem>([
+      [parent.id, parent],
+      [pdf.id, pdf],
+    ]);
+    setupZotero(items);
+
+    await handleAutoWatchNotificationForTests("add", "item", [pdf.id]);
+    assert.lengthOf(getAutoWatchQueueSnapshotForTests(), 1);
+
+    await writeMineruCacheFiles(pdf.id, "# stale", []);
+    pdfTextCache.set(pdf.id, {
+      title: "stale",
+      chunks: ["stale"],
+      chunkMeta: [],
+      chunkStats: [],
+      docFreq: {},
+      avgChunkLength: 1,
+      fullLength: 7,
+      sourceType: "mineru",
+    });
+
+    pdf.deleted = true;
+    await handleAutoWatchNotificationForTests("trash", "item", [pdf.id]);
+
+    assert.lengthOf(getAutoWatchQueueSnapshotForTests(), 0);
+    assert.isUndefined(getItemStatus(pdf.id));
+    assert.isFalse(await hasCachedMineruMd(pdf.id));
+    assert.isFalse(pdfTextCache.has(pdf.id));
+  });
+
+  it("keeps live PDFs queued when a non-deletion remove notification arrives", async function () {
+    const parent = createParent();
+    const pdf = createPdf();
+    const items = new Map<number, MockItem>([
+      [parent.id, parent],
+      [pdf.id, pdf],
+    ]);
+    setupZotero(items);
+
+    await handleAutoWatchNotificationForTests("add", "item", [pdf.id]);
+    assert.lengthOf(getAutoWatchQueueSnapshotForTests(), 1);
+
+    await handleAutoWatchNotificationForTests("remove", "item", [pdf.id]);
+
+    assert.lengthOf(getAutoWatchQueueSnapshotForTests(), 1);
+    assert.isTrue(
+      isAutoWatchQueueEntryCurrentForTests(
+        getAutoWatchQueueSnapshotForTests()[0],
+      ),
+    );
   });
 
   it("skips a queued PDF that no longer exists before processing", async function () {

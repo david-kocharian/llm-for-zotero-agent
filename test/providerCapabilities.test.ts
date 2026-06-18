@@ -117,6 +117,10 @@ describe("provider capabilities", function () {
         protocol: "anthropic_messages",
       },
       {
+        apiBase: "https://api.xiaomimimo.com/v1",
+        protocol: "openai_chat_compat",
+      },
+      {
         apiBase: "https://third-party.example/gemini",
         protocol: "gemini_native",
       },

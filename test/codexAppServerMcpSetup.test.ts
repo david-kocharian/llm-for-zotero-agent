@@ -1,6 +1,7 @@
 import { assert } from "chai";
 import {
   assertRequiredCodexZoteroMcpToolsReady,
+  buildClaudeZoteroMcpServerConfig,
   buildCodexZoteroMcpThreadConfig,
   clearCodexZoteroMcpPreflightCache,
   installOrUpdateCodexZoteroMcpConfig,
@@ -417,6 +418,40 @@ describe("Codex app-server MCP setup", function () {
     assert.notProperty(
       servers[scoped.serverName].tools,
       "zotero_confirm_action",
+    );
+  });
+
+  it("builds Claude SDK MCP server config with scoped Zotero headers", function () {
+    const config = buildClaudeZoteroMcpServerConfig({
+      profileSignature: "profile-dev one",
+      scopeToken: "scope-token-claude",
+      required: true,
+    });
+
+    assert.equal(config.serverName, "llm_for_zotero_profile_dev_one");
+    const server = config.mcpServers[config.serverName] as {
+      type?: string;
+      url?: string;
+      headers?: Record<string, string>;
+      http_headers?: Record<string, string>;
+      enabled_tools?: string[];
+    };
+    assert.equal(server.type, "http");
+    assert.equal(server.url, "http://127.0.0.1:24680/llm-for-zotero/mcp");
+    assert.equal(
+      server.headers?.["X-LLM-For-Zotero-Scope"],
+      "scope-token-claude",
+    );
+    assert.match(String(server.headers?.Authorization || ""), /^Bearer /);
+    assert.isUndefined(server.http_headers);
+    assert.isUndefined(server.enabled_tools);
+    assert.include(
+      config.allowedTools,
+      "mcp__llm_for_zotero_profile_dev_one__library_retrieve",
+    );
+    assert.include(
+      config.allowedTools,
+      "mcp__llm_for_zotero_profile_dev_one__zotero_script",
     );
   });
 

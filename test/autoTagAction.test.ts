@@ -63,7 +63,11 @@ function makeBibliographicTarget(
   title: string,
   tags: string[] = [],
   collectionIds: number[] = [],
-  attachments: Array<{ contextItemId: number; title: string; contentType: string }> = [],
+  attachments: Array<{
+    contextItemId: number;
+    title: string;
+    contentType: string;
+  }> = [],
 ) {
   return {
     itemId,
@@ -79,6 +83,56 @@ function makeBibliographicTarget(
 
 function ok<T>(value: T): AgentToolInputValidation<T> {
   return { ok: true, value };
+}
+
+function registerReviewApplyTagsTool(
+  registry: AgentToolRegistry,
+  onExecute: (input: {
+    assignments: Array<{ itemId: number; tags: string[] }>;
+  }) => void,
+): void {
+  registry.register({
+    spec: {
+      name: "apply_tags",
+      description: "apply tags",
+      inputSchema: { type: "object" },
+      mutability: "write",
+      requiresConfirmation: true,
+    },
+    validate(args) {
+      return ok(
+        args as { assignments: Array<{ itemId: number; tags: string[] }> },
+      );
+    },
+    createPendingAction(input) {
+      return {
+        toolName: "apply_tags",
+        title: "Review tag additions",
+        confirmLabel: "Apply",
+        cancelLabel: "Cancel",
+        fields: [
+          {
+            type: "tag_assignment_table",
+            id: "tagAssignments:apply_tags",
+            label: "Suggested tags to add",
+            rows: input.assignments.map((assignment) => ({
+              id: `${assignment.itemId}`,
+              label: `Paper ${assignment.itemId}`,
+              value: assignment.tags,
+            })),
+          },
+        ],
+      };
+    },
+    async execute(input) {
+      onExecute(input);
+      return {
+        result: {
+          updatedCount: input.assignments.length,
+        },
+      };
+    },
+  });
 }
 
 describe("autoTag action", function () {
@@ -118,7 +172,8 @@ describe("autoTag action", function () {
             : [],
         getEditableArticleMetadata: (item: { id: number } | null) => ({
           fields: {
-            abstractNote: item?.id === 2 ? "Already tagged abstract" : "Fresh abstract",
+            abstractNote:
+              item?.id === 2 ? "Already tagged abstract" : "Fresh abstract",
           },
         }),
         getItem: (itemId: number) => ({ id: itemId }),
@@ -129,9 +184,12 @@ describe("autoTag action", function () {
 
     assert.isTrue(result.ok);
     if (!result.ok) return;
-    assert.deepEqual((applyArgs?.assignments as Array<Record<string, unknown>>).map(
-      (entry) => entry.itemId,
-    ), [2, 1]);
+    assert.deepEqual(
+      (applyArgs?.assignments as Array<Record<string, unknown>>).map(
+        (entry) => entry.itemId,
+      ),
+      [2, 1],
+    );
     assert.deepEqual(result.output, {
       targeted: 2,
       tagged: 1,
@@ -193,9 +251,12 @@ describe("autoTag action", function () {
 
     assert.isTrue(result.ok);
     if (!result.ok) return;
-    assert.deepEqual((applyArgs?.assignments as Array<Record<string, unknown>>).map(
-      (entry) => entry.itemId,
-    ), [31]);
+    assert.deepEqual(
+      (applyArgs?.assignments as Array<Record<string, unknown>>).map(
+        (entry) => entry.itemId,
+      ),
+      [31],
+    );
     assert.deepEqual(result.output, {
       targeted: 1,
       tagged: 1,
@@ -336,9 +397,12 @@ describe("autoTag action", function () {
 
     assert.isTrue(result.ok);
     if (!result.ok) return;
-    assert.deepEqual((applyArgs?.assignments as Array<Record<string, unknown>>).map(
-      (entry) => entry.itemId,
-    ), [77]);
+    assert.deepEqual(
+      (applyArgs?.assignments as Array<Record<string, unknown>>).map(
+        (entry) => entry.itemId,
+      ),
+      [77],
+    );
     assert.deepEqual(result.output, {
       targeted: 1,
       tagged: 1,
@@ -417,10 +481,12 @@ describe("autoTag action", function () {
         requiresConfirmation: true,
       },
       validate(args) {
-        return ok(args as {
-          action: "add";
-          assignments: Array<{ itemId: number; tags: string[] }>;
-        });
+        return ok(
+          args as {
+            action: "add";
+            assignments: Array<{ itemId: number; tags: string[] }>;
+          },
+        );
       },
       createPendingAction(input) {
         return {
@@ -445,14 +511,18 @@ describe("autoTag action", function () {
       applyConfirmation(input, resolutionData) {
         const data = resolutionData as Record<string, unknown>;
         const rows = Array.isArray(data["tagAssignments:apply_tags"])
-          ? (data["tagAssignments:apply_tags"] as Array<Record<string, unknown>>)
+          ? (data["tagAssignments:apply_tags"] as Array<
+              Record<string, unknown>
+            >)
           : [];
         return ok({
           ...input,
           assignments: rows.map((row) => ({
             itemId: Number(row.id),
             tags: Array.isArray(row.value)
-              ? row.value.filter((tag): tag is string => typeof tag === "string")
+              ? row.value.filter(
+                  (tag): tag is string => typeof tag === "string",
+                )
               : [],
           })),
         });
@@ -460,7 +530,9 @@ describe("autoTag action", function () {
       async execute(input) {
         return {
           result: {
-            updatedCount: input.assignments.filter((entry) => entry.tags.length > 0).length,
+            updatedCount: input.assignments.filter(
+              (entry) => entry.tags.length > 0,
+            ).length,
           },
         };
       },
@@ -477,18 +549,22 @@ describe("autoTag action", function () {
         }),
         getEditableArticleMetadata: (item: { id: number } | null) => ({
           fields: {
-            abstractNote: item?.id === 1 ? "Paper one abstract" : "Paper two abstract",
+            abstractNote:
+              item?.id === 1 ? "Paper one abstract" : "Paper two abstract",
           },
         }),
         getItem: (itemId: number) => ({ id: itemId }),
       } as never,
       requestConfirmation: async (_requestId, action) => {
         const field = action.fields[0] as Extract<
-          typeof action.fields[number],
+          (typeof action.fields)[number],
           { type: "tag_assignment_table" }
         >;
         assert.equal(field.type, "tag_assignment_table");
-        assert.deepEqual(field.rows.map((row) => row.value), [[], []]);
+        assert.deepEqual(
+          field.rows.map((row) => row.value),
+          [[], []],
+        );
         return {
           approved: true,
           data: {
@@ -510,5 +586,198 @@ describe("autoTag action", function () {
       tagged: 1,
       skipped: 1,
     });
+  });
+
+  it("navigates to the next page without applying current-page tags", async function () {
+    const registry = new AgentToolRegistry();
+    const executedItemIds: number[] = [];
+    registerReviewApplyTagsTool(registry, (input) => {
+      executedItemIds.push(
+        ...input.assignments.map((assignment) => assignment.itemId),
+      );
+    });
+
+    let confirmationCount = 0;
+    const { ctx } = createActionContext(registry, {
+      zoteroGateway: {
+        listBibliographicItemTargets: async () => ({
+          items: Array.from({ length: 11 }, (_entry, index) =>
+            makeBibliographicTarget(
+              index + 1,
+              `Neural Memory Paper ${index + 1}`,
+            ),
+          ),
+          totalCount: 11,
+        }),
+        listLibraryTags: async () => [{ name: "neural memory", type: 0 }],
+        getEditableArticleMetadata: () => ({
+          fields: {
+            abstractNote: "A neural memory paper with learning dynamics",
+          },
+        }),
+        getItem: (itemId: number) => ({ id: itemId }),
+      } as never,
+      requestConfirmation: async () => {
+        confirmationCount += 1;
+        return confirmationCount === 1
+          ? { approved: false, actionId: "next", data: {} }
+          : { approved: true, actionId: "confirm", data: {} };
+      },
+    });
+
+    const result = await autoTagAction.execute(
+      { scope: "all", pageSize: 1 },
+      ctx,
+    );
+
+    assert.isTrue(result.ok);
+    assert.deepEqual(executedItemIds, [1]);
+  });
+
+  it("applies the current page on confirm and then advances", async function () {
+    const registry = new AgentToolRegistry();
+    const executedPages: number[][] = [];
+    registerReviewApplyTagsTool(registry, (input) => {
+      executedPages.push(
+        input.assignments.map((assignment) => assignment.itemId),
+      );
+    });
+
+    const { ctx } = createActionContext(registry, {
+      zoteroGateway: {
+        listBibliographicItemTargets: async () => ({
+          items: Array.from({ length: 11 }, (_entry, index) =>
+            makeBibliographicTarget(
+              index + 1,
+              `Neural Memory Paper ${index + 1}`,
+            ),
+          ),
+          totalCount: 11,
+        }),
+        listLibraryTags: async () => [{ name: "neural memory", type: 0 }],
+        getEditableArticleMetadata: () => ({
+          fields: {
+            abstractNote: "A neural memory paper with learning dynamics",
+          },
+        }),
+        getItem: (itemId: number) => ({ id: itemId }),
+      } as never,
+      requestConfirmation: async () => ({
+        approved: true,
+        actionId: "confirm",
+        data: {},
+      }),
+    });
+
+    const result = await autoTagAction.execute(
+      { scope: "all", pageSize: 1 },
+      ctx,
+    );
+
+    assert.isTrue(result.ok);
+    assert.deepEqual(executedPages, [[11, 10, 9, 8, 7, 6, 5, 4, 3, 2], [1]]);
+    if (!result.ok) return;
+    assert.deepInclude(result.output, {
+      targeted: 11,
+      tagged: 11,
+      skipped: 0,
+    });
+  });
+
+  it("continues from the next unprocessed item when page size changes", async function () {
+    const registry = new AgentToolRegistry();
+    const executedPages: number[][] = [];
+    registerReviewApplyTagsTool(registry, (input) => {
+      executedPages.push(
+        input.assignments.map((assignment) => assignment.itemId),
+      );
+    });
+
+    let confirmationCount = 0;
+    const { ctx } = createActionContext(registry, {
+      zoteroGateway: {
+        listBibliographicItemTargets: async () => ({
+          items: Array.from({ length: 60 }, (_entry, index) =>
+            makeBibliographicTarget(
+              index + 1,
+              `Neural Memory Paper ${index + 1}`,
+            ),
+          ),
+          totalCount: 60,
+        }),
+        listLibraryTags: async () => [{ name: "neural memory", type: 0 }],
+        getEditableArticleMetadata: () => ({
+          fields: {
+            abstractNote: "A neural memory paper with learning dynamics",
+          },
+        }),
+        getItem: (itemId: number) => ({ id: itemId }),
+      } as never,
+      requestConfirmation: async () => {
+        confirmationCount += 1;
+        return {
+          approved: true,
+          actionId: "confirm",
+          data: confirmationCount === 1 ? { pageSize: 50 } : {},
+        };
+      },
+    });
+
+    const result = await autoTagAction.execute(
+      { scope: "all", pageSize: 20 },
+      ctx,
+    );
+
+    assert.isTrue(result.ok);
+    assert.deepEqual(executedPages, [
+      Array.from({ length: 20 }, (_entry, index) => 60 - index),
+      Array.from({ length: 40 }, (_entry, index) => 40 - index),
+    ]);
+    if (!result.ok) return;
+    assert.deepInclude(result.output, {
+      targeted: 60,
+      tagged: 60,
+      skipped: 0,
+    });
+  });
+
+  it("cancels without applying current-page tags", async function () {
+    const registry = new AgentToolRegistry();
+    let executeCalls = 0;
+    registerReviewApplyTagsTool(registry, () => {
+      executeCalls += 1;
+    });
+
+    const { ctx } = createActionContext(registry, {
+      zoteroGateway: {
+        listBibliographicItemTargets: async () => ({
+          items: [makeBibliographicTarget(1, "Neural Memory Paper")],
+          totalCount: 1,
+        }),
+        listLibraryTags: async () => [{ name: "neural memory", type: 0 }],
+        getEditableArticleMetadata: () => ({
+          fields: {
+            abstractNote: "A neural memory paper with learning dynamics",
+          },
+        }),
+        getItem: (itemId: number) => ({ id: itemId }),
+      } as never,
+      requestConfirmation: async () => ({
+        approved: false,
+        actionId: "cancel",
+        data: {},
+      }),
+    });
+
+    const result = await autoTagAction.execute(
+      { scope: "all", pageSize: 1 },
+      ctx,
+    );
+
+    assert.isTrue(result.ok);
+    assert.equal(executeCalls, 0);
+    if (!result.ok) return;
+    assert.equal(result.output.stopped, true);
+    assert.equal(result.output.tagged, 0);
   });
 });

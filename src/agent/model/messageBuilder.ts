@@ -6,6 +6,7 @@ import type {
 import { AGENT_PERSONA_INSTRUCTIONS } from "./agentPersona";
 import { buildAgentMemoryBlock } from "../store/conversationMemory";
 import { getAllSkills } from "../skills";
+import type { AgentSkill } from "../skills";
 import { classifyWriteNoteDestination } from "../writeNoteDestination";
 
 import { resolveProviderCapabilities } from "../../providers";
@@ -22,10 +23,10 @@ import {
 } from "../../modules/contextPanel/quoteCitations";
 import {
   buildAgentStableResourceContextBlock,
-  renderAgentResourceContextPlan,
   type AgentResourceContextPlan,
-} from "../context/resourceLifecycle";
+} from "../context/resourceContextPlan";
 import { buildAgentCoverageContextBlock } from "../context/coverageLedger";
+import { buildVisibleTurnContextBlock } from "../context/turnContextEnvelope";
 
 export function isMultimodalRequestSupported(
   request: AgentRuntimeRequest,
@@ -103,6 +104,10 @@ function buildFullUserMessage(
   } = {},
 ): AgentModelMessage {
   const contextLines: string[] = [];
+  const visibleTurnContext = buildVisibleTurnContextBlock(request);
+  if (visibleTurnContext) {
+    contextLines.push(visibleTurnContext);
+  }
   if (request.activeNoteContext) {
     const note = request.activeNoteContext;
     contextLines.push(
@@ -221,17 +226,6 @@ function buildUserMessage(
     turnGuidanceBlock?: string;
   } = {},
 ): AgentModelMessage {
-  if (
-    resourceContextPlan &&
-    (resourceContextPlan.injection === "thin" ||
-      resourceContextPlan.injection === "delta")
-  ) {
-    return renderAgentResourceContextPlan(
-      resourceContextPlan,
-      request,
-      options,
-    );
-  }
   return buildFullUserMessage(request, {
     priorReadBlock: resourceContextPlan?.priorReadBlock,
     coverageBlock: options.coverageBlock,
@@ -275,18 +269,46 @@ function collectToolGuidanceInstructions(
   ];
 }
 
+function formatSkillGuidanceBlock(
+  skill: AgentSkill,
+  activationSource: string,
+): string {
+  const lines = [
+    `### Skill: ${skill.id}`,
+    `Description: ${skill.description || "No description provided."}`,
+    `Activation: ${activationSource}`,
+    "Instructions:",
+    skill.instruction.trim(),
+  ];
+  return lines.filter(Boolean).join("\n");
+}
+
 function collectSkillGuidanceInstructions(
+  request: AgentRuntimeRequest,
   matchedSkillIds: ReadonlyArray<string>,
 ): string[] {
-  const instructions = new Set<string>();
+  const blocks: string[] = [];
   const activeSkillIds = new Set(matchedSkillIds);
+  const forcedSkillIds = new Set(request.forcedSkillIds || []);
   for (const skill of getAllSkills()) {
     if (!activeSkillIds.has(skill.id)) continue;
     const instruction = skill.instruction.trim();
-    if (instruction) instructions.add(instruction);
+    if (!instruction) continue;
+    blocks.push(
+      formatSkillGuidanceBlock(
+        skill,
+        forcedSkillIds.has(skill.id)
+          ? "explicit slash selection"
+          : "automatic match",
+      ),
+    );
   }
-  if (!instructions.size) return [];
-  return ["Skill guidance loaded for this turn:", ...instructions];
+  if (!blocks.length) return [];
+  return [
+    "Active skills for this turn:",
+    "Treat each skill below as a separate workflow module. If multiple skills are active, first decide which part of the user's request each skill covers. Prefer explicitly selected slash skills when they are relevant. If skill instructions conflict, follow the user's explicit request and the available tool/safety constraints.",
+    ...blocks,
+  ];
 }
 
 function buildTurnGuidanceBlock(instructions: string[]): string {
@@ -295,22 +317,9 @@ function buildTurnGuidanceBlock(instructions: string[]): string {
   return ["Current-turn dynamic agent guidance:", ...lines].join("\n\n");
 }
 
-function buildAutoReadInstruction(
-  request: AgentRuntimeRequest,
-  resourceContextPlan?: AgentResourceContextPlan,
-): string {
+function buildAutoReadInstruction(request: AgentRuntimeRequest): string {
   const fullTextPapers = request.fullTextPaperContexts || [];
   if (!fullTextPapers.length) return "";
-  if (
-    resourceContextPlan?.lifecycleState === "thin-followup" &&
-    resourceContextPlan.injection === "thin"
-  ) {
-    return (
-      "TURN RULE: The same full-text paper resources remain in this conversation. " +
-      "Reuse the prior paper_read context already in the conversation when it is sufficient. " +
-      "Call paper_read({ mode:'targeted', query:'...' }) only if the follow-up asks for evidence that has not already been read."
-    );
-  }
   const allHaveMineruCache = fullTextPapers.every((entry) =>
     Boolean(entry.mineruCacheDir),
   );
@@ -393,6 +402,28 @@ function buildWriteNoteFileInstruction(
   return "";
 }
 
+function buildForcedSkillWholeLibraryInstruction(
+  request: AgentRuntimeRequest,
+): string {
+  if (!request.forcedSkillIds?.length) return "";
+  if (request.conversationKind === "paper") return "";
+  const hasExplicitContext = Boolean(
+    request.selectedPaperContexts?.length ||
+    request.fullTextPaperContexts?.length ||
+    request.pinnedPaperContexts?.length ||
+    request.selectedCollectionContexts?.length ||
+    request.selectedTagContexts?.length ||
+    request.selectedTextSources?.length ||
+    request.attachments?.length ||
+    request.screenshots?.length,
+  );
+  if (hasExplicitContext) return "";
+  return (
+    "TURN RULE: The user explicitly selected a skill in library chat without selecting a narrower context. " +
+    "Treat the intended context as the whole Zotero library, and use library-scoped tools or searches accordingly."
+  );
+}
+
 function buildRuntimePlatformSection(): string {
   return buildRuntimePlatformGuidanceText();
 }
@@ -418,19 +449,17 @@ export async function buildAgentInitialMessages(
   } = {},
 ): Promise<AgentModelMessage[]> {
   const memoryBlock = await buildAgentMemoryBlock(request.conversationKey);
-  const autoReadInstruction = buildAutoReadInstruction(
-    request,
-    resourceContextPlan,
-  );
+  const autoReadInstruction = buildAutoReadInstruction(request);
   const workflowParityInstructions = [
     buildFigureMineruInstruction(request, matchedSkillIds),
     buildWriteNoteFileInstruction(request, matchedSkillIds),
+    buildForcedSkillWholeLibraryInstruction(request),
   ].filter(Boolean);
   const turnGuidanceBlock = buildTurnGuidanceBlock([
     autoReadInstruction,
     ...workflowParityInstructions,
     ...collectToolGuidanceInstructions(request, tools),
-    ...collectSkillGuidanceInstructions(matchedSkillIds),
+    ...collectSkillGuidanceInstructions(request, matchedSkillIds),
   ]);
   const coverageBlock = buildAgentCoverageContextBlock({
     conversationKey: request.conversationKey,

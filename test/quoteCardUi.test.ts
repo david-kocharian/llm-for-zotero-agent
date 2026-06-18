@@ -57,4 +57,27 @@ describe("quote card UI contract", function () {
       ".llm-citation-row, .llm-citation-inline-wrap",
     );
   });
+
+  it("renders unmatched source-backed quotes through the quote-card component", function () {
+    const renderSource = source(
+      "src/modules/contextPanel/assistantCitationLinks.ts",
+    );
+
+    assert.include(
+      renderSource,
+      "rendering unanchored source-backed quote card",
+    );
+    assert.include(renderSource, "quoteText,\n        rawCitationText");
+    assert.notInclude(renderSource, 'quoteText: "",\n        rawCitationText');
+    assert.include(renderSource, "citationContent: citationElement");
+    assert.include(renderSource, "removeConsumedSourceBackedQuoteCitation");
+    assert.notInclude(
+      renderSource,
+      "citationEl.parentNode?.removeChild(citationEl);",
+    );
+    assert.include(
+      renderSource,
+      'params.quoteCitationId\n    ? "llm-quote-card llm-quote-citation-anchor"\n    : "llm-quote-card"',
+    );
+  });
 });

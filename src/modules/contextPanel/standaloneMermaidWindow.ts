@@ -1,6 +1,6 @@
 import { config } from "../../../package.json";
 import { HTML_NS } from "../../utils/domHelpers";
-import { createInlineMermaidSvgElement } from "./mermaidSvg";
+import { createInlineSvgElement } from "./mermaidSvg";
 
 type MermaidThemeKey = "light" | "dark";
 
@@ -9,6 +9,15 @@ export type StandaloneMermaidPayload = {
   source: string;
   themeKey: MermaidThemeKey;
   title?: string;
+};
+
+export type StandaloneSvgPayload = {
+  svgMarkup: string;
+  themeKey: MermaidThemeKey;
+  title?: string;
+  ariaLabel?: string;
+  toolbarLabel?: string;
+  zoomTargetLabel?: string;
 };
 
 const MERMAID_WINDOW_MIN_WIDTH_PX = 640;
@@ -38,7 +47,9 @@ function getWheelZoomScale(scale: number, deltaY: number): number {
     MERMAID_WINDOW_WHEEL_ZOOM_DELTA_MAX,
     Math.max(-MERMAID_WINDOW_WHEEL_ZOOM_DELTA_MAX, deltaY),
   );
-  return scale * Math.exp(-boundedDelta * MERMAID_WINDOW_WHEEL_ZOOM_SENSITIVITY);
+  return (
+    scale * Math.exp(-boundedDelta * MERMAID_WINDOW_WHEEL_ZOOM_SENSITIVITY)
+  );
 }
 
 function formatZoom(scale: number): string {
@@ -100,18 +111,21 @@ function syncThemeVariables(sourceDoc: Document, targetDoc: Document): void {
   targetDoc.documentElement?.prepend(style);
 }
 
-function initializeMermaidWindow(
+function initializeStandaloneSvgWindow(
   sourceDoc: Document,
   targetWin: Window,
-  payload: StandaloneMermaidPayload,
+  payload: StandaloneSvgPayload,
 ): boolean {
   if (targetWin.closed) return false;
   const doc = targetWin.document;
   const root = doc.getElementById(MERMAID_WINDOW_ROOT_ID) as HTMLElement | null;
   if (!root) return false;
 
-  doc.title = payload.title || "Mermaid Diagram";
-  doc.documentElement?.setAttribute("minwidth", `${MERMAID_WINDOW_MIN_WIDTH_PX}`);
+  doc.title = payload.title || "SVG Preview";
+  doc.documentElement?.setAttribute(
+    "minwidth",
+    `${MERMAID_WINDOW_MIN_WIDTH_PX}`,
+  );
   doc.documentElement?.setAttribute(
     "minheight",
     `${MERMAID_WINDOW_MIN_HEIGHT_PX}`,
@@ -135,12 +149,16 @@ function initializeMermaidWindow(
   const toolbar = doc.createElementNS(HTML_NS, "div") as HTMLDivElement;
   toolbar.className = "llm-mermaid-window-toolbar";
   toolbar.setAttribute("role", "toolbar");
-  toolbar.setAttribute("aria-label", "Mermaid diagram controls");
+  toolbar.setAttribute(
+    "aria-label",
+    payload.toolbarLabel || "SVG preview controls",
+  );
 
-  const zoomOut = createButton(doc, "−", "Zoom out diagram");
-  const zoomIn = createButton(doc, "+", "Zoom in diagram");
-  const fit = createButton(doc, "⛶", "Fit diagram to window");
-  const close = createButton(doc, "×", "Close diagram window");
+  const zoomTargetLabel = payload.zoomTargetLabel || "SVG preview";
+  const zoomOut = createButton(doc, "−", `Zoom out ${zoomTargetLabel}`);
+  const zoomIn = createButton(doc, "+", `Zoom in ${zoomTargetLabel}`);
+  const fit = createButton(doc, "⛶", `Fit ${zoomTargetLabel} to window`);
+  const close = createButton(doc, "×", `Close ${zoomTargetLabel} window`);
   toolbar.append(zoomOut, zoomIn, fit, close);
 
   const viewport = doc.createElementNS(HTML_NS, "div") as HTMLDivElement;
@@ -149,10 +167,11 @@ function initializeMermaidWindow(
   const stage = doc.createElementNS(HTML_NS, "div") as HTMLDivElement;
   stage.className = "llm-mermaid-window-stage";
 
-  const svg = createInlineMermaidSvgElement(
+  const svg = createInlineSvgElement(
     doc,
     payload.svgMarkup,
     "llm-mermaid-window-svg",
+    payload.ariaLabel || "SVG preview",
   );
   if (!svg) return false;
   stage.appendChild(svg);
@@ -224,9 +243,9 @@ function initializeMermaidWindow(
   return true;
 }
 
-export function openStandaloneMermaidWindow(
+export function openStandaloneSvgWindow(
   doc: Document,
-  payload: StandaloneMermaidPayload,
+  payload: StandaloneSvgPayload,
 ): boolean {
   const opener = doc.defaultView as OpenDialogWindow | null;
   const openDialog = opener?.openDialog;
@@ -235,7 +254,7 @@ export function openStandaloneMermaidWindow(
   const newWin = openDialog.call(
     opener,
     `chrome://${config.addonRef}/content/standaloneMermaid.xhtml`,
-    `llmforzotero-standalone-mermaid-${Date.now()}`,
+    `llmforzotero-standalone-svg-${Date.now()}`,
     MERMAID_WINDOW_FEATURES,
   ) as Window | null;
   if (!newWin) return false;
@@ -244,7 +263,7 @@ export function openStandaloneMermaidWindow(
   let initialized = false;
   const tryInitialize = () => {
     if (initialized || newWin.closed) return;
-    if (initializeMermaidWindow(doc, newWin, payload)) {
+    if (initializeStandaloneSvgWindow(doc, newWin, payload)) {
       initialized = true;
       return;
     }
@@ -256,4 +275,17 @@ export function openStandaloneMermaidWindow(
   newWin.addEventListener("load", tryInitialize, { once: true });
   newWin.setTimeout(tryInitialize, 0);
   return true;
+}
+
+export function openStandaloneMermaidWindow(
+  doc: Document,
+  payload: StandaloneMermaidPayload,
+): boolean {
+  return openStandaloneSvgWindow(doc, {
+    ...payload,
+    title: payload.title || "Mermaid Diagram",
+    ariaLabel: "Mermaid diagram",
+    toolbarLabel: "Mermaid diagram controls",
+    zoomTargetLabel: "diagram",
+  });
 }

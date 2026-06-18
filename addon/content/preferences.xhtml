@@ -12,9 +12,7 @@
     <html:link rel="localization" href="__addonRef__-preferences.ftl" />
   </linkset>
   <groupbox>
-    <html:div
-      style="display: flex; flex-direction: column; padding: 10px"
-    >
+    <html:div style="display: flex; flex-direction: column; padding: 10px">
       <!-- ═══ Tab bar ═══ -->
       <html:div
         id="__addonRef__-pref-tab-bar"
@@ -30,30 +28,82 @@
           z-index: 100;
         "
       >
-        <html:button data-pref-tab="models" type="button" style="
-          flex: 1; padding: 6px 0; font-size: 12px; font-weight: 500;
-          border: none; border-radius: 6px; background: transparent;
-          color: var(--fill-secondary, #888); cursor: pointer;
-          display: flex; align-items: center; justify-content: center;
-        ">AI Providers</html:button>
-        <html:button data-pref-tab="customization" type="button" style="
-          flex: 1; padding: 6px 0; font-size: 12px; font-weight: 500;
-          border: none; border-radius: 6px; background: transparent;
-          color: var(--fill-secondary, #888); cursor: pointer;
-          display: flex; align-items: center; justify-content: center;
-        ">Customization</html:button>
-        <html:button data-pref-tab="agent" type="button" style="
-          flex: 1; padding: 6px 0; font-size: 12px; font-weight: 500;
-          border: none; border-radius: 6px; background: transparent;
-          color: var(--fill-secondary, #888); cursor: pointer;
-          display: flex; align-items: center; justify-content: center;
-        ">Agent</html:button>
-        <html:button data-pref-tab="mineru" type="button" style="
-          flex: 1; padding: 6px 0; font-size: 12px; font-weight: 500;
-          border: none; border-radius: 6px; background: transparent;
-          color: var(--fill-secondary, #888); cursor: pointer;
-          display: flex; align-items: center; justify-content: center;
-        ">MinerU</html:button>
+        <html:button
+          data-pref-tab="models"
+          type="button"
+          style="
+            flex: 1;
+            padding: 6px 0;
+            font-size: 12px;
+            font-weight: 500;
+            border: none;
+            border-radius: 6px;
+            background: transparent;
+            color: var(--fill-secondary, #888);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+          "
+          >AI Providers</html:button
+        >
+        <html:button
+          data-pref-tab="customization"
+          type="button"
+          style="
+            flex: 1;
+            padding: 6px 0;
+            font-size: 12px;
+            font-weight: 500;
+            border: none;
+            border-radius: 6px;
+            background: transparent;
+            color: var(--fill-secondary, #888);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+          "
+          >Customization</html:button
+        >
+        <html:button
+          data-pref-tab="agent"
+          type="button"
+          style="
+            flex: 1;
+            padding: 6px 0;
+            font-size: 12px;
+            font-weight: 500;
+            border: none;
+            border-radius: 6px;
+            background: transparent;
+            color: var(--fill-secondary, #888);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+          "
+          >Agent</html:button
+        >
+        <html:button
+          data-pref-tab="mineru"
+          type="button"
+          style="
+            flex: 1;
+            padding: 6px 0;
+            font-size: 12px;
+            font-weight: 500;
+            border: none;
+            border-radius: 6px;
+            background: transparent;
+            color: var(--fill-secondary, #888);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+          "
+          >MinerU</html:button
+        >
       </html:div>
 
       <!-- ═══ Tab 1: AI Providers ═══ -->
@@ -77,7 +127,13 @@
         <html:div style="display: flex; flex-direction: column; gap: 4px">
           <html:label
             for="__addonRef__-system-prompt"
-            style="display: block; font-weight: 600; font-size: 12px; color: var(--fill-primary, inherit); margin-bottom: 4px;"
+            style="
+              display: block;
+              font-weight: 600;
+              font-size: 12px;
+              color: var(--fill-primary, inherit);
+              margin-bottom: 4px;
+            "
           >
             Custom System Prompt (Optional)
           </html:label>
@@ -97,11 +153,26 @@
               color: FieldText;
             "
           ></html:textarea>
-          <html:span style="font-size: 11px; color: var(--fill-secondary, #888); margin-top: 3px; display: block;">
-            Add custom instructions to the default system prompt (leave empty to use default only)
+          <html:span
+            style="
+              font-size: 11px;
+              color: var(--fill-secondary, #888);
+              margin-top: 3px;
+              display: block;
+            "
+          >
+            Add custom instructions to the default system prompt (leave empty to
+            use default only)
           </html:span>
-          <html:details style="margin-top: 6px;">
-            <html:summary style="font-size: 11px; color: var(--fill-secondary, #888); cursor: pointer; user-select: none;">
+          <html:details style="margin-top: 6px">
+            <html:summary
+              style="
+                font-size: 11px;
+                color: var(--fill-secondary, #888);
+                cursor: pointer;
+                user-select: none;
+              "
+            >
               View default system prompt
             </html:summary>
             <html:pre
@@ -143,17 +214,35 @@
             ></html:input>
             Show "Add Text" in reader selection popup
           </html:label>
-          <html:span style="font-size: 11px; color: var(--fill-secondary, #888); margin-top: 1px; display: block;">
-            Disable this if you prefer not to show the Add Text option in Zotero's
-            text selection popup menu.
+          <html:span
+            style="
+              font-size: 11px;
+              color: var(--fill-secondary, #888);
+              margin-top: 1px;
+              display: block;
+            "
+          >
+            Disable this if you prefer not to show the Add Text option in
+            Zotero's text selection popup menu.
           </html:span>
         </html:div>
 
         <html:div style="display: flex; flex-direction: column; gap: 4px">
-          <html:div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+          <html:div
+            style="
+              display: flex;
+              align-items: center;
+              gap: 10px;
+              flex-wrap: wrap;
+            "
+          >
             <html:label
               for="__addonRef__-panel-font-scale"
-              style="font-weight: 600; font-size: 12px; color: var(--fill-primary, inherit);"
+              style="
+                font-weight: 600;
+                font-size: 12px;
+                color: var(--fill-primary, inherit);
+              "
             >
               Plugin Font Size
             </html:label>
@@ -164,74 +253,317 @@
               max="180"
               step="10"
               value="120"
-              style="width: 180px; cursor: pointer; flex-shrink: 0;"
+              style="width: 180px; cursor: pointer; flex-shrink: 0"
             ></html:input>
             <html:span
               id="__addonRef__-panel-font-scale-readout"
-              style="font-size: 11px; color: var(--fill-secondary, #888); min-width: 38px;"
-            >120%</html:span>
+              style="
+                font-size: 11px;
+                color: var(--fill-secondary, #888);
+                min-width: 38px;
+              "
+              >120%</html:span
+            >
             <html:button
               id="__addonRef__-panel-font-scale-reset"
               type="button"
-              style="font-size: 11px; padding: 2px 8px; border-radius: 4px; border: 1px solid var(--stroke-secondary, #c8c8c8); background: transparent; color: inherit; cursor: pointer;"
-            >Reset</html:button>
+              style="
+                font-size: 11px;
+                padding: 2px 8px;
+                border-radius: 4px;
+                border: 1px solid var(--stroke-secondary, #c8c8c8);
+                background: transparent;
+                color: inherit;
+                cursor: pointer;
+              "
+              >Reset</html:button
+            >
           </html:div>
-          <html:span style="font-size: 11px; color: var(--fill-secondary, #888); margin-top: 1px; display: block;">
-            Adjusts text size in the chat panel and standalone window. You can also
-            use Cmd/Ctrl + and Cmd/Ctrl − while a panel is focused (Cmd/Ctrl 0 to
-            reset).
+          <html:span
+            style="
+              font-size: 11px;
+              color: var(--fill-secondary, #888);
+              margin-top: 1px;
+              display: block;
+            "
+          >
+            Adjusts text size in the chat panel and standalone window. You can
+            also use Cmd/Ctrl + and Cmd/Ctrl − while a panel is focused
+            (Cmd/Ctrl 0 to reset).
           </html:span>
         </html:div>
 
-        <html:details style="display: block;">
-          <html:summary style="font-size: 11px; color: var(--fill-secondary, #888); cursor: pointer; user-select: none;">
+        <html:details style="display: block">
+          <html:summary
+            style="
+              font-size: 11px;
+              color: var(--fill-secondary, #888);
+              cursor: pointer;
+              user-select: none;
+            "
+          >
             Message typography
           </html:summary>
-          <html:div style="display: flex; flex-direction: column; gap: 10px; margin-top: 8px; padding-left: 14px;">
+          <html:div
+            style="
+              display: flex;
+              flex-direction: column;
+              gap: 10px;
+              margin-top: 8px;
+              padding-left: 14px;
+            "
+          >
             <html:div style="display: flex; flex-direction: column; gap: 4px">
-              <html:div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
-                <html:label for="__addonRef__-message-paragraph-spacing" style="font-weight: 600; font-size: 12px; color: var(--fill-primary, inherit);">Message Paragraph Spacing</html:label>
-                <html:input id="__addonRef__-message-paragraph-spacing" type="range" min="0" max="32" step="1" value="8" style="width: 180px; cursor: pointer; flex-shrink: 0;"></html:input>
-                <html:span id="__addonRef__-message-paragraph-spacing-readout" style="font-size: 11px; color: var(--fill-secondary, #888); min-width: 38px;">8px</html:span>
-                <html:button id="__addonRef__-message-paragraph-spacing-reset" type="button" style="font-size: 11px; padding: 2px 8px; border-radius: 4px; border: 1px solid var(--stroke-secondary, #c8c8c8); background: transparent; color: inherit; cursor: pointer;">Reset</html:button>
+              <html:div
+                style="
+                  display: flex;
+                  align-items: center;
+                  gap: 10px;
+                  flex-wrap: wrap;
+                "
+              >
+                <html:label
+                  for="__addonRef__-message-paragraph-spacing"
+                  style="
+                    font-weight: 600;
+                    font-size: 12px;
+                    color: var(--fill-primary, inherit);
+                  "
+                  >Message Paragraph Spacing</html:label
+                >
+                <html:input
+                  id="__addonRef__-message-paragraph-spacing"
+                  type="range"
+                  min="0"
+                  max="32"
+                  step="1"
+                  value="8"
+                  style="width: 180px; cursor: pointer; flex-shrink: 0"
+                ></html:input>
+                <html:span
+                  id="__addonRef__-message-paragraph-spacing-readout"
+                  style="
+                    font-size: 11px;
+                    color: var(--fill-secondary, #888);
+                    min-width: 38px;
+                  "
+                  >8px</html:span
+                >
+                <html:button
+                  id="__addonRef__-message-paragraph-spacing-reset"
+                  type="button"
+                  style="
+                    font-size: 11px;
+                    padding: 2px 8px;
+                    border-radius: 4px;
+                    border: 1px solid var(--stroke-secondary, #c8c8c8);
+                    background: transparent;
+                    color: inherit;
+                    cursor: pointer;
+                  "
+                  >Reset</html:button
+                >
               </html:div>
-              <html:span style="font-size: 11px; color: var(--fill-secondary, #888); margin-top: 1px; display: block;">
-                Adjusts spacing between normal rendered message paragraphs only. Tables and code blocks keep their current spacing.
+              <html:span
+                style="
+                  font-size: 11px;
+                  color: var(--fill-secondary, #888);
+                  margin-top: 1px;
+                  display: block;
+                "
+              >
+                Adjusts spacing between normal rendered message paragraphs only.
+                Tables and code blocks keep their current spacing.
               </html:span>
             </html:div>
 
             <html:div style="display: flex; flex-direction: column; gap: 4px">
-              <html:div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
-                <html:label for="__addonRef__-message-line-spacing" style="font-weight: 600; font-size: 12px; color: var(--fill-primary, inherit);">Message Line Spacing</html:label>
-                <html:input id="__addonRef__-message-line-spacing" type="range" min="150" max="250" step="5" value="150" style="width: 180px; cursor: pointer; flex-shrink: 0;"></html:input>
-                <html:span id="__addonRef__-message-line-spacing-readout" style="font-size: 11px; color: var(--fill-secondary, #888); min-width: 38px;">150%</html:span>
-                <html:button id="__addonRef__-message-line-spacing-reset" type="button" style="font-size: 11px; padding: 2px 8px; border-radius: 4px; border: 1px solid var(--stroke-secondary, #c8c8c8); background: transparent; color: inherit; cursor: pointer;">Reset</html:button>
+              <html:div
+                style="
+                  display: flex;
+                  align-items: center;
+                  gap: 10px;
+                  flex-wrap: wrap;
+                "
+              >
+                <html:label
+                  for="__addonRef__-message-line-spacing"
+                  style="
+                    font-weight: 600;
+                    font-size: 12px;
+                    color: var(--fill-primary, inherit);
+                  "
+                  >Message Line Spacing</html:label
+                >
+                <html:input
+                  id="__addonRef__-message-line-spacing"
+                  type="range"
+                  min="150"
+                  max="250"
+                  step="5"
+                  value="150"
+                  style="width: 180px; cursor: pointer; flex-shrink: 0"
+                ></html:input>
+                <html:span
+                  id="__addonRef__-message-line-spacing-readout"
+                  style="
+                    font-size: 11px;
+                    color: var(--fill-secondary, #888);
+                    min-width: 38px;
+                  "
+                  >150%</html:span
+                >
+                <html:button
+                  id="__addonRef__-message-line-spacing-reset"
+                  type="button"
+                  style="
+                    font-size: 11px;
+                    padding: 2px 8px;
+                    border-radius: 4px;
+                    border: 1px solid var(--stroke-secondary, #c8c8c8);
+                    background: transparent;
+                    color: inherit;
+                    cursor: pointer;
+                  "
+                  >Reset</html:button
+                >
               </html:div>
-              <html:span style="font-size: 11px; color: var(--fill-secondary, #888); margin-top: 1px; display: block;">
-                Adjusts line height inside normal rendered message paragraphs. Tables and code blocks keep their current spacing.
+              <html:span
+                style="
+                  font-size: 11px;
+                  color: var(--fill-secondary, #888);
+                  margin-top: 1px;
+                  display: block;
+                "
+              >
+                Adjusts line height inside normal rendered message paragraphs.
+                Tables and code blocks keep their current spacing.
               </html:span>
             </html:div>
 
             <html:div style="display: flex; flex-direction: column; gap: 4px">
-              <html:div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
-                <html:label for="__addonRef__-message-word-spacing" style="font-weight: 600; font-size: 12px; color: var(--fill-primary, inherit);">Message Word Spacing</html:label>
-                <html:input id="__addonRef__-message-word-spacing" type="range" min="0" max="8" step="0.5" value="0" style="width: 180px; cursor: pointer; flex-shrink: 0;"></html:input>
-                <html:span id="__addonRef__-message-word-spacing-readout" style="font-size: 11px; color: var(--fill-secondary, #888); min-width: 38px;">0px</html:span>
-                <html:button id="__addonRef__-message-word-spacing-reset" type="button" style="font-size: 11px; padding: 2px 8px; border-radius: 4px; border: 1px solid var(--stroke-secondary, #c8c8c8); background: transparent; color: inherit; cursor: pointer;">Reset</html:button>
+              <html:div
+                style="
+                  display: flex;
+                  align-items: center;
+                  gap: 10px;
+                  flex-wrap: wrap;
+                "
+              >
+                <html:label
+                  for="__addonRef__-message-word-spacing"
+                  style="
+                    font-weight: 600;
+                    font-size: 12px;
+                    color: var(--fill-primary, inherit);
+                  "
+                  >Message Word Spacing</html:label
+                >
+                <html:input
+                  id="__addonRef__-message-word-spacing"
+                  type="range"
+                  min="0"
+                  max="8"
+                  step="0.5"
+                  value="0"
+                  style="width: 180px; cursor: pointer; flex-shrink: 0"
+                ></html:input>
+                <html:span
+                  id="__addonRef__-message-word-spacing-readout"
+                  style="
+                    font-size: 11px;
+                    color: var(--fill-secondary, #888);
+                    min-width: 38px;
+                  "
+                  >0px</html:span
+                >
+                <html:button
+                  id="__addonRef__-message-word-spacing-reset"
+                  type="button"
+                  style="
+                    font-size: 11px;
+                    padding: 2px 8px;
+                    border-radius: 4px;
+                    border: 1px solid var(--stroke-secondary, #c8c8c8);
+                    background: transparent;
+                    color: inherit;
+                    cursor: pointer;
+                  "
+                  >Reset</html:button
+                >
               </html:div>
-              <html:span style="font-size: 11px; color: var(--fill-secondary, #888); margin-top: 1px; display: block;">
-                Adjusts spacing between words in normal rendered message text only.
+              <html:span
+                style="
+                  font-size: 11px;
+                  color: var(--fill-secondary, #888);
+                  margin-top: 1px;
+                  display: block;
+                "
+              >
+                Adjusts spacing between words in normal rendered message text
+                only.
               </html:span>
             </html:div>
 
             <html:div style="display: flex; flex-direction: column; gap: 4px">
-              <html:label for="__addonRef__-message-font-family" style="font-weight: 600; font-size: 12px; color: var(--fill-primary, inherit);">Message Font Family</html:label>
-              <html:div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
-                <html:input id="__addonRef__-message-font-family" type="text" placeholder='System default, or e.g. "Atkinson Hyperlegible", system-ui, sans-serif' style="flex: 1 1 320px; min-width: 220px; max-width: 520px; padding: 5px 8px; font-size: 12px; border: 1px solid var(--stroke-secondary, #c8c8c8); border-radius: 6px; background: Field; color: FieldText;" />
-                <html:button id="__addonRef__-message-font-family-reset" type="button" style="font-size: 11px; padding: 2px 8px; border-radius: 4px; border: 1px solid var(--stroke-secondary, #c8c8c8); background: transparent; color: inherit; cursor: pointer;">Reset</html:button>
+              <html:label
+                for="__addonRef__-message-font-family"
+                style="
+                  font-weight: 600;
+                  font-size: 12px;
+                  color: var(--fill-primary, inherit);
+                "
+                >Message Font Family</html:label
+              >
+              <html:div
+                style="
+                  display: flex;
+                  align-items: center;
+                  gap: 10px;
+                  flex-wrap: wrap;
+                "
+              >
+                <html:input
+                  id="__addonRef__-message-font-family"
+                  type="text"
+                  placeholder='System default, or e.g. "Atkinson Hyperlegible", system-ui, sans-serif'
+                  style="
+                    flex: 1 1 320px;
+                    min-width: 220px;
+                    max-width: 520px;
+                    padding: 5px 8px;
+                    font-size: 12px;
+                    border: 1px solid var(--stroke-secondary, #c8c8c8);
+                    border-radius: 6px;
+                    background: Field;
+                    color: FieldText;
+                  "
+                />
+                <html:button
+                  id="__addonRef__-message-font-family-reset"
+                  type="button"
+                  style="
+                    font-size: 11px;
+                    padding: 2px 8px;
+                    border-radius: 4px;
+                    border: 1px solid var(--stroke-secondary, #c8c8c8);
+                    background: transparent;
+                    color: inherit;
+                    cursor: pointer;
+                  "
+                  >Reset</html:button
+                >
               </html:div>
-              <html:span style="font-size: 11px; color: var(--fill-secondary, #888); margin-top: 1px; display: block;">
-                Comma-separated font family fallback stack. Leave empty to use the plugin default.
+              <html:span
+                style="
+                  font-size: 11px;
+                  color: var(--fill-secondary, #888);
+                  margin-top: 1px;
+                  display: block;
+                "
+              >
+                Comma-separated font family fallback stack. Leave empty to use
+                the plugin default.
               </html:span>
             </html:div>
           </html:div>
@@ -254,14 +586,21 @@
             ></html:input>
             Semantic Search
           </html:label>
-          <html:span style="font-size: 11px; color: var(--fill-secondary, #888); margin-top: 1px; display: block;">
-            Uses vector embeddings for meaning-aware search. When disabled,
-            only keyword matching (BM25) is used.
+          <html:span
+            style="
+              font-size: 11px;
+              color: var(--fill-secondary, #888);
+              margin-top: 1px;
+              display: block;
+            "
+          >
+            Uses vector embeddings for meaning-aware search. When disabled, only
+            keyword matching (BM25) is used.
           </html:span>
         </html:div>
         <html:div
           id="__addonRef__-semantic-search-sub-settings"
-          style="display: none; flex-direction: column; gap: 10px;"
+          style="display: none; flex-direction: column; gap: 10px"
         >
           <!-- Card rendered dynamically by preferenceScript.ts -->
           <html:div id="__addonRef__-semantic-search-mount"></html:div>
@@ -270,7 +609,13 @@
         <html:div style="display: flex; flex-direction: column; gap: 4px">
           <html:label
             for="__addonRef__-locale-select"
-            style="display: block; font-weight: 600; font-size: 12px; color: var(--fill-primary, inherit); margin-bottom: 2px;"
+            style="
+              display: block;
+              font-weight: 600;
+              font-size: 12px;
+              color: var(--fill-primary, inherit);
+              margin-bottom: 2px;
+            "
           >
             Language
           </html:label>
@@ -292,7 +637,12 @@
           </html:select>
           <html:span
             id="__addonRef__-locale-restart-hint"
-            style="font-size: 11px; color: #f59e0b; margin-top: 2px; display: none;"
+            style="
+              font-size: 11px;
+              color: #f59e0b;
+              margin-top: 2px;
+              display: none;
+            "
           >
             Restart Zotero to apply language change.
           </html:span>
@@ -322,30 +672,97 @@
             ></html:input>
             Enable Agent Mode (Beta)
           </html:label>
-          <html:span style="font-size: 11px; color: var(--fill-secondary, #888); margin-top: 1px; display: block;">
+          <html:span
+            style="
+              font-size: 11px;
+              color: var(--fill-secondary, #888);
+              margin-top: 1px;
+              display: block;
+            "
+          >
             Shows the "Agent (beta)" toggle in the context bar, enabling the
-            agentic multi-step assistant. Off by default — enable only if you want
-            to experiment with the beta feature.
+            agentic multi-step assistant. Off by default — enable only if you
+            want to experiment with the beta feature.
           </html:span>
         </html:div>
 
-        <html:div style="border: 1px solid var(--stroke-secondary, #c8c8c8); border-radius: 8px; overflow: hidden; margin-top: 6px;">
-          <html:div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: Field; color: FieldText; border-bottom: 1px solid var(--stroke-secondary, #c8c8c8);">
-            <html:span style="font-weight: 700; font-size: 13px;">Codex App Server</html:span>
+        <html:div
+          style="
+            border: 1px solid var(--stroke-secondary, #c8c8c8);
+            border-radius: 8px;
+            overflow: hidden;
+            margin-top: 6px;
+          "
+        >
+          <html:div
+            style="
+              display: flex;
+              align-items: center;
+              justify-content: space-between;
+              padding: 8px 12px;
+              background: Field;
+              color: FieldText;
+              border-bottom: 1px solid var(--stroke-secondary, #c8c8c8);
+            "
+          >
+            <html:span style="font-weight: 700; font-size: 13px"
+              >Codex App Server</html:span
+            >
           </html:div>
-          <html:div style="display: flex; flex-direction: column; gap: 14px; padding: 14px;">
-            <html:span style="font-size: 11.5px; color: var(--fill-secondary, #888); line-height: 1.5;">
-              First-class Codex runtime integration. Run <html:code>codex login</html:code> before enabling it; Zotero keeps local tool approvals in its own confirmation cards.
+          <html:div
+            style="
+              display: flex;
+              flex-direction: column;
+              gap: 14px;
+              padding: 14px;
+            "
+          >
+            <html:span
+              style="
+                font-size: 11.5px;
+                color: var(--fill-secondary, #888);
+                line-height: 1.5;
+              "
+            >
+              First-class Codex runtime integration. Run
+              <html:code>codex login</html:code> before enabling it; Zotero
+              keeps local tool approvals in its own confirmation cards.
             </html:span>
-            <html:div style="display: flex; flex-direction: column; gap: 6px; padding: 12px; border: 1px solid var(--stroke-secondary, #c8c8c8); border-radius: 8px; background: color-mix(in srgb, Field 92%, var(--color-accent, #2563eb) 8%);">
+            <html:div
+              style="
+                display: flex;
+                flex-direction: column;
+                gap: 6px;
+                padding: 12px;
+                border: 1px solid var(--stroke-secondary, #c8c8c8);
+                border-radius: 8px;
+                background: color-mix(
+                  in srgb,
+                  Field 92%,
+                  var(--color-accent, #2563eb) 8%
+                );
+              "
+            >
               <html:label
                 for="__addonRef__-codex-app-server-enable"
-                style="display: block; font-weight: 700; font-size: 12px; color: var(--fill-primary, inherit);"
+                style="
+                  display: block;
+                  font-weight: 700;
+                  font-size: 12px;
+                  color: var(--fill-primary, inherit);
+                "
               >
                 Enable Codex App Server integration
               </html:label>
-              <html:span style="font-size: 11px; color: var(--fill-secondary, #777); line-height: 1.5;">
-                When enabled, Zotero shows the Codex button in the chat header so you can switch between upstream chat and Codex.
+              <html:span
+                style="
+                  font-size: 11px;
+                  color: var(--fill-secondary, #777);
+                  line-height: 1.5;
+                "
+              >
+                When enabled, Zotero shows the Codex button in the chat header
+                so you can switch between upstream chat and Codex.
               </html:span>
               <html:select
                 id="__addonRef__-codex-app-server-enable"
@@ -366,28 +783,115 @@
 
             <html:div
               id="__addonRef__-codex-app-server-settings"
-              style="display: none; flex-direction: column; gap: 14px;"
+              style="display: none; flex-direction: column; gap: 14px"
             >
-              <html:div style="display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--stroke-secondary, #c8c8c8); border-radius: 8px; background: Field;">
-                <html:div style="display: flex; flex-direction: column; gap: 4px;">
-                  <html:span style="font-weight: 700; font-size: 12px; color: var(--fill-primary, inherit);">Runtime defaults</html:span>
-                  <html:span style="font-size: 11px; color: var(--fill-secondary, #777); line-height: 1.5;">
-                    These values control how Codex runs inside Zotero by default.
+              <html:div
+                style="
+                  display: flex;
+                  flex-direction: column;
+                  gap: 8px;
+                  padding: 12px;
+                  border: 1px solid var(--stroke-secondary, #c8c8c8);
+                  border-radius: 8px;
+                  background: Field;
+                "
+              >
+                <html:div
+                  style="display: flex; flex-direction: column; gap: 4px"
+                >
+                  <html:span
+                    style="
+                      font-weight: 700;
+                      font-size: 12px;
+                      color: var(--fill-primary, inherit);
+                    "
+                    >Runtime defaults</html:span
+                  >
+                  <html:span
+                    style="
+                      font-size: 11px;
+                      color: var(--fill-secondary, #777);
+                      line-height: 1.5;
+                    "
+                  >
+                    These values control how Codex runs inside Zotero by
+                    default.
                   </html:span>
                 </html:div>
 
-                <html:div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px 16px; align-items: start;">
-                  <html:div style="display: flex; flex-direction: column; gap: 4px;">
-                    <html:label for="__addonRef__-codex-app-server-model" style="display: block; font-weight: 600; font-size: 12px; color: var(--fill-primary, inherit);">
+                <html:div
+                  style="
+                    display: grid;
+                    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+                    gap: 12px 16px;
+                    align-items: start;
+                  "
+                >
+                  <html:div
+                    style="display: flex; flex-direction: column; gap: 4px"
+                  >
+                    <html:label
+                      for="__addonRef__-codex-app-server-model"
+                      style="
+                        display: block;
+                        font-weight: 600;
+                        font-size: 12px;
+                        color: var(--fill-primary, inherit);
+                      "
+                    >
                       Model
                     </html:label>
-                    <html:input id="__addonRef__-codex-app-server-model" type="text" placeholder="gpt-5.4" style="width: 100%; max-width: none; height: 28px; margin: 0; padding: 4px 8px; font-size: 12px; line-height: 18px; border: 1px solid var(--stroke-secondary, #c8c8c8); border-radius: 6px; background: Field; color: FieldText; box-sizing: border-box;" />
+                    <html:input
+                      id="__addonRef__-codex-app-server-model"
+                      type="text"
+                      placeholder="gpt-5.4"
+                      style="
+                        width: 100%;
+                        max-width: none;
+                        height: 28px;
+                        margin: 0;
+                        padding: 4px 8px;
+                        font-size: 12px;
+                        line-height: 18px;
+                        border: 1px solid var(--stroke-secondary, #c8c8c8);
+                        border-radius: 6px;
+                        background: Field;
+                        color: FieldText;
+                        box-sizing: border-box;
+                      "
+                    />
                   </html:div>
-                  <html:div style="display: flex; flex-direction: column; gap: 4px;">
-                    <html:label for="__addonRef__-codex-app-server-reasoning" style="display: block; font-weight: 600; font-size: 12px; color: var(--fill-primary, inherit);">
+                  <html:div
+                    style="display: flex; flex-direction: column; gap: 4px"
+                  >
+                    <html:label
+                      for="__addonRef__-codex-app-server-reasoning"
+                      style="
+                        display: block;
+                        font-weight: 600;
+                        font-size: 12px;
+                        color: var(--fill-primary, inherit);
+                      "
+                    >
                       Reasoning
                     </html:label>
-                    <html:select id="__addonRef__-codex-app-server-reasoning" style="width: 100%; max-width: none; height: 28px; margin: 0; padding: 4px 8px; font-size: 12px; line-height: 18px; border: 1px solid var(--stroke-secondary, #c8c8c8); border-radius: 6px; background: Field; color: FieldText; box-sizing: border-box;">
+                    <html:select
+                      id="__addonRef__-codex-app-server-reasoning"
+                      style="
+                        width: 100%;
+                        max-width: none;
+                        height: 28px;
+                        margin: 0;
+                        padding: 4px 8px;
+                        font-size: 12px;
+                        line-height: 18px;
+                        border: 1px solid var(--stroke-secondary, #c8c8c8);
+                        border-radius: 6px;
+                        background: Field;
+                        color: FieldText;
+                        box-sizing: border-box;
+                      "
+                    >
                       <html:option value="auto">Auto</html:option>
                       <html:option value="low">Low</html:option>
                       <html:option value="medium">Medium</html:option>
@@ -396,70 +900,280 @@
                     </html:select>
                   </html:div>
                 </html:div>
-                <html:span style="font-size: 11px; color: var(--fill-secondary, #777); line-height: 1.45; display: block;">
-                  Enter a Codex app-server model ID, for example <html:code>gpt-5.4</html:code>, <html:code>gpt-5.3-codex</html:code>, or <html:code>gpt-5.2-codex</html:code>. Use the model name accepted by your installed Codex CLI.
+                <html:span
+                  style="
+                    font-size: 11px;
+                    color: var(--fill-secondary, #777);
+                    line-height: 1.45;
+                    display: block;
+                  "
+                >
+                  Enter a Codex app-server model ID, for example
+                  <html:code>gpt-5.4</html:code>,
+                  <html:code>gpt-5.3-codex</html:code>, or
+                  <html:code>gpt-5.2-codex</html:code>. Use the model name
+                  accepted by your installed Codex CLI.
                 </html:span>
-                <html:details style="display: block; margin-top: 2px;">
-                  <html:summary style="font-size: 12px; font-weight: 600; color: var(--fill-primary, inherit); cursor: pointer; user-select: none;">
+                <html:details style="display: block; margin-top: 2px">
+                  <html:summary
+                    style="
+                      font-size: 12px;
+                      font-weight: 600;
+                      color: var(--fill-primary, inherit);
+                      cursor: pointer;
+                      user-select: none;
+                    "
+                  >
                     Codex CLI Path (optional)
                   </html:summary>
-                  <html:div style="display: flex; flex-direction: column; gap: 6px; margin-top: 8px;">
-                    <html:input id="__addonRef__-codex-app-server-path" type="text" placeholder="Optional absolute path to codex executable" style="width: 100%; max-width: none; height: 28px; margin: 0; padding: 4px 8px; font-size: 12px; line-height: 18px; border: 1px solid var(--stroke-secondary, #c8c8c8); border-radius: 6px; background: Field; color: FieldText; box-sizing: border-box;" />
-                    <html:span id="__addonRef__-codex-app-server-path-helper" style="font-size: 11px; color: var(--fill-secondary, #777); line-height: 1.45; display: block;"></html:span>
+                  <html:div
+                    style="
+                      display: flex;
+                      flex-direction: column;
+                      gap: 6px;
+                      margin-top: 8px;
+                    "
+                  >
+                    <html:input
+                      id="__addonRef__-codex-app-server-path"
+                      type="text"
+                      placeholder="Optional absolute path to codex executable"
+                      style="
+                        width: 100%;
+                        max-width: none;
+                        height: 28px;
+                        margin: 0;
+                        padding: 4px 8px;
+                        font-size: 12px;
+                        line-height: 18px;
+                        border: 1px solid var(--stroke-secondary, #c8c8c8);
+                        border-radius: 6px;
+                        background: Field;
+                        color: FieldText;
+                        box-sizing: border-box;
+                      "
+                    />
+                    <html:span
+                      id="__addonRef__-codex-app-server-path-helper"
+                      style="
+                        font-size: 11px;
+                        color: var(--fill-secondary, #777);
+                        line-height: 1.45;
+                        display: block;
+                      "
+                    ></html:span>
                   </html:div>
                 </html:details>
 
-                <html:div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
-                  <html:button id="__addonRef__-codex-app-server-test" type="button" style="padding: 4px 10px; font-size: 12px; font-weight: 500; white-space: nowrap; background: transparent; color: var(--color-accent, #2563eb); border: 1px solid var(--color-accent, #2563eb); border-radius: 5px; cursor: pointer;">
+                <html:div
+                  style="
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    flex-wrap: wrap;
+                  "
+                >
+                  <html:button
+                    id="__addonRef__-codex-app-server-test"
+                    type="button"
+                    style="
+                      padding: 4px 10px;
+                      font-size: 12px;
+                      font-weight: 500;
+                      white-space: nowrap;
+                      background: transparent;
+                      color: var(--color-accent, #2563eb);
+                      border: 1px solid var(--color-accent, #2563eb);
+                      border-radius: 5px;
+                      cursor: pointer;
+                    "
+                  >
                     Test connection
                   </html:button>
-                  <html:span id="__addonRef__-codex-app-server-status" style="font-size: 11.5px; display: none;"></html:span>
+                  <html:span
+                    id="__addonRef__-codex-app-server-status"
+                    style="font-size: 11.5px; display: none"
+                  ></html:span>
                 </html:div>
               </html:div>
 
-              <html:div style="display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--stroke-secondary, #c8c8c8); border-radius: 8px; background: Field;">
-                <html:div style="display: flex; flex-direction: column; gap: 4px;">
-                  <html:span style="font-weight: 700; font-size: 12px; color: var(--fill-primary, inherit);">Zotero MCP tools</html:span>
-                  <html:span style="font-size: 11px; color: var(--fill-secondary, #777); line-height: 1.5;">
-                    Lets native Codex use a curated local MCP server for Zotero library and PDF reading. Write and destructive tools are not exposed in this mode.
+              <html:div
+                style="
+                  display: flex;
+                  flex-direction: column;
+                  gap: 8px;
+                  padding: 12px;
+                  border: 1px solid var(--stroke-secondary, #c8c8c8);
+                  border-radius: 8px;
+                  background: Field;
+                "
+              >
+                <html:div
+                  style="display: flex; flex-direction: column; gap: 4px"
+                >
+                  <html:span
+                    style="
+                      font-weight: 700;
+                      font-size: 12px;
+                      color: var(--fill-primary, inherit);
+                    "
+                    >Zotero MCP tools</html:span
+                  >
+                  <html:span
+                    style="
+                      font-size: 11px;
+                      color: var(--fill-secondary, #777);
+                      line-height: 1.5;
+                    "
+                  >
+                    Lets native Codex and Claude Code use a curated local MCP
+                    server for Zotero library/PDF reading and guarded Zotero
+                    operations. Write and destructive tools still use Zotero
+                    confirmation or tool-specific safety checks.
                   </html:span>
                 </html:div>
-                <html:label style="display: inline-flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: var(--fill-primary, inherit);">
-                  <html:input id="__addonRef__-codex-app-server-mcp-enable" type="checkbox"></html:input>
-                  Enable Zotero MCP tools for native Codex turns
+                <html:label
+                  style="
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 8px;
+                    font-size: 12px;
+                    font-weight: 600;
+                    color: var(--fill-primary, inherit);
+                  "
+                >
+                  <html:input
+                    id="__addonRef__-codex-app-server-mcp-enable"
+                    type="checkbox"
+                  ></html:input>
+                  Enable Zotero MCP tools for native Codex and Claude Code turns
                 </html:label>
-                <html:div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
-                  <html:button id="__addonRef__-codex-app-server-mcp-setup" type="button" style="padding: 4px 10px; font-size: 12px; font-weight: 500; white-space: nowrap; background: transparent; color: var(--color-accent, #2563eb); border: 1px solid var(--color-accent, #2563eb); border-radius: 5px; cursor: pointer;">
+                <html:div
+                  style="
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    flex-wrap: wrap;
+                  "
+                >
+                  <html:button
+                    id="__addonRef__-codex-app-server-mcp-setup"
+                    type="button"
+                    style="
+                      padding: 4px 10px;
+                      font-size: 12px;
+                      font-weight: 500;
+                      white-space: nowrap;
+                      background: transparent;
+                      color: var(--color-accent, #2563eb);
+                      border: 1px solid var(--color-accent, #2563eb);
+                      border-radius: 5px;
+                      cursor: pointer;
+                    "
+                  >
                     Install/update Zotero MCP config
                   </html:button>
-                  <html:span id="__addonRef__-codex-app-server-mcp-status" style="font-size: 11.5px; display: none;"></html:span>
+                  <html:span
+                    id="__addonRef__-codex-app-server-mcp-status"
+                    style="font-size: 11.5px; display: none"
+                  ></html:span>
                 </html:div>
-                <html:span style="font-size: 11px; color: var(--fill-secondary, #777); line-height: 1.45; display: block;">
-                  Zotero writes a local bearer-token protected MCP entry into Codex config and asks app-server to reload MCP servers. User-level Codex skills, plugins, and other MCP setup remain owned by Codex.
+                <html:span
+                  style="
+                    font-size: 11px;
+                    color: var(--fill-secondary, #777);
+                    line-height: 1.45;
+                    display: block;
+                  "
+                >
+                  For Codex, Zotero writes a local bearer-token protected MCP
+                  entry into Codex config and asks app-server to reload MCP
+                  servers. Claude Code receives a scoped MCP server directly for
+                  each turn. User-level Codex skills, plugins, and other MCP
+                  setup remain owned by Codex.
                 </html:span>
               </html:div>
             </html:div>
           </html:div>
         </html:div>
 
-        <html:div style="border: 1px solid var(--stroke-secondary, #c8c8c8); border-radius: 8px; overflow: hidden; margin-top: 6px;">
-          <html:div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: Field; color: FieldText; border-bottom: 1px solid var(--stroke-secondary, #c8c8c8);">
-            <html:span style="font-weight: 700; font-size: 13px;">Claude Code Integration</html:span>
+        <html:div
+          style="
+            border: 1px solid var(--stroke-secondary, #c8c8c8);
+            border-radius: 8px;
+            overflow: hidden;
+            margin-top: 6px;
+          "
+        >
+          <html:div
+            style="
+              display: flex;
+              align-items: center;
+              justify-content: space-between;
+              padding: 8px 12px;
+              background: Field;
+              color: FieldText;
+              border-bottom: 1px solid var(--stroke-secondary, #c8c8c8);
+            "
+          >
+            <html:span style="font-weight: 700; font-size: 13px"
+              >Claude Code Integration</html:span
+            >
           </html:div>
-          <html:div style="display: flex; flex-direction: column; gap: 14px; padding: 14px;">
-            <html:span style="font-size: 11.5px; color: var(--fill-secondary, #888); line-height: 1.5;">
-              This panel configures the embedded Claude runtime. You enter Claude Code mode from the chat header, not from settings.
+          <html:div
+            style="
+              display: flex;
+              flex-direction: column;
+              gap: 14px;
+              padding: 14px;
+            "
+          >
+            <html:span
+              style="
+                font-size: 11.5px;
+                color: var(--fill-secondary, #888);
+                line-height: 1.5;
+              "
+            >
+              This panel configures the embedded Claude runtime. You enter
+              Claude Code mode from the chat header, not from settings.
             </html:span>
 
-            <html:div style="display: flex; flex-direction: column; gap: 6px; padding: 12px; border: 1px solid var(--stroke-secondary, #c8c8c8); border-radius: 8px; background: color-mix(in srgb, Field 92%, var(--color-accent, #2563eb) 8%);">
+            <html:div
+              style="
+                display: flex;
+                flex-direction: column;
+                gap: 6px;
+                padding: 12px;
+                border: 1px solid var(--stroke-secondary, #c8c8c8);
+                border-radius: 8px;
+                background: color-mix(
+                  in srgb,
+                  Field 92%,
+                  var(--color-accent, #2563eb) 8%
+                );
+              "
+            >
               <html:label
                 for="__addonRef__-agent-backend-mode"
-                style="display: block; font-weight: 700; font-size: 12px; color: var(--fill-primary, inherit);"
+                style="
+                  display: block;
+                  font-weight: 700;
+                  font-size: 12px;
+                  color: var(--fill-primary, inherit);
+                "
               >
                 Enable Claude Code integration
               </html:label>
-              <html:span style="font-size: 11px; color: var(--fill-secondary, #777); line-height: 1.5;">
-                When enabled, Zotero shows the Claude button in the chat header so you can switch between upstream chat and Claude Code.
+              <html:span
+                style="
+                  font-size: 11px;
+                  color: var(--fill-secondary, #777);
+                  line-height: 1.5;
+                "
+              >
+                When enabled, Zotero shows the Claude button in the chat header
+                so you can switch between upstream chat and Claude Code.
               </html:span>
               <html:select
                 id="__addonRef__-agent-backend-mode"
@@ -480,19 +1194,55 @@
 
             <html:div
               id="__addonRef__-agent-bridge-settings"
-              style="display: none; flex-direction: column; gap: 14px;"
+              style="display: none; flex-direction: column; gap: 14px"
             >
-              <html:div style="display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--stroke-secondary, #c8c8c8); border-radius: 8px; background: color-mix(in srgb, var(--color-accent, #2563eb) 6%, Field);">
-                <html:div style="display: flex; flex-direction: column; gap: 4px;">
-                  <html:span style="font-weight: 700; font-size: 12px; color: var(--fill-primary, inherit);">Connection</html:span>
-                  <html:span style="font-size: 11px; color: var(--fill-secondary, #777); line-height: 1.5;">
+              <html:div
+                style="
+                  display: flex;
+                  flex-direction: column;
+                  gap: 8px;
+                  padding: 12px;
+                  border: 1px solid var(--stroke-secondary, #c8c8c8);
+                  border-radius: 8px;
+                  background: color-mix(
+                    in srgb,
+                    var(--color-accent, #2563eb) 6%,
+                    Field
+                  );
+                "
+              >
+                <html:div
+                  style="display: flex; flex-direction: column; gap: 4px"
+                >
+                  <html:span
+                    style="
+                      font-weight: 700;
+                      font-size: 12px;
+                      color: var(--fill-primary, inherit);
+                    "
+                    >Connection</html:span
+                  >
+                  <html:span
+                    style="
+                      font-size: 11px;
+                      color: var(--fill-secondary, #777);
+                      line-height: 1.5;
+                    "
+                  >
                     Zotero sends Claude requests to this local bridge service.
                   </html:span>
                 </html:div>
-                <html:div style="display: flex; flex-direction: column; gap: 4px;">
+                <html:div
+                  style="display: flex; flex-direction: column; gap: 4px"
+                >
                   <html:label
                     for="__addonRef__-agent-bridge-url"
-                    style="display: block; font-weight: 600; font-size: 12px; color: var(--fill-primary, inherit);"
+                    style="
+                      display: block;
+                      font-weight: 600;
+                      font-size: 12px;
+                      color: var(--fill-primary, inherit);
+                    "
                   >
                     Bridge URL
                   </html:label>
@@ -515,17 +1265,55 @@
                 </html:div>
               </html:div>
 
-              <html:div style="display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--stroke-secondary, #c8c8c8); border-radius: 8px; background: Field;">
-                <html:div style="display: flex; flex-direction: column; gap: 4px;">
-                  <html:span style="font-weight: 700; font-size: 12px; color: var(--fill-primary, inherit);">Config source</html:span>
-                  <html:span style="font-size: 11px; color: var(--fill-secondary, #777); line-height: 1.5;">
-                    Choose where Claude should load its settings from. Most users should keep <html:code>default</html:code>.
+              <html:div
+                style="
+                  display: flex;
+                  flex-direction: column;
+                  gap: 8px;
+                  padding: 12px;
+                  border: 1px solid var(--stroke-secondary, #c8c8c8);
+                  border-radius: 8px;
+                  background: Field;
+                "
+              >
+                <html:div
+                  style="display: flex; flex-direction: column; gap: 4px"
+                >
+                  <html:span
+                    style="
+                      font-weight: 700;
+                      font-size: 12px;
+                      color: var(--fill-primary, inherit);
+                    "
+                    >Config source</html:span
+                  >
+                  <html:span
+                    style="
+                      font-size: 11px;
+                      color: var(--fill-secondary, #777);
+                      line-height: 1.5;
+                    "
+                  >
+                    Choose where Claude should load its settings from. Most
+                    users should keep <html:code>default</html:code>.
                   </html:span>
                 </html:div>
-                <html:div style="display: flex; flex-direction: column; gap: 6px; max-width: none;">
+                <html:div
+                  style="
+                    display: flex;
+                    flex-direction: column;
+                    gap: 6px;
+                    max-width: none;
+                  "
+                >
                   <html:label
                     for="__addonRef__-agent-claude-config-source"
-                    style="display: block; font-weight: 600; font-size: 12px; color: var(--fill-primary, inherit);"
+                    style="
+                      display: block;
+                      font-weight: 600;
+                      font-size: 12px;
+                      color: var(--fill-primary, inherit);
+                    "
                   >
                     Claude Config Source
                   </html:label>
@@ -541,40 +1329,163 @@
                       color: FieldText;
                     "
                   >
-                    <html:option value="default">default — user + project + local</html:option>
-                    <html:option value="user-only">user-only — only your global Claude config</html:option>
-                    <html:option value="zotero-only">zotero-only — only Zotero-managed configs</html:option>
+                    <html:option value="default"
+                      >default — user + project + local</html:option
+                    >
+                    <html:option value="user-only"
+                      >user-only — only your global Claude config</html:option
+                    >
+                    <html:option value="zotero-only"
+                      >zotero-only — only Zotero-managed configs</html:option
+                    >
                   </html:select>
                 </html:div>
-                <html:details style="margin-top: 4px;">
-                  <html:summary style="font-size: 11px; color: var(--fill-secondary, #666); cursor: pointer; user-select: none;">
+                <html:details style="margin-top: 4px">
+                  <html:summary
+                    style="
+                      font-size: 11px;
+                      color: var(--fill-secondary, #666);
+                      cursor: pointer;
+                      user-select: none;
+                    "
+                  >
                     Show config locations and advanced details
                   </html:summary>
-                  <html:div style="display: flex; flex-direction: column; gap: 8px; margin-top: 8px;">
-                    <html:div style="font-size: 11px; color: var(--fill-secondary, #666); line-height: 1.55; display: flex; flex-direction: column; gap: 3px;">
-                      <html:span><html:code>default</html:code> loads user + project + local. Priority: local &gt; project &gt; user.</html:span>
-                      <html:span><html:code>user-only</html:code> loads only your machine-wide Claude settings.</html:span>
-                      <html:span><html:code>zotero-only</html:code> loads only Zotero-managed shared and per-conversation settings.</html:span>
+                  <html:div
+                    style="
+                      display: flex;
+                      flex-direction: column;
+                      gap: 8px;
+                      margin-top: 8px;
+                    "
+                  >
+                    <html:div
+                      style="
+                        font-size: 11px;
+                        color: var(--fill-secondary, #666);
+                        line-height: 1.55;
+                        display: flex;
+                        flex-direction: column;
+                        gap: 3px;
+                      "
+                    >
+                      <html:span
+                        ><html:code>default</html:code> loads user + project +
+                        local. Priority: local &gt; project &gt;
+                        user.</html:span
+                      >
+                      <html:span
+                        ><html:code>user-only</html:code> loads only your
+                        machine-wide Claude settings.</html:span
+                      >
+                      <html:span
+                        ><html:code>zotero-only</html:code> loads only
+                        Zotero-managed shared and per-conversation
+                        settings.</html:span
+                      >
                     </html:div>
-                    <html:div id="__addonRef__-claude-config-paths" style="display: flex; flex-direction: column; gap: 8px; width: 100%;"></html:div>
-                    <html:div style="display:flex; align-items:center; justify-content:space-between; gap:12px; padding:8px 10px; border:1px solid var(--stroke-secondary, #c8c8c8); border-radius:8px; background: rgba(255,255,255,0.02);">
-                      <html:div style="display:flex; flex-direction:column; gap:2px; min-width:0;">
-                        <html:div style="font-size:11px; font-weight:600; color: var(--fill-secondary, #666);">Trace logs</html:div>
-                        <html:div style="font-size:10.5px; color: var(--fill-secondary, #666); line-height:1.45;">Save Claude runtime traces for debugging and copy the log directory path.</html:div>
-                        <html:div id="__addonRef__-claude-trace-path" style="font-size:11px; color: var(--fill-secondary, #666); word-break: break-all;"></html:div>
+                    <html:div
+                      id="__addonRef__-claude-config-paths"
+                      style="
+                        display: flex;
+                        flex-direction: column;
+                        gap: 8px;
+                        width: 100%;
+                      "
+                    ></html:div>
+                    <html:div
+                      style="
+                        display: flex;
+                        align-items: center;
+                        justify-content: space-between;
+                        gap: 12px;
+                        padding: 8px 10px;
+                        border: 1px solid var(--stroke-secondary, #c8c8c8);
+                        border-radius: 8px;
+                        background: rgba(255, 255, 255, 0.02);
+                      "
+                    >
+                      <html:div
+                        style="
+                          display: flex;
+                          flex-direction: column;
+                          gap: 2px;
+                          min-width: 0;
+                        "
+                      >
+                        <html:div
+                          style="
+                            font-size: 11px;
+                            font-weight: 600;
+                            color: var(--fill-secondary, #666);
+                          "
+                          >Trace logs</html:div
+                        >
+                        <html:div
+                          style="
+                            font-size: 10.5px;
+                            color: var(--fill-secondary, #666);
+                            line-height: 1.45;
+                          "
+                          >Save Claude runtime traces for debugging and copy the
+                          log directory path.</html:div
+                        >
+                        <html:div
+                          id="__addonRef__-claude-trace-path"
+                          style="
+                            font-size: 11px;
+                            color: var(--fill-secondary, #666);
+                            word-break: break-all;
+                          "
+                        ></html:div>
                       </html:div>
-                      <html:div style="display:flex; align-items:center; gap:8px; flex:0 0 auto;">
-                        <html:label style="display:flex; align-items:center; gap:6px; font-size:11px; color: var(--fill-secondary, #666);">
-                          <html:input id="__addonRef__-claude-trace-enabled" type="checkbox" />
+                      <html:div
+                        style="
+                          display: flex;
+                          align-items: center;
+                          gap: 8px;
+                          flex: 0 0 auto;
+                        "
+                      >
+                        <html:label
+                          style="
+                            display: flex;
+                            align-items: center;
+                            gap: 6px;
+                            font-size: 11px;
+                            color: var(--fill-secondary, #666);
+                          "
+                        >
+                          <html:input
+                            id="__addonRef__-claude-trace-enabled"
+                            type="checkbox"
+                          />
                           Enabled
                         </html:label>
-                        <html:button id="__addonRef__-claude-trace-copy-path" type="button" style="padding:4px 10px; font-size:11px; border:1px solid var(--stroke-secondary, #c8c8c8); border-radius:6px; background: Field; color: FieldText; cursor:pointer;">Copy path</html:button>
+                        <html:button
+                          id="__addonRef__-claude-trace-copy-path"
+                          type="button"
+                          style="
+                            padding: 4px 10px;
+                            font-size: 11px;
+                            border: 1px solid var(--stroke-secondary, #c8c8c8);
+                            border-radius: 6px;
+                            background: Field;
+                            color: FieldText;
+                            cursor: pointer;
+                          "
+                          >Copy path</html:button
+                        >
                       </html:div>
                     </html:div>
                     <html:a
                       id="__addonRef__-claude-config-doc-link"
                       href="https://code.claude.com/docs/en/settings"
-                      style="font-size: 11px; color: var(--fill-secondary, #666); text-decoration: underline;"
+                      style="
+                        font-size: 11px;
+                        color: var(--fill-secondary, #666);
+                        text-decoration: underline;
+                      "
                     >
                       Claude Code settings guide
                     </html:a>
@@ -582,51 +1493,73 @@
                 </html:details>
               </html:div>
 
-              <html:div style="display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--stroke-secondary, #c8c8c8); border-radius: 8px; background: Field;">
-                <html:div style="display: flex; flex-direction: column; gap: 4px;">
-                  <html:span style="font-weight: 700; font-size: 12px; color: var(--fill-primary, inherit);">Runtime defaults</html:span>
-                  <html:span style="font-size: 11px; color: var(--fill-secondary, #777); line-height: 1.5;">
-                    These values control how Claude runs inside Zotero by default.
+              <html:div
+                style="
+                  display: flex;
+                  flex-direction: column;
+                  gap: 8px;
+                  padding: 12px;
+                  border: 1px solid var(--stroke-secondary, #c8c8c8);
+                  border-radius: 8px;
+                  background: Field;
+                "
+              >
+                <html:div
+                  style="display: flex; flex-direction: column; gap: 4px"
+                >
+                  <html:span
+                    style="
+                      font-weight: 700;
+                      font-size: 12px;
+                      color: var(--fill-primary, inherit);
+                    "
+                    >Runtime defaults</html:span
+                  >
+                  <html:span
+                    style="
+                      font-size: 11px;
+                      color: var(--fill-secondary, #777);
+                      line-height: 1.5;
+                    "
+                  >
+                    These values control how Claude runs inside Zotero by
+                    default.
                   </html:span>
                 </html:div>
-                <html:div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px 16px; align-items: start;">
-                  <html:div style="display: flex; flex-direction: column; gap: 4px;">
-                    <html:label
-                      for="__addonRef__-agent-permission-mode"
-                      style="display: block; font-weight: 600; font-size: 12px; color: var(--fill-primary, inherit);"
-                    >
-                      Permission Mode
-                    </html:label>
-                    <html:span style="font-size: 11px; color: var(--fill-secondary, #777); line-height: 1.45;">
-                      <html:code>safe</html:code> is recommended. <html:code>yolo</html:code> removes confirmation prompts.
-                    </html:span>
-                    <html:select
-                      id="__addonRef__-agent-permission-mode"
-                      style="
-                        width: 100%;
-                        max-width: none;
-                        padding: 4px 8px;
-                        font-size: 12px;
-                        border: 1px solid var(--stroke-secondary, #c8c8c8);
-                        border-radius: 6px;
-                        background: Field;
-                        color: FieldText;
-                      "
-                    >
-                      <html:option value="safe">safe</html:option>
-                      <html:option value="yolo">yolo</html:option>
-                    </html:select>
-                  </html:div>
-
-                  <html:div style="display: flex; flex-direction: column; gap: 4px;">
+                <html:div
+                  style="
+                    display: grid;
+                    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+                    gap: 12px 16px;
+                    align-items: start;
+                  "
+                >
+                  <html:div
+                    style="display: flex; flex-direction: column; gap: 4px"
+                  >
                     <html:label
                       for="__addonRef__-claude-code-model"
-                      style="display: block; font-weight: 600; font-size: 12px; color: var(--fill-primary, inherit);"
+                      style="
+                        display: block;
+                        font-weight: 600;
+                        font-size: 12px;
+                        color: var(--fill-primary, inherit);
+                      "
                     >
                       Default Model
                     </html:label>
-                    <html:span style="font-size: 11px; color: var(--fill-secondary, #777); line-height: 1.45;">
-                      This sets the default capability tier for new Claude conversations. <html:code>haiku</html:code>, <html:code>sonnet</html:code>, and <html:code>opus</html:code> are strength tiers, so the runtime may map them to different underlying models.
+                    <html:span
+                      style="
+                        font-size: 11px;
+                        color: var(--fill-secondary, #777);
+                        line-height: 1.45;
+                      "
+                    >
+                      This sets the default capability tier for new Claude
+                      conversations. <html:code>haiku</html:code>,
+                      <html:code>sonnet</html:code>, and
+                      <html:code>opus</html:code> are strength tiers, so the
+                      runtime may map them to different underlying models.
                     </html:span>
                     <html:select
                       id="__addonRef__-claude-code-model"
@@ -647,14 +1580,73 @@
                     </html:select>
                   </html:div>
 
-                  <html:div style="display: flex; flex-direction: column; gap: 4px;">
+                  <html:div
+                    style="display: flex; flex-direction: column; gap: 4px"
+                  >
+                    <html:label
+                      for="__addonRef__-agent-permission-mode"
+                      style="
+                        display: block;
+                        font-weight: 600;
+                        font-size: 12px;
+                        color: var(--fill-primary, inherit);
+                      "
+                    >
+                      Permission Mode
+                    </html:label>
+                    <html:span
+                      style="
+                        font-size: 11px;
+                        color: var(--fill-secondary, #777);
+                        line-height: 1.45;
+                      "
+                    >
+                      <html:code>safe</html:code>
+                      is recommended.
+                      <html:code>yolo</html:code>
+                      affects Claude Code bridge permissions only; Zotero MCP
+                      and tool-specific safety checks may still require
+                      confirmation or block unsafe actions.
+                    </html:span>
+                    <html:select
+                      id="__addonRef__-agent-permission-mode"
+                      style="
+                        width: 100%;
+                        max-width: none;
+                        padding: 4px 8px;
+                        font-size: 12px;
+                        border: 1px solid var(--stroke-secondary, #c8c8c8);
+                        border-radius: 6px;
+                        background: Field;
+                        color: FieldText;
+                      "
+                    >
+                      <html:option value="safe">safe</html:option>
+                      <html:option value="yolo">yolo</html:option>
+                    </html:select>
+                  </html:div>
+
+                  <html:div
+                    style="display: flex; flex-direction: column; gap: 4px"
+                  >
                     <html:label
                       for="__addonRef__-claude-code-reasoning"
-                      style="display: block; font-weight: 600; font-size: 12px; color: var(--fill-primary, inherit);"
+                      style="
+                        display: block;
+                        font-weight: 600;
+                        font-size: 12px;
+                        color: var(--fill-primary, inherit);
+                      "
                     >
                       Default Reasoning
                     </html:label>
-                    <html:span style="font-size: 11px; color: var(--fill-secondary, #777); line-height: 1.45;">
+                    <html:span
+                      style="
+                        font-size: 11px;
+                        color: var(--fill-secondary, #777);
+                        line-height: 1.45;
+                      "
+                    >
                       The reasoning effort Claude uses by default for new runs.
                     </html:span>
                     <html:select
@@ -679,42 +1671,149 @@
                     </html:select>
                   </html:div>
 
-                  <html:div style="display: flex; flex-direction: column; gap: 6px;">
-                    <html:label style="display: inline-flex; align-items: center; gap: 8px; font-weight: 600; font-size: 12px; color: var(--fill-primary, inherit);">
-                      <html:input id="__addonRef__-claude-code-block-streaming" type="checkbox"></html:input>
+                  <html:div
+                    style="display: flex; flex-direction: column; gap: 6px"
+                  >
+                    <html:label
+                      style="
+                        display: inline-flex;
+                        align-items: center;
+                        gap: 8px;
+                        font-weight: 600;
+                        font-size: 12px;
+                        color: var(--fill-primary, inherit);
+                      "
+                    >
+                      <html:input
+                        id="__addonRef__-claude-code-block-streaming"
+                        type="checkbox"
+                      ></html:input>
                       Enable block streaming
                     </html:label>
-                    <html:span style="font-size: 11px; color: var(--fill-secondary, #777); line-height: 1.45;">
-                      Show Claude answers chunk by chunk while they stream, instead of waiting until the final answer is assembled.
+                    <html:span
+                      style="
+                        font-size: 11px;
+                        color: var(--fill-secondary, #777);
+                        line-height: 1.45;
+                      "
+                    >
+                      Show Claude answers chunk by chunk while they stream,
+                      instead of waiting until the final answer is assembled.
                     </html:span>
                   </html:div>
 
-                  <html:div style="display: flex; flex-direction: column; gap: 6px;">
-                    <html:label style="display: inline-flex; align-items: center; gap: 8px; font-weight: 600; font-size: 12px; color: var(--fill-primary, inherit);">
-                      <html:input id="__addonRef__-claude-code-auto-compact" type="checkbox"></html:input>
+                  <html:div
+                    style="display: flex; flex-direction: column; gap: 6px"
+                  >
+                    <html:label
+                      style="
+                        display: inline-flex;
+                        align-items: center;
+                        gap: 8px;
+                        font-weight: 600;
+                        font-size: 12px;
+                        color: var(--fill-primary, inherit);
+                      "
+                    >
+                      <html:input
+                        id="__addonRef__-claude-code-auto-compact"
+                        type="checkbox"
+                      ></html:input>
                       Enable auto-compact
                     </html:label>
-                    <html:span style="font-size: 11px; color: var(--fill-secondary, #777); line-height: 1.45;">
-                      Automatically send <html:code>/compact</html:code> before a new Claude turn when context usage crosses the threshold below.
+                    <html:span
+                      style="
+                        font-size: 11px;
+                        color: var(--fill-secondary, #777);
+                        line-height: 1.45;
+                      "
+                    >
+                      Automatically send <html:code>/compact</html:code> before
+                      a new Claude turn when context usage crosses the threshold
+                      below.
                     </html:span>
-                    <html:div style="display:flex; align-items:center; gap:10px;">
-                      <html:input id="__addonRef__-claude-code-auto-compact-threshold" type="range" min="30" max="80" step="1" style="flex:1 1 auto;" />
-                      <html:span id="__addonRef__-claude-code-auto-compact-threshold-value" style="min-width:48px; text-align:right; font-size:11px; color: var(--fill-secondary, #777);"></html:span>
+                    <html:div
+                      style="display: flex; align-items: center; gap: 10px"
+                    >
+                      <html:input
+                        id="__addonRef__-claude-code-auto-compact-threshold"
+                        type="range"
+                        min="30"
+                        max="80"
+                        step="1"
+                        style="flex: 1 1 auto"
+                      />
+                      <html:span
+                        id="__addonRef__-claude-code-auto-compact-threshold-value"
+                        style="
+                          min-width: 48px;
+                          text-align: right;
+                          font-size: 11px;
+                          color: var(--fill-secondary, #777);
+                        "
+                      ></html:span>
                     </html:div>
                   </html:div>
                 </html:div>
               </html:div>
 
-              <html:details style="padding: 12px; border: 1px solid var(--stroke-secondary, #c8c8c8); border-radius: 8px; background: Field;">
-                <html:summary style="font-weight: 700; font-size: 12px; color: var(--fill-primary, inherit); cursor: pointer; user-select: none;">
+              <html:details
+                style="
+                  padding: 12px;
+                  border: 1px solid var(--stroke-secondary, #c8c8c8);
+                  border-radius: 8px;
+                  background: Field;
+                "
+              >
+                <html:summary
+                  style="
+                    font-weight: 700;
+                    font-size: 12px;
+                    color: var(--fill-primary, inherit);
+                    cursor: pointer;
+                    user-select: none;
+                  "
+                >
                   Advanced: Runtime CLAUDE.md instructions
                 </html:summary>
-                <html:div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
-                  <html:span style="font-size: 11px; color: var(--fill-secondary, #777); line-height: 1.5;">
-                    This controls the text injected between <html:code>&lt;!-- LLM-FOR-ZOTERO:CLAUDE-MANAGED-BEGIN --&gt;</html:code> and <html:code>&lt;!-- LLM-FOR-ZOTERO:CLAUDE-MANAGED-END --&gt;</html:code> inside the runtime <html:code>CLAUDE.md</html:code>. Existing files are preserved. Clicking Update only refreshes that managed block.
+                <html:div
+                  style="
+                    display: flex;
+                    flex-direction: column;
+                    gap: 8px;
+                    margin-top: 10px;
+                  "
+                >
+                  <html:span
+                    style="
+                      font-size: 11px;
+                      color: var(--fill-secondary, #777);
+                      line-height: 1.5;
+                    "
+                  >
+                    This controls the text injected between
+                    <html:code
+                      >&lt;!-- LLM-FOR-ZOTERO:CLAUDE-MANAGED-BEGIN
+                      --&gt;</html:code
+                    >
+                    and
+                    <html:code
+                      >&lt;!-- LLM-FOR-ZOTERO:CLAUDE-MANAGED-END
+                      --&gt;</html:code
+                    >
+                    inside the runtime <html:code>CLAUDE.md</html:code>.
+                    Existing files are preserved. Clicking Update only refreshes
+                    that managed block.
                   </html:span>
-                  <html:span style="font-size: 11px; color: var(--fill-secondary, #777); line-height: 1.5;">
-                    If you are not already comfortable editing Claude Code project instructions, leave this unchanged.
+                  <html:span
+                    style="
+                      font-size: 11px;
+                      color: var(--fill-secondary, #777);
+                      line-height: 1.5;
+                    "
+                  >
+                    If you are not already comfortable editing Claude Code
+                    project instructions, leave this unchanged.
                   </html:span>
                   <html:textarea
                     id="__addonRef__-claude-managed-instruction-template"
@@ -731,12 +1830,21 @@
                       resize: vertical;
                       background: Field;
                       color: FieldText;
-                      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+                      font-family:
+                        ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+                        monospace;
                       white-space: pre;
                       min-height: 220px;
                     "
                   ></html:textarea>
-                  <html:div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                  <html:div
+                    style="
+                      display: flex;
+                      align-items: center;
+                      gap: 8px;
+                      flex-wrap: wrap;
+                    "
+                  >
                     <html:button
                       id="__addonRef__-claude-managed-instruction-update"
                       type="button"
@@ -773,7 +1881,7 @@
                     </html:button>
                     <html:span
                       id="__addonRef__-claude-managed-instruction-status"
-                      style="font-size: 11.5px; display: none;"
+                      style="font-size: 11.5px; display: none"
                     ></html:span>
                   </html:div>
                 </html:div>
@@ -783,21 +1891,61 @@
         </html:div>
 
         <!-- ── Notes Directory ── -->
-        <html:div style="border: 1px solid var(--stroke-secondary, #c8c8c8); border-radius: 8px; overflow: hidden; margin-top: 6px;">
-          <html:div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: Field; color: FieldText; border-bottom: 1px solid var(--stroke-secondary, #c8c8c8);">
-            <html:span style="font-weight: 700; font-size: 13px;">Notes Directory</html:span>
+        <html:div
+          style="
+            border: 1px solid var(--stroke-secondary, #c8c8c8);
+            border-radius: 8px;
+            overflow: hidden;
+            margin-top: 6px;
+          "
+        >
+          <html:div
+            style="
+              display: flex;
+              align-items: center;
+              justify-content: space-between;
+              padding: 8px 12px;
+              background: Field;
+              color: FieldText;
+              border-bottom: 1px solid var(--stroke-secondary, #c8c8c8);
+            "
+          >
+            <html:span style="font-weight: 700; font-size: 13px"
+              >Notes Directory</html:span
+            >
           </html:div>
-          <html:div style="display: flex; flex-direction: column; gap: 12px; padding: 14px;">
-            <html:span style="font-size: 11.5px; color: var(--fill-secondary, #888); line-height: 1.5;">
-              Configure a local directory for saving notes as files.
-              Note format and templates are managed through skills — type <html:code>/</html:code> in chat to see available skills, or edit skill files directly.
+          <html:div
+            style="
+              display: flex;
+              flex-direction: column;
+              gap: 12px;
+              padding: 14px;
+            "
+          >
+            <html:span
+              style="
+                font-size: 11.5px;
+                color: var(--fill-secondary, #888);
+                line-height: 1.5;
+              "
+            >
+              Configure a local directory for saving notes as files. Note format
+              and templates are managed through skills — type
+              <html:code>/</html:code> in chat to see available skills, or edit
+              skill files directly.
             </html:span>
 
             <!-- Nickname -->
-            <html:div style="display: flex; flex-direction: column; gap: 2px;">
+            <html:div style="display: flex; flex-direction: column; gap: 2px">
               <html:label
                 for="__addonRef__-notes-dir-nickname"
-                style="display: block; font-weight: 600; font-size: 12px; color: var(--fill-primary, inherit); margin-bottom: 2px;"
+                style="
+                  display: block;
+                  font-weight: 600;
+                  font-size: 12px;
+                  color: var(--fill-primary, inherit);
+                  margin-bottom: 2px;
+                "
               >
                 Nickname
               </html:label>
@@ -816,16 +1964,29 @@
                   color: FieldText;
                 "
               ></html:input>
-              <html:span style="font-size: 10.5px; color: var(--fill-secondary, #888); margin-top: 1px;">
-                How you refer to this directory — the agent will recognize it when you mention it
+              <html:span
+                style="
+                  font-size: 10.5px;
+                  color: var(--fill-secondary, #888);
+                  margin-top: 1px;
+                "
+              >
+                How you refer to this directory — the agent will recognize it
+                when you mention it
               </html:span>
             </html:div>
 
             <!-- Notes Directory Path -->
-            <html:div style="display: flex; flex-direction: column; gap: 2px;">
+            <html:div style="display: flex; flex-direction: column; gap: 2px">
               <html:label
                 for="__addonRef__-obsidian-vault-path"
-                style="display: block; font-weight: 600; font-size: 12px; color: var(--fill-primary, inherit); margin-bottom: 2px;"
+                style="
+                  display: block;
+                  font-weight: 600;
+                  font-size: 12px;
+                  color: var(--fill-primary, inherit);
+                  margin-bottom: 2px;
+                "
               >
                 Notes Directory Path
               </html:label>
@@ -844,16 +2005,28 @@
                   color: FieldText;
                 "
               ></html:input>
-              <html:span style="font-size: 10.5px; color: var(--fill-secondary, #888); margin-top: 1px;">
+              <html:span
+                style="
+                  font-size: 10.5px;
+                  color: var(--fill-secondary, #888);
+                  margin-top: 1px;
+                "
+              >
                 Absolute path to the directory where notes are saved as files
               </html:span>
             </html:div>
 
             <!-- Default Folder -->
-            <html:div style="display: flex; flex-direction: column; gap: 2px;">
+            <html:div style="display: flex; flex-direction: column; gap: 2px">
               <html:label
                 for="__addonRef__-obsidian-target-folder"
-                style="display: block; font-weight: 600; font-size: 12px; color: var(--fill-primary, inherit); margin-bottom: 2px;"
+                style="
+                  display: block;
+                  font-weight: 600;
+                  font-size: 12px;
+                  color: var(--fill-primary, inherit);
+                  margin-bottom: 2px;
+                "
               >
                 Default Folder
               </html:label>
@@ -872,16 +2045,29 @@
                   color: FieldText;
                 "
               ></html:input>
-              <html:span style="font-size: 10.5px; color: var(--fill-secondary, #888); margin-top: 1px;">
-                Default subfolder for notes (the agent can write to any folder if you specify)
+              <html:span
+                style="
+                  font-size: 10.5px;
+                  color: var(--fill-secondary, #888);
+                  margin-top: 1px;
+                "
+              >
+                Default subfolder for notes (the agent can write to any folder
+                if you specify)
               </html:span>
             </html:div>
 
             <!-- Attachments Folder -->
-            <html:div style="display: flex; flex-direction: column; gap: 2px;">
+            <html:div style="display: flex; flex-direction: column; gap: 2px">
               <html:label
                 for="__addonRef__-obsidian-attachments-folder"
-                style="display: block; font-weight: 600; font-size: 12px; color: var(--fill-primary, inherit); margin-bottom: 2px;"
+                style="
+                  display: block;
+                  font-weight: 600;
+                  font-size: 12px;
+                  color: var(--fill-primary, inherit);
+                  margin-bottom: 2px;
+                "
               >
                 Attachments Folder
               </html:label>
@@ -900,13 +2086,20 @@
                   color: FieldText;
                 "
               ></html:input>
-              <html:span style="font-size: 10.5px; color: var(--fill-secondary, #888); margin-top: 1px;">
-                Folder for images, relative to vault root (e.g., assets, Notes/imgs)
+              <html:span
+                style="
+                  font-size: 10.5px;
+                  color: var(--fill-secondary, #888);
+                  margin-top: 1px;
+                "
+              >
+                Folder for images, relative to vault root (e.g., assets,
+                Notes/imgs)
               </html:span>
             </html:div>
 
             <!-- Test button -->
-            <html:div style="display: flex; align-items: center; gap: 8px;">
+            <html:div style="display: flex; align-items: center; gap: 8px">
               <html:button
                 id="__addonRef__-obsidian-test"
                 type="button"
@@ -926,10 +2119,9 @@
               </html:button>
               <html:span
                 id="__addonRef__-obsidian-test-status"
-                style="font-size: 11.5px; display: none;"
+                style="font-size: 11.5px; display: none"
               ></html:span>
             </html:div>
-
           </html:div>
         </html:div>
       </html:div>
@@ -941,13 +2133,26 @@
         style="display: none; flex-direction: column; gap: 18px"
       >
         <html:div style="display: flex; flex-direction: column; gap: 8px">
-          <html:div style="display: flex; flex-direction: column; gap: 2px;">
-            <html:span style="font-size: 14px; font-weight: 800; color: var(--fill-primary, inherit);">
+          <html:div style="display: flex; flex-direction: column; gap: 2px">
+            <html:span
+              style="
+                font-size: 14px;
+                font-weight: 800;
+                color: var(--fill-primary, inherit);
+              "
+            >
               MinerU PDF Parsing
             </html:span>
-            <html:span style="font-size: 11.5px; color: var(--fill-secondary, #888); line-height: 1.5;">
-              Extract high-quality structured text from PDFs with preserved math formulas, tables, and figures.
-              MinerU dramatically improves how the AI understands your papers.
+            <html:span
+              style="
+                font-size: 11.5px;
+                color: var(--fill-secondary, #888);
+                line-height: 1.5;
+              "
+            >
+              Extract high-quality structured text from PDFs with preserved math
+              formulas, tables, and figures. MinerU dramatically improves how
+              the AI understands your papers.
             </html:span>
           </html:div>
 
@@ -974,7 +2179,8 @@
               flex-direction: column;
               gap: 8px;
               padding: 10px 12px;
-              border: 1px solid var(--stroke-secondary, rgba(128,128,128,0.25));
+              border: 1px solid
+                var(--stroke-secondary, rgba(128, 128, 128, 0.25));
               border-radius: 6px;
             "
           >
@@ -994,11 +2200,34 @@
               ></html:input>
               Sync MinerU cache with Zotero file sync
             </html:label>
-            <html:span style="font-size: 10.5px; color: var(--fill-secondary, #888); line-height: 1.45; margin-left: 26px;">
-              Creates companion ZIP attachments for MinerU full.md, manifest.json, content_list.json, and extracted paper assets. Requires Zotero file sync or WebDAV.
+            <html:span
+              style="
+                font-size: 10.5px;
+                color: var(--fill-secondary, #888);
+                line-height: 1.45;
+                margin-left: 26px;
+              "
+            >
+              Creates companion ZIP attachments for MinerU full.md,
+              manifest.json, content_list.json, and extracted paper assets.
+              Requires Zotero file sync or WebDAV.
             </html:span>
-            <html:div style="display: flex; flex-direction: column; gap: 6px; margin-left: 26px;">
-              <html:div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+            <html:div
+              style="
+                display: flex;
+                flex-direction: column;
+                gap: 6px;
+                margin-left: 26px;
+              "
+            >
+              <html:div
+                style="
+                  display: flex;
+                  align-items: center;
+                  gap: 8px;
+                  flex-wrap: wrap;
+                "
+              >
                 <html:button
                   id="__addonRef__-mineru-sync-prepare"
                   type="button"
@@ -1009,7 +2238,8 @@
                     white-space: nowrap;
                     background: transparent;
                     color: var(--fill-primary, inherit);
-                    border: 1px solid var(--stroke-secondary, rgba(128,128,128,0.45));
+                    border: 1px solid
+                      var(--stroke-secondary, rgba(128, 128, 128, 0.45));
                     border-radius: 5px;
                     cursor: pointer;
                   "
@@ -1038,14 +2268,19 @@
               </html:div>
               <html:span
                 id="__addonRef__-mineru-sync-status"
-                style="font-size: 11.5px; display: none; color: var(--fill-secondary, #888); line-height: 1.35;"
+                style="
+                  font-size: 11.5px;
+                  display: none;
+                  color: var(--fill-secondary, #888);
+                  line-height: 1.35;
+                "
               ></html:span>
             </html:div>
           </html:div>
 
           <html:div
             id="__addonRef__-mineru-sub-settings"
-            style="display: none; flex-direction: column; gap: 10px;"
+            style="display: none; flex-direction: column; gap: 10px"
           >
             <html:label
               style="
@@ -1063,11 +2298,50 @@
               ></html:input>
               Auto-parse newly added items
             </html:label>
-            <html:span style="font-size: 11px; color: var(--fill-secondary, #888); margin-top: -6px; margin-left: 26px; display: block;">
-              <html:span style="display: inline-flex; align-items: center; gap: 4px;">
-                <html:span style="width: 8px; height: 8px; border-radius: 50%; background: #10b981; display: inline-block;"></html:span> Ready
-                <html:span style="width: 8px; height: 8px; border-radius: 50%; background: #f59e0b; display: inline-block; margin-left: 8px;"></html:span> Processing
-                <html:span style="width: 8px; height: 8px; border-radius: 50%; background: #ef4444; display: inline-block; margin-left: 8px;"></html:span> Failed
+            <html:span
+              style="
+                font-size: 11px;
+                color: var(--fill-secondary, #888);
+                margin-top: -6px;
+                margin-left: 26px;
+                display: block;
+              "
+            >
+              <html:span
+                style="display: inline-flex; align-items: center; gap: 4px"
+              >
+                <html:span
+                  style="
+                    width: 8px;
+                    height: 8px;
+                    border-radius: 50%;
+                    background: #10b981;
+                    display: inline-block;
+                  "
+                ></html:span>
+                Ready
+                <html:span
+                  style="
+                    width: 8px;
+                    height: 8px;
+                    border-radius: 50%;
+                    background: #f59e0b;
+                    display: inline-block;
+                    margin-left: 8px;
+                  "
+                ></html:span>
+                Processing
+                <html:span
+                  style="
+                    width: 8px;
+                    height: 8px;
+                    border-radius: 50%;
+                    background: #ef4444;
+                    display: inline-block;
+                    margin-left: 8px;
+                  "
+                ></html:span>
+                Failed
               </html:span>
             </html:span>
 
@@ -1089,30 +2363,63 @@
             </html:label>
 
             <!-- Info box -->
-            <html:div id="__addonRef__-mineru-cloud-info" style="
-              background: color-mix(in srgb, var(--color-accent, #2563eb) 8%, transparent);
-              border: 1px solid color-mix(in srgb, var(--color-accent, #2563eb) 20%, transparent);
-              border-radius: 6px;
-              padding: 10px 12px;
-              font-size: 11.5px;
-              line-height: 1.6;
-              color: var(--fill-primary, inherit);
-            ">
-              <html:span style="font-weight: 600;">No API key needed to start, but a personal key is strongly recommended.</html:span>
-              The built-in MinerU API may no longer be supported after June 1, 2026.
+            <html:div
+              id="__addonRef__-mineru-cloud-info"
+              style="
+                background: color-mix(
+                  in srgb,
+                  var(--color-accent, #2563eb) 8%,
+                  transparent
+                );
+                border: 1px solid
+                  color-mix(
+                    in srgb,
+                    var(--color-accent, #2563eb) 20%,
+                    transparent
+                  );
+                border-radius: 6px;
+                padding: 10px 12px;
+                font-size: 11.5px;
+                line-height: 1.6;
+                color: var(--fill-primary, inherit);
+              "
+            >
+              <html:span style="font-weight: 600"
+                >No API key needed to start, but a personal key is strongly
+                recommended.</html:span
+              >
+              The built-in MinerU API may no longer be supported after June 1,
+              2026.
               <html:br />
               <html:br />
               Get your own free API key from
-              <html:a href="https://mineru.net" target="_blank" rel="noopener"
-                style="color: var(--color-accent, #2563eb); text-decoration: underline;">mineru.net</html:a>
+              <html:a
+                href="https://mineru.net"
+                target="_blank"
+                rel="noopener"
+                style="
+                  color: var(--color-accent, #2563eb);
+                  text-decoration: underline;
+                "
+                >mineru.net</html:a
+              >
               and paste it below.
             </html:div>
 
             <!-- API key section -->
-            <html:div id="__addonRef__-mineru-api-key-section" style="display: flex; flex-direction: column; gap: 4px">
+            <html:div
+              id="__addonRef__-mineru-api-key-section"
+              style="display: flex; flex-direction: column; gap: 4px"
+            >
               <html:label
                 for="__addonRef__-mineru-api-key"
-                style="display: block; font-weight: 600; font-size: 12px; color: var(--fill-primary, inherit); margin-bottom: 2px;"
+                style="
+                  display: block;
+                  font-weight: 600;
+                  font-size: 12px;
+                  color: var(--fill-primary, inherit);
+                  margin-bottom: 2px;
+                "
               >
                 API Key (Recommended)
               </html:label>
@@ -1131,16 +2438,31 @@
                   color: FieldText;
                 "
               ></html:input>
-              <html:span style="font-size: 10.5px; color: var(--fill-secondary, #888); margin-top: 1px;">
+              <html:span
+                style="
+                  font-size: 10.5px;
+                  color: var(--fill-secondary, #888);
+                  margin-top: 1px;
+                "
+              >
                 With your own key: direct connection to mineru.net
               </html:span>
             </html:div>
 
-            <html:div id="__addonRef__-mineru-local-section" style="display: none; flex-direction: column; gap: 8px">
+            <html:div
+              id="__addonRef__-mineru-local-section"
+              style="display: none; flex-direction: column; gap: 8px"
+            >
               <html:div style="display: flex; flex-direction: column; gap: 4px">
                 <html:label
                   for="__addonRef__-mineru-local-api-base"
-                  style="display: block; font-weight: 600; font-size: 12px; color: var(--fill-primary, inherit); margin-bottom: 2px;"
+                  style="
+                    display: block;
+                    font-weight: 600;
+                    font-size: 12px;
+                    color: var(--fill-primary, inherit);
+                    margin-bottom: 2px;
+                  "
                 >
                   Local API Base URL
                 </html:label>
@@ -1159,15 +2481,28 @@
                     color: FieldText;
                   "
                 ></html:input>
-                <html:span style="font-size: 10.5px; color: var(--fill-secondary, #888); margin-top: 1px;">
-                  Uses a self-hosted mineru-api server. Test Connection only checks that the server process is reachable.
+                <html:span
+                  style="
+                    font-size: 10.5px;
+                    color: var(--fill-secondary, #888);
+                    margin-top: 1px;
+                  "
+                >
+                  Uses a self-hosted mineru-api server. Test Connection only
+                  checks that the server process is reachable.
                 </html:span>
               </html:div>
 
               <html:div style="display: flex; flex-direction: column; gap: 4px">
                 <html:label
                   for="__addonRef__-mineru-local-backend"
-                  style="display: block; font-weight: 600; font-size: 12px; color: var(--fill-primary, inherit); margin-bottom: 2px;"
+                  style="
+                    display: block;
+                    font-weight: 600;
+                    font-size: 12px;
+                    color: var(--fill-primary, inherit);
+                    margin-bottom: 2px;
+                  "
                 >
                   Backend
                 </html:label>
@@ -1188,17 +2523,34 @@
                   <html:option value="vlm">vlm</html:option>
                   <html:option value="hybrid">hybrid</html:option>
                 </html:select>
-                <html:span style="font-size: 10.5px; color: var(--fill-secondary, #888); margin-top: 1px;">
-                  Switching backend triggers a cold start: the first parse afterwards may take noticeably longer while the model loads.
+                <html:span
+                  style="
+                    font-size: 10.5px;
+                    color: var(--fill-secondary, #888);
+                    margin-top: 1px;
+                  "
+                >
+                  Switching backend triggers a cold start: the first parse
+                  afterwards may take noticeably longer while the model loads.
                 </html:span>
               </html:div>
 
-              <html:span style="font-size: 11px; color: #f59e0b; line-height: 1.45; margin-top: 2px;">
-                Note: Pause stops the queue, but an already-running local parse keeps executing on the mineru-api server — it has no cancel endpoint. To abort immediately (e.g. to switch backend right away), restart your mineru-api process manually.
+              <html:span
+                style="
+                  font-size: 11px;
+                  color: #f59e0b;
+                  line-height: 1.45;
+                  margin-top: 2px;
+                "
+              >
+                Note: Pause stops the queue, but an already-running local parse
+                keeps executing on the mineru-api server — it has no cancel
+                endpoint. To abort immediately (e.g. to switch backend right
+                away), restart your mineru-api process manually.
               </html:span>
             </html:div>
 
-            <html:div style="display: flex; align-items: center; gap: 8px;">
+            <html:div style="display: flex; align-items: center; gap: 8px">
               <html:button
                 id="__addonRef__-mineru-test"
                 type="button"
@@ -1218,19 +2570,45 @@
               </html:button>
               <html:span
                 id="__addonRef__-mineru-test-status"
-                style="font-size: 11.5px; display: none;"
+                style="font-size: 11.5px; display: none"
               ></html:span>
             </html:div>
 
             <!-- ── Advanced MinerU parsing filters ── -->
-            <html:details style="margin-top: 8px;">
-              <html:summary style="font-size: 12px; font-weight: 600; cursor: pointer;">
+            <html:details style="margin-top: 8px">
+              <html:summary
+                style="font-size: 12px; font-weight: 600; cursor: pointer"
+              >
                 Advanced parsing filters
               </html:summary>
-              <html:div style="display: flex; flex-direction: column; gap: 10px; margin-top: 8px; padding: 10px 12px; border: 1px solid var(--stroke-secondary, #c8c8c8); border-radius: 6px; background: color-mix(in srgb, Field 94%, CanvasText 6%);">
-                <html:div style="display: flex; flex-direction: column; gap: 4px;">
-                  <html:div style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--fill-primary, inherit);">
-                    <html:label for="__addonRef__-mineru-max-auto-pages" style="font-weight: 600;">
+              <html:div
+                style="
+                  display: flex;
+                  flex-direction: column;
+                  gap: 10px;
+                  margin-top: 8px;
+                  padding: 10px 12px;
+                  border: 1px solid var(--stroke-secondary, #c8c8c8);
+                  border-radius: 6px;
+                  background: color-mix(in srgb, Field 94%, CanvasText 6%);
+                "
+              >
+                <html:div
+                  style="display: flex; flex-direction: column; gap: 4px"
+                >
+                  <html:div
+                    style="
+                      display: flex;
+                      align-items: center;
+                      gap: 8px;
+                      font-size: 12px;
+                      color: var(--fill-primary, inherit);
+                    "
+                  >
+                    <html:label
+                      for="__addonRef__-mineru-max-auto-pages"
+                      style="font-weight: 600"
+                    >
                       Skip files over
                     </html:label>
                     <html:input
@@ -1251,17 +2629,31 @@
                         text-align: right;
                       "
                     ></html:input>
-                    <html:span style="font-weight: 600;">pages</html:span>
+                    <html:span style="font-weight: 600">pages</html:span>
                   </html:div>
-                  <html:span style="font-size: 10.5px; color: var(--fill-secondary, #888);">
-                    Start All, Start Filtered, Start Selected, and auto-parse skip PDFs above this page count.
+                  <html:span
+                    style="
+                      font-size: 10.5px;
+                      color: var(--fill-secondary, #888);
+                    "
+                  >
+                    Start All, Start Filtered, Start Selected, and auto-parse
+                    skip PDFs above this page count.
                   </html:span>
                 </html:div>
 
-                <html:div style="display: flex; flex-direction: column; gap: 4px;">
+                <html:div
+                  style="display: flex; flex-direction: column; gap: 4px"
+                >
                   <html:label
                     for="__addonRef__-mineru-exclude-patterns"
-                    style="display: block; font-weight: 600; font-size: 12px; color: var(--fill-primary, inherit); margin-bottom: 2px;"
+                    style="
+                      display: block;
+                      font-weight: 600;
+                      font-size: 12px;
+                      color: var(--fill-primary, inherit);
+                      margin-bottom: 2px;
+                    "
                   >
                     Exclude PDFs by Filename
                   </html:label>
@@ -1280,91 +2672,261 @@
                       color: FieldText;
                     "
                   ></html:input>
-                  <html:span style="font-size: 10.5px; color: var(--fill-secondary, #888); margin-top: 1px;">
-                    Comma-separated patterns. Matching filenames are skipped by your rule. Wrap in /slashes/ for regex.
+                  <html:span
+                    style="
+                      font-size: 10.5px;
+                      color: var(--fill-secondary, #888);
+                      margin-top: 1px;
+                    "
+                  >
+                    Comma-separated patterns. Matching filenames are skipped by
+                    your rule. Wrap in /slashes/ for regex.
                   </html:span>
                 </html:div>
               </html:div>
             </html:details>
 
             <!-- ── Embedded MinerU manager ── -->
-          <html:div style="margin-top: 8px; border-top: 1px solid var(--stroke-secondary, rgba(128,128,128,0.25)); padding-top: 12px;">
-            <html:div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
-              <html:span style="font-size: 13px; font-weight: 700;">Manage Files</html:span>
-              <html:progress
-                id="__addonRef__-mineru-mgr-progress"
-                value="0" max="100"
-                style="flex: 1; height: 5px; min-width: 60px;"
-              ></html:progress>
-              <html:span
-                id="__addonRef__-mineru-mgr-progress-label"
-                style="font-size: 11px; white-space: nowrap; color: var(--fill-secondary, #888);"
-              >0 / 0</html:span>
-            </html:div>
             <html:div
-              id="__addonRef__-mineru-mgr-status"
-              style="font-size: 11px; color: var(--fill-secondary, #888); margin-bottom: 6px; min-height: 14px; line-height: 1.35; white-space: normal; overflow-wrap: anywhere;"
-            ></html:div>
-            <html:div style="display: flex; align-items: center; gap: 6px; margin-bottom: 8px;">
-              <html:button id="__addonRef__-mineru-mgr-start-btn" type="button" style="
-                padding: 3px 10px; font-size: 11px; font-weight: 600;
-                border: 1px solid var(--color-accent, #2563eb); border-radius: 4px;
-                background: var(--color-accent, #2563eb); color: #fff; cursor: pointer;
-              ">Start All</html:button>
-              <html:button id="__addonRef__-mineru-mgr-repair-btn" type="button" style="
-                padding: 3px 10px; font-size: 11px; font-weight: 500;
-                border: 1px solid var(--stroke-secondary, #8a8a8a); border-radius: 4px;
-                background: transparent; color: FieldText; cursor: pointer;
-              ">Repair Cache</html:button>
-              <html:button id="__addonRef__-mineru-mgr-delete-btn" type="button" style="
-                padding: 3px 10px; font-size: 11px; font-weight: 500;
-                border: 1px solid #dc2626; border-radius: 4px;
-                background: transparent; color: #dc2626; cursor: pointer;
-              ">Delete All Cache</html:button>
-              <html:span id="__addonRef__-mineru-mgr-error"
-                style="font-size: 10px; color: #dc2626; display: none; margin-left: 2px;"
-              ></html:span>
-            </html:div>
-            <!-- Two-panel: sidebar + items -->
-            <html:div style="display: flex; border: 1px solid var(--stroke-secondary, rgba(128,128,128,0.25)); border-radius: 6px; height: 500px; overflow: hidden;">
-              <html:div id="__addonRef__-mineru-mgr-sidebar" style="
-                width: 180px; min-width: 180px; max-width: 520px; border-right: 1px solid rgba(128,128,128,0.2);
-                overflow: auto; padding: 4px 0; flex-shrink: 0; font-size: 12px;
-              "></html:div>
-              <html:div style="flex: 1; display: flex; flex-direction: column; min-width: 0;">
-                <html:div id="__addonRef__-mineru-mgr-col-headers" style="
-                  display: flex; align-items: center; gap: 8px;
-                  padding: 4px 10px; font-size: 10px; font-weight: 600; color: #888;
-                  border-bottom: 1px solid rgba(128,128,128,0.2); flex-shrink: 0; user-select: none;
-                ">
-                  <html:span data-sort-key="cached" style="width: 8px; cursor: pointer; text-align: center; flex-shrink: 0;">&#x25CF;</html:span>
-                  <html:span data-sort-key="title" style="flex: 1; min-width: 0; cursor: pointer;">Title</html:span>
-                  <html:span data-sort-key="firstCreator" style="flex: 0 0 90px; cursor: pointer;">Author</html:span>
-                  <html:span data-sort-key="year" style="flex: 0 0 34px; text-align: right; cursor: pointer;">Year</html:span>
-                  <html:span data-sort-key="dateAdded" style="flex: 0 0 64px; text-align: right; cursor: pointer;">Added</html:span>
+              style="
+                margin-top: 8px;
+                border-top: 1px solid
+                  var(--stroke-secondary, rgba(128, 128, 128, 0.25));
+                padding-top: 12px;
+              "
+            >
+              <html:div
+                style="
+                  display: flex;
+                  align-items: center;
+                  gap: 10px;
+                  margin-bottom: 8px;
+                "
+              >
+                <html:span style="font-size: 13px; font-weight: 700"
+                  >Manage Files</html:span
+                >
+                <html:progress
+                  id="__addonRef__-mineru-mgr-progress"
+                  value="0"
+                  max="100"
+                  style="flex: 1; height: 5px; min-width: 60px"
+                ></html:progress>
+                <html:span
+                  id="__addonRef__-mineru-mgr-progress-label"
+                  style="
+                    font-size: 11px;
+                    white-space: nowrap;
+                    color: var(--fill-secondary, #888);
+                  "
+                  >0 / 0</html:span
+                >
+              </html:div>
+              <html:div
+                id="__addonRef__-mineru-mgr-status"
+                style="
+                  font-size: 11px;
+                  color: var(--fill-secondary, #888);
+                  margin-bottom: 6px;
+                  min-height: 14px;
+                  line-height: 1.35;
+                  white-space: normal;
+                  overflow-wrap: anywhere;
+                "
+              ></html:div>
+              <html:div
+                style="
+                  display: flex;
+                  align-items: center;
+                  gap: 6px;
+                  margin-bottom: 8px;
+                "
+              >
+                <html:button
+                  id="__addonRef__-mineru-mgr-start-btn"
+                  type="button"
+                  style="
+                    padding: 3px 10px;
+                    font-size: 11px;
+                    font-weight: 600;
+                    border: 1px solid var(--color-accent, #2563eb);
+                    border-radius: 4px;
+                    background: var(--color-accent, #2563eb);
+                    color: #fff;
+                    cursor: pointer;
+                  "
+                  >Start All</html:button
+                >
+                <html:button
+                  id="__addonRef__-mineru-mgr-repair-btn"
+                  type="button"
+                  style="
+                    padding: 3px 10px;
+                    font-size: 11px;
+                    font-weight: 500;
+                    border: 1px solid var(--stroke-secondary, #8a8a8a);
+                    border-radius: 4px;
+                    background: transparent;
+                    color: FieldText;
+                    cursor: pointer;
+                  "
+                  >Repair Cache</html:button
+                >
+                <html:button
+                  id="__addonRef__-mineru-mgr-delete-btn"
+                  type="button"
+                  style="
+                    padding: 3px 10px;
+                    font-size: 11px;
+                    font-weight: 500;
+                    border: 1px solid #dc2626;
+                    border-radius: 4px;
+                    background: transparent;
+                    color: #dc2626;
+                    cursor: pointer;
+                  "
+                  >Delete All Cache</html:button
+                >
+                <html:span
+                  id="__addonRef__-mineru-mgr-error"
+                  style="
+                    font-size: 10px;
+                    color: #dc2626;
+                    display: none;
+                    margin-left: 2px;
+                  "
+                ></html:span>
+              </html:div>
+              <!-- Two-panel: sidebar + items -->
+              <html:div
+                style="
+                  display: flex;
+                  border: 1px solid
+                    var(--stroke-secondary, rgba(128, 128, 128, 0.25));
+                  border-radius: 6px;
+                  height: 500px;
+                  overflow: hidden;
+                "
+              >
+                <html:div
+                  id="__addonRef__-mineru-mgr-sidebar"
+                  style="
+                    width: 180px;
+                    min-width: 180px;
+                    max-width: 520px;
+                    border-right: 1px solid rgba(128, 128, 128, 0.2);
+                    overflow: auto;
+                    padding: 4px 0;
+                    flex-shrink: 0;
+                    font-size: 12px;
+                  "
+                ></html:div>
+                <html:div
+                  style="
+                    flex: 1;
+                    display: flex;
+                    flex-direction: column;
+                    min-width: 0;
+                  "
+                >
+                  <html:div
+                    id="__addonRef__-mineru-mgr-col-headers"
+                    style="
+                      display: flex;
+                      align-items: center;
+                      gap: 8px;
+                      padding: 4px 10px;
+                      font-size: 10px;
+                      font-weight: 600;
+                      color: #888;
+                      border-bottom: 1px solid rgba(128, 128, 128, 0.2);
+                      flex-shrink: 0;
+                      user-select: none;
+                    "
+                  >
+                    <html:span
+                      data-sort-key="cached"
+                      style="
+                        width: 8px;
+                        cursor: pointer;
+                        text-align: center;
+                        flex-shrink: 0;
+                      "
+                      >&#x25CF;</html:span
+                    >
+                    <html:span
+                      data-sort-key="title"
+                      style="flex: 1; min-width: 0; cursor: pointer"
+                      >Title</html:span
+                    >
+                    <html:span
+                      data-sort-key="firstCreator"
+                      style="flex: 0 0 90px; cursor: pointer"
+                      >Author</html:span
+                    >
+                    <html:span
+                      data-sort-key="year"
+                      style="flex: 0 0 34px; text-align: right; cursor: pointer"
+                      >Year</html:span
+                    >
+                    <html:span
+                      data-sort-key="dateAdded"
+                      style="flex: 0 0 64px; text-align: right; cursor: pointer"
+                      >Added</html:span
+                    >
+                  </html:div>
+                  <html:div
+                    id="__addonRef__-mineru-mgr-items-list"
+                    style="flex: 1; overflow-y: auto; min-height: 0"
+                  ></html:div>
                 </html:div>
-                <html:div id="__addonRef__-mineru-mgr-items-list" style="
-                  flex: 1; overflow-y: auto; min-height: 0;
-                "></html:div>
+              </html:div>
+              <!-- Context menu -->
+              <html:div
+                id="__addonRef__-mineru-mgr-context-menu"
+                style="
+                  display: none;
+                  position: fixed;
+                  background: Field;
+                  border: 1px solid rgba(128, 128, 128, 0.3);
+                  border-radius: 6px;
+                  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+                  padding: 4px 0;
+                  z-index: 999;
+                  min-width: 170px;
+                "
+              >
+                <html:div
+                  id="__addonRef__-mineru-mgr-ctx-process"
+                  style="padding: 4px 12px; font-size: 11.5px; cursor: pointer"
+                  >Process This Item</html:div
+                >
+                <html:div
+                  id="__addonRef__-mineru-mgr-ctx-show-folder"
+                  style="padding: 4px 12px; font-size: 11.5px; cursor: pointer"
+                  >Show in File Manager</html:div
+                >
+                <html:div
+                  style="
+                    border-top: 1px solid rgba(128, 128, 128, 0.2);
+                    margin: 2px 0;
+                  "
+                ></html:div>
+                <html:div
+                  id="__addonRef__-mineru-mgr-ctx-delete"
+                  style="
+                    padding: 4px 12px;
+                    font-size: 11.5px;
+                    cursor: pointer;
+                    color: #dc2626;
+                  "
+                  >Delete MinerU Cache</html:div
+                >
               </html:div>
             </html:div>
-            <!-- Context menu -->
-            <html:div id="__addonRef__-mineru-mgr-context-menu" style="
-              display: none; position: fixed;
-              background: Field; border: 1px solid rgba(128,128,128,0.3);
-              border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.18);
-              padding: 4px 0; z-index: 999; min-width: 170px;
-            ">
-              <html:div id="__addonRef__-mineru-mgr-ctx-process" style="padding: 4px 12px; font-size: 11.5px; cursor: pointer;">Process This Item</html:div>
-              <html:div id="__addonRef__-mineru-mgr-ctx-show-folder" style="padding: 4px 12px; font-size: 11.5px; cursor: pointer;">Show in File Manager</html:div>
-              <html:div style="border-top: 1px solid rgba(128,128,128,0.2); margin: 2px 0;"></html:div>
-              <html:div id="__addonRef__-mineru-mgr-ctx-delete" style="padding: 4px 12px; font-size: 11.5px; cursor: pointer; color: #dc2626;">Delete MinerU Cache</html:div>
-            </html:div>
-          </html:div>
           </html:div>
         </html:div>
       </html:div>
-
     </html:div>
   </groupbox>
 </vbox>

@@ -109,12 +109,14 @@ describe("slash menu behavior", function () {
       "discover_related",
     ]);
     assert.notInclude(paperActions, "audit_library");
-    assert.includeMembers(libraryActions, [
+    assert.sameMembers(libraryActions, [
       "audit_library",
       "organize_unfiled",
-      "library_statistics",
-      "literature_review",
+      "auto_tag",
     ]);
     assert.notInclude(libraryActions, "discover_related");
+    assert.notInclude(libraryActions, "complete_metadata");
+    assert.notInclude(libraryActions, "library_statistics");
+    assert.notInclude(libraryActions, "literature_review");
   });
 });

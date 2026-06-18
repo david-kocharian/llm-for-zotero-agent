@@ -1,13 +1,17 @@
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { assert } from "chai";
 import {
-  buildCodexNativeResourceContextBlockForTests,
-  buildCodexNativeResourceSignatureForTests,
+  buildCodexNativeScopedMcpScopeForTests,
+  buildCodexNativeVisibleTurnContextBlockForTests,
   buildZoteroEnvironmentManifest,
   compactCodexAppServerConversation,
   compactCodexAppServerThread,
   NO_CODEX_APP_SERVER_THREAD_TO_COMPACT_MESSAGE,
   resolveCodexNativeApprovalRequest,
   resolveSafeCodexNativeApprovalRequest,
+  runCodexAppServerNativeTurn,
 } from "../src/codexAppServer/nativeClient";
 import {
   buildCodexNativePriorReadContextBlock,
@@ -18,10 +22,21 @@ import {
   CodexAppServerProcess,
   destroyCachedCodexAppServerProcess,
 } from "../src/utils/codexAppServerProcess";
+import { getUserSkillsRuntimeRootDir } from "../src/agent/skills/userSkills";
+import {
+  BUILTIN_SKILL_FILES,
+  parseSkill,
+  setUserSkills,
+} from "../src/agent/skills";
+import { clearCodexNativeSkillClassifierCache } from "../src/codexAppServer/nativeSkills";
+
+const here = dirname(fileURLToPath(import.meta.url));
 
 describe("Codex app-server native client", function () {
   afterEach(function () {
     clearCodexNativeReadLedger();
+    clearCodexNativeSkillClassifierCache();
+    setUserSkills([]);
   });
 
   it("sends native thread compact requests and waits for completion", async function () {
@@ -259,54 +274,31 @@ describe("Codex app-server native client", function () {
       mcpReady: true,
     });
     assert.include(manifest, "You are Codex");
-    assert.include(manifest, "Zotero resources and MCP tools are available when useful");
-    assert.include(manifest, "Use tools only when they materially improve the answer");
+    assert.include(
+      manifest,
+      "Zotero resources and MCP tools are available when useful",
+    );
+    assert.include(
+      manifest,
+      "Use tools only when they materially improve the answer",
+    );
     assert.include(manifest, "quote anchors like [[quote:Q_x7a2]]");
-    assert.include(manifest, "Do not call tools solely to discover quotes or page numbers");
+    assert.include(
+      manifest,
+      "Do not call tools solely to discover quotes or page numbers",
+    );
     assert.notInclude(manifest, "page N");
     assert.notInclude(manifest, "use shell creatively");
   });
 
-  it("describes selected tag resources in Codex native context", function () {
-    const block = buildCodexNativeResourceContextBlockForTests({
-      selectedTagContexts: [
-        {
-          name: "Stable",
-          normalizedName: "stable",
-          libraryID: 1,
-        },
-        {
-          name: "Untagged",
-          libraryID: 1,
-          scope: "untagged",
-        },
-      ],
-    });
-
-    assert.include(block, "Selected Zotero tag resources available this turn");
-    assert.include(block, 'name="Stable"');
-    assert.include(block, 'scope="untagged"');
-    assert.include(
-      block,
-      "Treat tag membership as the selected resource pool",
-    );
-    assert.notInclude(block, "Selected Zotero collection resources");
-  });
-
-  it("includes selected tags in Codex native resource signatures", function () {
-    const scope = {
-      conversationKey: 1,
-      libraryID: 1,
-      kind: "global" as const,
-    };
-    const baseSignature = buildCodexNativeResourceSignatureForTests({
-      scope,
-      profileSignature: "profile-native-tag-test",
-      skillContext: {},
-    });
-    const tagSignature = buildCodexNativeResourceSignatureForTests({
-      scope,
-      profileSignature: "profile-native-tag-test",
+  it("renders selected tag resources in Codex native visible context", function () {
+    const block = buildCodexNativeVisibleTurnContextBlockForTests({
+      scope: {
+        conversationKey: 1,
+        libraryID: 1,
+        libraryName: "My Library",
+        kind: "global",
+      },
       skillContext: {
         selectedTagContexts: [
           {
@@ -314,14 +306,735 @@ describe("Codex app-server native client", function () {
             normalizedName: "stable",
             libraryID: 1,
           },
+          {
+            name: "Untagged",
+            libraryID: 1,
+            scope: "untagged",
+          },
         ],
       },
     });
 
-    assert.notEqual(baseSignature, tagSignature);
-    assert.include(tagSignature, '"tags"');
-    assert.include(tagSignature, "Stable");
-    assert.include(tagSignature, '"tag:1:stable"');
+    assert.include(block, "Zotero context for this turn");
+    assert.include(block, "Library scope");
+    assert.include(block, "Tag 1");
+    assert.include(block, "Tag 2");
+    assert.include(block, 'name="Stable"');
+    assert.include(block, 'scope="untagged"');
+    assert.include(block, 'source="selected resource pool"');
+    assert.notInclude(block, "Collection 1");
+  });
+
+  it("renders pinned papers and selected collections in visible context", function () {
+    const block = buildCodexNativeVisibleTurnContextBlockForTests({
+      scope: {
+        conversationKey: 1,
+        libraryID: 1,
+        libraryName: "My Library",
+        kind: "paper",
+        paperTitle: "Active Drift Paper",
+        paperContext: {
+          itemId: 10,
+          contextItemId: 11,
+          title: "Active Drift Paper",
+          firstCreator: "Micou",
+          year: "2026",
+        },
+      },
+      skillContext: {
+        selectedPaperContexts: [
+          {
+            itemId: 10,
+            contextItemId: 11,
+            title: "Active Drift Paper",
+            firstCreator: "Micou",
+            year: "2026",
+          },
+        ],
+        pinnedPaperContexts: [
+          {
+            itemId: 20,
+            contextItemId: 21,
+            title: "Self-healing codes",
+            firstCreator: "Rule",
+            year: "2022",
+          },
+        ],
+        selectedCollectionContexts: [
+          { collectionId: 8, libraryID: 1, name: "Representation Drift" },
+        ],
+        selectedTagContexts: [
+          {
+            name: "Learning",
+            normalizedName: "learning",
+            libraryID: 1,
+          },
+        ],
+      },
+    });
+
+    assert.include(block, "Paper 1");
+    assert.include(block, 'title="Active Drift Paper"');
+    assert.include(block, "Paper 2");
+    assert.include(block, 'title="Self-healing codes"');
+    assert.include(block, "Collection 1");
+    assert.include(block, 'name="Representation Drift"');
+    assert.include(block, "Tag 1");
+    assert.include(block, 'name="Learning"');
+    assert.include(block, '"the second paper"');
+  });
+
+  it("prefixes current two-paper context into resumed Codex native turn input", async function () {
+    const processKey = "native-visible-context-turn-test";
+    const originalSpawn = CodexAppServerProcess.spawn;
+    const originalZotero = globalThis.Zotero;
+    let proc!: CodexAppServerProcess;
+    let turnStartParams: Record<string, unknown> | undefined;
+
+    proc = CodexAppServerProcess.forTest({
+      stdin: {
+        write: (chunk: string) => {
+          const request = JSON.parse(chunk) as {
+            id: number;
+            method: string;
+            params?: Record<string, unknown>;
+          };
+          const handleMessage = (
+            proc as unknown as {
+              handleMessage: (msg: Record<string, unknown>) => void;
+            }
+          ).handleMessage.bind(proc);
+          if (request.method === "thread/resume") {
+            setTimeout(
+              () =>
+                handleMessage({
+                  id: request.id,
+                  result: { thread: { id: "thread-visible" } },
+                }),
+              0,
+            );
+            return;
+          }
+          if (request.method === "turn/start") {
+            turnStartParams = request.params;
+            setTimeout(
+              () =>
+                handleMessage({
+                  id: request.id,
+                  result: { turn: { id: "turn-visible" } },
+                }),
+              0,
+            );
+            setTimeout(
+              () =>
+                handleMessage({
+                  method: "turn/completed",
+                  params: {
+                    turn: { id: "turn-visible", status: "completed" },
+                  },
+                }),
+              5,
+            );
+            return;
+          }
+          if (request.method === "thread/read") {
+            setTimeout(
+              () => handleMessage({ id: request.id, result: { turns: [] } }),
+              0,
+            );
+          }
+        },
+      },
+      kill: () => {},
+    });
+    CodexAppServerProcess.spawn = async () => proc;
+    (globalThis as typeof globalThis & { Zotero?: unknown }).Zotero = {
+      Prefs: {
+        get: (key: string) =>
+          key.endsWith(".codexAppServerZoteroMcpToolsEnabled")
+            ? false
+            : undefined,
+      },
+    };
+
+    try {
+      await runCodexAppServerNativeTurn({
+        scope: {
+          profileSignature: "profile-visible-test",
+          conversationKey: 6_000_000_030,
+          libraryID: 1,
+          libraryName: "My Library",
+          kind: "paper",
+          paperItemID: 10,
+          paperTitle:
+            "Statistics of cortical representational drift can enable robust readout",
+        },
+        model: "gpt-5.5",
+        messages: [
+          {
+            role: "system",
+            content: "SECRET SYSTEM PROMPT: do not show in chat trace.",
+          },
+          {
+            role: "user",
+            content: "does it make the two papers connected to each other?",
+          },
+        ],
+        skillContext: {
+          selectedPaperContexts: [
+            {
+              itemId: 10,
+              contextItemId: 11,
+              title:
+                "Statistics of cortical representational drift can enable robust readout",
+              firstCreator: "Micou",
+              year: "2026",
+            },
+          ],
+          pinnedPaperContexts: [
+            {
+              itemId: 20,
+              contextItemId: 21,
+              title:
+                "Self-healing codes: How stable neural populations can track continually reconfiguring neural representations",
+              firstCreator: "Rule",
+              year: "2022",
+            },
+          ],
+        },
+        hooks: {
+          loadProviderSessionId: async () => "thread-visible",
+          persistProviderSessionId: async () => undefined,
+        },
+        processKey,
+      });
+    } finally {
+      CodexAppServerProcess.spawn = originalSpawn;
+      (globalThis as typeof globalThis & { Zotero?: unknown }).Zotero =
+        originalZotero;
+      destroyCachedCodexAppServerProcess(processKey, proc);
+    }
+
+    assert.isOk(turnStartParams);
+    const inputText = JSON.stringify(turnStartParams?.input);
+    assert.include(inputText, "Zotero context for this turn");
+    assert.include(inputText, "Paper 1", inputText);
+    assert.include(
+      inputText,
+      "Statistics of cortical representational drift can enable robust readout",
+    );
+    assert.include(inputText, "Paper 2");
+    assert.include(inputText, "Self-healing codes");
+    assert.include(
+      inputText,
+      "does it make the two papers connected to each other?",
+    );
+    assert.notInclude(inputText, "SECRET SYSTEM PROMPT");
+    assert.notInclude(inputText, "Zotero environment for this turn");
+    assert.notInclude(inputText, "Notes directory configuration");
+  });
+
+  it("submits automatic skill matches as structured native Codex skill inputs", async function () {
+    setUserSkills([
+      parseSkill(BUILTIN_SKILL_FILES["simple-paper-qa.md"]),
+      parseSkill(BUILTIN_SKILL_FILES["evidence-based-qa.md"]),
+    ]);
+    const processKey = "native-auto-skill-input-test";
+    const originalSpawn = CodexAppServerProcess.spawn;
+    const originalZotero = globalThis.Zotero;
+    let proc!: CodexAppServerProcess;
+    let skillsListParams: Record<string, unknown> | undefined;
+    let threadStartParams: Record<string, unknown> | undefined;
+    let turnStartParams: Record<string, unknown> | undefined;
+    const activatedSkills: string[] = [];
+
+    (globalThis as typeof globalThis & { Zotero?: unknown }).Zotero = {
+      DataDirectory: { dir: "/tmp/lfz-native-auto-skill-data" },
+      Profile: { dir: "/tmp/lfz-native-auto-skill-profile" },
+      Prefs: {
+        get: (key: string) =>
+          key.endsWith(".codexAppServerZoteroMcpToolsEnabled")
+            ? false
+            : undefined,
+      },
+    };
+    const expectedCwd = getUserSkillsRuntimeRootDir();
+    const skillPath = `${expectedCwd}/.agents/skills/evidence-based-qa/SKILL.md`;
+
+    proc = CodexAppServerProcess.forTest({
+      stdin: {
+        write: (chunk: string) => {
+          const request = JSON.parse(chunk) as {
+            id: number;
+            method: string;
+            params?: Record<string, unknown>;
+          };
+          const handleMessage = (
+            proc as unknown as {
+              handleMessage: (msg: Record<string, unknown>) => void;
+            }
+          ).handleMessage.bind(proc);
+          if (request.method === "skills/list") {
+            skillsListParams = request.params;
+            setTimeout(
+              () =>
+                handleMessage({
+                  id: request.id,
+                  result: {
+                    data: [
+                      {
+                        cwd: expectedCwd,
+                        errors: [],
+                        skills: [
+                          {
+                            name: "evidence-based-qa",
+                            path: skillPath,
+                            enabled: true,
+                            description: "",
+                            scope: "local",
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                }),
+              0,
+            );
+            return;
+          }
+          if (request.method === "thread/start") {
+            threadStartParams = request.params;
+            setTimeout(
+              () =>
+                handleMessage({
+                  id: request.id,
+                  result: { thread: { id: "thread-auto-skill" } },
+                }),
+              0,
+            );
+            return;
+          }
+          if (request.method === "turn/start") {
+            turnStartParams = request.params;
+            setTimeout(
+              () =>
+                handleMessage({
+                  id: request.id,
+                  result: { turn: { id: "turn-auto-skill" } },
+                }),
+              0,
+            );
+            setTimeout(
+              () =>
+                handleMessage({
+                  method: "turn/completed",
+                  params: {
+                    turn: { id: "turn-auto-skill", status: "completed" },
+                  },
+                }),
+              5,
+            );
+            return;
+          }
+          if (request.method === "thread/read") {
+            setTimeout(
+              () => handleMessage({ id: request.id, result: { turns: [] } }),
+              0,
+            );
+          }
+        },
+      },
+      kill: () => {},
+    });
+    CodexAppServerProcess.spawn = async () => proc;
+
+    try {
+      await runCodexAppServerNativeTurn({
+        scope: {
+          profileSignature: "profile-native-auto-skill-test",
+          conversationKey: 6_000_000_032,
+          libraryID: 1,
+          kind: "paper",
+          paperItemID: 10,
+          activeContextItemId: 11,
+          paperTitle: "Native Skills Paper",
+        },
+        model: "gpt-5.5",
+        messages: [
+          {
+            role: "user",
+            content: "what method did they use in this paper",
+          },
+        ],
+        hooks: {
+          loadProviderSessionId: async () => undefined,
+          persistProviderSessionId: async () => undefined,
+        },
+        onSkillActivated: (skillId) => activatedSkills.push(skillId),
+        processKey,
+      });
+    } finally {
+      CodexAppServerProcess.spawn = originalSpawn;
+      (globalThis as typeof globalThis & { Zotero?: unknown }).Zotero =
+        originalZotero;
+      destroyCachedCodexAppServerProcess(processKey, proc);
+    }
+
+    assert.deepEqual(skillsListParams?.cwds, [expectedCwd]);
+    const input = turnStartParams?.input as Record<string, unknown>[];
+    assert.deepEqual(input[0], {
+      type: "skill",
+      name: "evidence-based-qa",
+      path: skillPath,
+    });
+    const turnStartText = JSON.stringify(turnStartParams);
+    assert.include(turnStartText, "what method did they use in this paper");
+    assert.notInclude(turnStartText, "$evidence-based-qa");
+    assert.notInclude(turnStartText, "$simple-paper-qa");
+    assert.notInclude(
+      JSON.stringify(threadStartParams),
+      "LLM-for-Zotero skills active for this turn",
+    );
+    assert.notInclude(
+      turnStartText,
+      "LLM-for-Zotero skills active for this turn",
+    );
+    assert.deepEqual(activatedSkills, ["evidence-based-qa"]);
+  });
+
+  it("converts explicit native skill text into structured skill input without duplication", async function () {
+    setUserSkills([parseSkill(BUILTIN_SKILL_FILES["write-note.md"])]);
+    const processKey = "native-explicit-skill-input-test";
+    const originalSpawn = CodexAppServerProcess.spawn;
+    const originalZotero = globalThis.Zotero;
+    let proc!: CodexAppServerProcess;
+    let turnStartParams: Record<string, unknown> | undefined;
+
+    (globalThis as typeof globalThis & { Zotero?: unknown }).Zotero = {
+      DataDirectory: { dir: "/tmp/lfz-native-explicit-skill-data" },
+      Profile: { dir: "/tmp/lfz-native-explicit-skill-profile" },
+      Prefs: {
+        get: (key: string) =>
+          key.endsWith(".codexAppServerZoteroMcpToolsEnabled")
+            ? false
+            : undefined,
+      },
+    };
+    const expectedCwd = getUserSkillsRuntimeRootDir();
+    const skillPath = `${expectedCwd}/.agents/skills/write-note/SKILL.md`;
+
+    proc = CodexAppServerProcess.forTest({
+      stdin: {
+        write: (chunk: string) => {
+          const request = JSON.parse(chunk) as {
+            id: number;
+            method: string;
+            params?: Record<string, unknown>;
+          };
+          const handleMessage = (
+            proc as unknown as {
+              handleMessage: (msg: Record<string, unknown>) => void;
+            }
+          ).handleMessage.bind(proc);
+          if (request.method === "skills/list") {
+            setTimeout(
+              () =>
+                handleMessage({
+                  id: request.id,
+                  result: {
+                    data: [
+                      {
+                        cwd: expectedCwd,
+                        errors: [],
+                        skills: [
+                          {
+                            name: "write-note",
+                            path: skillPath,
+                            enabled: true,
+                            description: "",
+                            scope: "local",
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                }),
+              0,
+            );
+            return;
+          }
+          if (request.method === "thread/start") {
+            setTimeout(
+              () =>
+                handleMessage({
+                  id: request.id,
+                  result: { thread: { id: "thread-explicit-skill" } },
+                }),
+              0,
+            );
+            return;
+          }
+          if (request.method === "turn/start") {
+            turnStartParams = request.params;
+            setTimeout(
+              () =>
+                handleMessage({
+                  id: request.id,
+                  result: { turn: { id: "turn-explicit-skill" } },
+                }),
+              0,
+            );
+            setTimeout(
+              () =>
+                handleMessage({
+                  method: "turn/completed",
+                  params: {
+                    turn: { id: "turn-explicit-skill", status: "completed" },
+                  },
+                }),
+              5,
+            );
+            return;
+          }
+          if (request.method === "thread/read") {
+            setTimeout(
+              () => handleMessage({ id: request.id, result: { turns: [] } }),
+              0,
+            );
+          }
+        },
+      },
+      kill: () => {},
+    });
+    CodexAppServerProcess.spawn = async () => proc;
+
+    try {
+      await runCodexAppServerNativeTurn({
+        scope: {
+          profileSignature: "profile-native-explicit-skill-test",
+          conversationKey: 6_000_000_033,
+          libraryID: 1,
+          kind: "global",
+        },
+        model: "gpt-5.5",
+        messages: [{ role: "user", content: "$write-note\n\nDraft a note." }],
+        skillContext: { forcedSkillIds: ["write-note"] },
+        hooks: {
+          loadProviderSessionId: async () => undefined,
+          persistProviderSessionId: async () => undefined,
+        },
+        processKey,
+      });
+    } finally {
+      CodexAppServerProcess.spawn = originalSpawn;
+      (globalThis as typeof globalThis & { Zotero?: unknown }).Zotero =
+        originalZotero;
+      destroyCachedCodexAppServerProcess(processKey, proc);
+    }
+
+    const input = turnStartParams?.input as Record<string, unknown>[];
+    assert.deepEqual(input[0], {
+      type: "skill",
+      name: "write-note",
+      path: skillPath,
+    });
+    const turnStartText = JSON.stringify(turnStartParams);
+    assert.include(turnStartText, "Draft a note.");
+    assert.notInclude(turnStartText, "$write-note");
+  });
+
+  it("starts native Codex turns from the profile-scoped skills workspace and omits legacy skill injection", async function () {
+    const processKey = "native-skills-cwd-turn-test";
+    const originalSpawn = CodexAppServerProcess.spawn;
+    const originalZotero = globalThis.Zotero;
+    let proc!: CodexAppServerProcess;
+    let threadStartParams: Record<string, unknown> | undefined;
+    let turnStartParams: Record<string, unknown> | undefined;
+
+    (globalThis as typeof globalThis & { Zotero?: unknown }).Zotero = {
+      DataDirectory: { dir: "/tmp/lfz-native-skills-data" },
+      Profile: { dir: "/tmp/lfz-native-skills-profile" },
+      Prefs: {
+        get: (key: string) =>
+          key.endsWith(".codexAppServerZoteroMcpToolsEnabled")
+            ? false
+            : undefined,
+      },
+    };
+    const expectedCwd = getUserSkillsRuntimeRootDir();
+
+    proc = CodexAppServerProcess.forTest({
+      stdin: {
+        write: (chunk: string) => {
+          const request = JSON.parse(chunk) as {
+            id: number;
+            method: string;
+            params?: Record<string, unknown>;
+          };
+          const handleMessage = (
+            proc as unknown as {
+              handleMessage: (msg: Record<string, unknown>) => void;
+            }
+          ).handleMessage.bind(proc);
+          if (request.method === "thread/start") {
+            threadStartParams = request.params;
+            setTimeout(
+              () =>
+                handleMessage({
+                  id: request.id,
+                  result: { thread: { id: "thread-skills-cwd" } },
+                }),
+              0,
+            );
+            return;
+          }
+          if (request.method === "turn/start") {
+            turnStartParams = request.params;
+            setTimeout(
+              () =>
+                handleMessage({
+                  id: request.id,
+                  result: { turn: { id: "turn-skills-cwd" } },
+                }),
+              0,
+            );
+            setTimeout(
+              () =>
+                handleMessage({
+                  method: "turn/completed",
+                  params: {
+                    turn: { id: "turn-skills-cwd", status: "completed" },
+                  },
+                }),
+              5,
+            );
+            return;
+          }
+          if (request.method === "thread/read") {
+            setTimeout(
+              () => handleMessage({ id: request.id, result: { turns: [] } }),
+              0,
+            );
+          }
+        },
+      },
+      kill: () => {},
+    });
+    CodexAppServerProcess.spawn = async () => proc;
+
+    try {
+      await runCodexAppServerNativeTurn({
+        scope: {
+          profileSignature: "profile-native-skills-cwd-test",
+          conversationKey: 6_000_000_031,
+          libraryID: 1,
+          kind: "global",
+        },
+        model: "gpt-5.5",
+        messages: [{ role: "user", content: "$write-note\n\nDraft a note." }],
+        hooks: {
+          loadProviderSessionId: async () => undefined,
+          persistProviderSessionId: async () => undefined,
+        },
+        processKey,
+      });
+    } finally {
+      CodexAppServerProcess.spawn = originalSpawn;
+      (globalThis as typeof globalThis & { Zotero?: unknown }).Zotero =
+        originalZotero;
+      destroyCachedCodexAppServerProcess(processKey, proc);
+    }
+
+    assert.equal(threadStartParams?.cwd, expectedCwd);
+    assert.equal(turnStartParams?.cwd, expectedCwd);
+    assert.include(String(threadStartParams?.cwd), "/agent-runtime/");
+    const threadStartText = JSON.stringify(threadStartParams);
+    const turnStartText = JSON.stringify(turnStartParams);
+    assert.notInclude(
+      threadStartText,
+      "LLM-for-Zotero skills active for this turn",
+    );
+    assert.notInclude(
+      turnStartText,
+      "LLM-for-Zotero skills active for this turn",
+    );
+  });
+
+  it("does not contain the removed Codex native resource lifecycle states", function () {
+    const source = readFileSync(
+      resolve(here, "../src/codexAppServer/nativeClient.ts"),
+      "utf8",
+    );
+
+    assert.notInclude(source, "thin-followup");
+    assert.notInclude(source, "resources-delta");
+    assert.notInclude(source, "resources-changed");
+    assert.notInclude(source, "CodexNativeLifecycle");
+  });
+
+  it("builds Codex native scoped MCP payload with canonical paper contexts", function () {
+    const selectedPaper = {
+      itemId: 11,
+      contextItemId: 12,
+      title: "Selected Native Paper",
+      attachmentTitle: "Selected Native PDF",
+      citationKey: "nativeSelected2026",
+      firstCreator: "Ng",
+      year: "2026",
+      contentSourceMode: "mineru" as const,
+      mineruCacheDir: "/tmp/mineru-cache/native-selected",
+    };
+    const fullTextPaper = {
+      itemId: 21,
+      contextItemId: 22,
+      title: "Full Text Native Paper",
+      attachmentTitle: "Full Text Native PDF",
+      firstCreator: "Lee",
+      year: "2025",
+      contentSourceMode: "markdown" as const,
+      mineruCacheDir: "/tmp/mineru-cache/native-full-text",
+    };
+    const pinnedPaper = {
+      itemId: 31,
+      contextItemId: 32,
+      title: "Pinned Native Paper",
+      attachmentTitle: "Pinned Native PDF",
+      firstCreator: "Chen",
+      year: "2024",
+      contentSourceMode: "text" as const,
+      mineruCacheDir: "/tmp/mineru-cache/native-pinned",
+    };
+
+    const scope = buildCodexNativeScopedMcpScopeForTests({
+      scope: {
+        conversationKey: 1,
+        libraryID: 1,
+        kind: "global",
+      },
+      profileSignature: "profile-native-paper-scope",
+      userText: "read these papers",
+      skillContext: {
+        selectedPaperContexts: [selectedPaper],
+        fullTextPaperContexts: [fullTextPaper],
+        pinnedPaperContexts: [pinnedPaper],
+        selectedCollectionContexts: [
+          { collectionId: 9, libraryID: 1, name: "Native Collection" },
+        ],
+        selectedTagContexts: [
+          { name: "Stable", normalizedName: "stable", libraryID: 1 },
+        ],
+      },
+    });
+
+    assert.deepEqual(scope.selectedPaperContexts, [selectedPaper]);
+    assert.deepEqual(scope.fullTextPaperContexts, [fullTextPaper]);
+    assert.deepEqual(scope.pinnedPaperContexts, [pinnedPaper]);
+    assert.deepEqual(scope.selectedCollectionContexts, [
+      { collectionId: 9, libraryID: 1, name: "Native Collection" },
+    ]);
+    assert.deepEqual(scope.selectedTagContexts, [
+      { name: "Stable", normalizedName: "stable", libraryID: 1 },
+    ]);
   });
 
   it("records successful native paper reads for context reuse hints", function () {

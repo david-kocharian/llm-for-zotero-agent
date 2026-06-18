@@ -4,7 +4,6 @@ import { clearAgentTranscript } from "../../agent/store/transcriptStore";
 import { clearPersistedAgentToolResultHandles } from "../../agent/store/toolResultHandles";
 import { clearPersistedAgentEvidence } from "../../agent/context/cacheManagement";
 import { clearPersistedAgentCoverage } from "../../agent/context/coverageLedger";
-import { clearAgentResourceLifecycleState } from "../../agent/context/resourceLifecycle";
 
 export type AgentConversationCleanupDeps = {
   clearAgentToolCaches?: (conversationKey: number) => void;
@@ -22,7 +21,6 @@ export async function clearAgentConversationState(
     clearPersistedAgentEvidence(conversationKey),
     clearPersistedAgentCoverage(conversationKey),
   ]);
-  clearAgentResourceLifecycleState(conversationKey);
 }
 
 export async function clearDeletedAgentConversationState(

@@ -1,4 +1,5 @@
 import type { ConversationSystem } from "../../../../shared/types";
+import { resolveContextAttachmentSupportFromMetadata } from "../../contextAttachmentSupport";
 import { sanitizeText } from "../../textUtils";
 
 export const GLOBAL_HISTORY_UNDO_WINDOW_MS = 6_000;
@@ -67,6 +68,8 @@ export type HistoryPaperItemLike = {
   parentID?: unknown;
   deleted?: unknown;
   firstCreator?: unknown;
+  attachmentContentType?: unknown;
+  attachmentFilename?: unknown;
   isAttachment?: () => boolean;
   isRegularItem?: () => boolean;
   isNote?: () => boolean;
@@ -234,6 +237,20 @@ function isHistoryPaperItemDeleted(
   return Boolean(item?.deleted);
 }
 
+function isSupportedStandaloneHistoryAttachment(
+  item: HistoryPaperItemLike | null | undefined,
+): boolean {
+  if (!item?.isAttachment?.() || normalizeHistoryPaperItemID(item.parentID)) {
+    return false;
+  }
+  return Boolean(
+    resolveContextAttachmentSupportFromMetadata({
+      contentType: item.attachmentContentType,
+      filename: item.attachmentFilename,
+    }),
+  );
+}
+
 export function resolveHistoryEntryPaperBaseItem<
   T extends HistoryPaperItemLike,
 >(
@@ -264,6 +281,13 @@ export function resolveHistoryEntryPaperBaseItem<
       } catch (_err) {
         return null;
       }
+    }
+    if (
+      isAttachment &&
+      isSupportedStandaloneHistoryAttachment(item) &&
+      !isHistoryPaperItemDeleted(item)
+    ) {
+      return item;
     }
   }
 

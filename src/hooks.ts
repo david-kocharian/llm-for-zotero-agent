@@ -260,6 +260,12 @@ async function onStartup() {
 
   // Mark initialized as true to confirm plugin loading status
   // outside of the plugin (e.g. scaffold testing process)
+  if (__env__ === "test" || __env__ === "development") {
+    const { installWorkflowTestHarness } = await import(
+      "./modules/contextPanel/workflowTestHarness"
+    );
+    installWorkflowTestHarness(addon);
+  }
   addon.data.initialized = true;
 
   scheduleDeferredStartupWork(conversationStoreReadiness);

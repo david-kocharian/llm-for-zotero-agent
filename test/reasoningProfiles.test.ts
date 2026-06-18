@@ -2,6 +2,7 @@ import { assert } from "chai";
 import {
   getAnthropicReasoningProfileForModel,
   getDeepseekReasoningProfileForModel,
+  getMimoReasoningProfileForModel,
   getOpenAIReasoningProfileForModel,
   getReasoningDefaultLevelForModel,
   getRuntimeReasoningOptionsForModel,
@@ -159,6 +160,65 @@ describe("reasoningProfiles", function () {
           { provider: "deepseek", level: "default" },
           false,
           "deepseek-reasoner",
+        ),
+        {
+          extra: { thinking: { type: "enabled" } },
+          omitTemperature: false,
+        },
+      );
+    });
+  });
+
+  describe("Xiaomi MiMo profiles", function () {
+    it("exposes opt-in thinking for documented MiMo models", function () {
+      for (const modelName of [
+        "mimo-v2.5-pro",
+        "mimo-v2.5",
+        "mimo-v2-pro",
+        "mimo-v2-omni",
+        "mimo-v2-flash",
+      ]) {
+        const options = getRuntimeReasoningOptionsForModel("mimo", modelName);
+        assert.deepEqual(
+          options.map((option) => option.level),
+          ["default", "high"],
+          modelName,
+        );
+        assert.deepEqual(
+          options.map((option) => option.label),
+          ["default", "enabled"],
+          modelName,
+        );
+      }
+
+      const profile = getMimoReasoningProfileForModel("mimo-v2.5-pro");
+      assert.equal(profile.defaultLevel, "default");
+      assert.isNull(profile.levelToThinkingType.default);
+      assert.equal(profile.levelToThinkingType.high, "enabled");
+      assert.deepEqual(
+        getRuntimeReasoningOptionsForModel("mimo", "mimo-unknown"),
+        [],
+      );
+    });
+
+    it("builds conservative MiMo thinking payloads", function () {
+      assert.deepEqual(
+        buildReasoningPayload(
+          { provider: "mimo", level: "default" },
+          false,
+          "mimo-v2.5-pro",
+          "https://api.xiaomimimo.com/v1",
+          "openai_chat_compat",
+        ),
+        { extra: {}, omitTemperature: false },
+      );
+      assert.deepEqual(
+        buildReasoningPayload(
+          { provider: "mimo", level: "high" },
+          false,
+          "mimo-v2.5-pro",
+          "https://api.xiaomimimo.com/v1",
+          "openai_chat_compat",
         ),
         {
           extra: { thinking: { type: "enabled" } },

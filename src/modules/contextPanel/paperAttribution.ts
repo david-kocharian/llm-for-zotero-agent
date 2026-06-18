@@ -2,7 +2,8 @@ import {
   isPdfContextAttachment,
   resolveContextAttachmentSupport,
 } from "./contextAttachmentSupport";
-import type { TextAttachmentSourceMode } from "./textAttachmentExtraction";
+import { formatContextAttachmentSourceType } from "./contextSourceModes";
+import type { TextAttachmentSourceMode } from "./contextAttachmentTypes";
 import type { PaperContentSourceMode, PaperContextRef } from "./types";
 
 function normalizeText(value: unknown): string {
@@ -163,11 +164,7 @@ export function isTextLikeAttachmentSourceMode(
 export function formatAttachmentSourceType(
   mode: PaperContentSourceMode | undefined | null,
 ): string {
-  if (mode === "markdown") return "Markdown attachment";
-  if (mode === "html") return "HTML attachment";
-  if (mode === "txt") return "TXT attachment";
-  if (mode === "docx") return "DOCX attachment";
-  return "Attachment";
+  return formatContextAttachmentSourceType(mode);
 }
 
 export function resolvePaperContextDisplayRef(
@@ -301,6 +298,8 @@ export function buildPaperQuoteCitationGuidance(
         formatPaperSourceLabel(paperContext),
         "",
         "- If exact passages are available, include short blockquotes when useful for grounding the answer.",
+        "- Direct quote text must be copied verbatim in the original source language; never translate quote text to match the user's language.",
+        "- Put any translation outside the blockquote as explanation, not as the source quote.",
         "- Put the source label on the next non-empty line after the blockquote, before any commentary.",
         "- Never put headings, bullets, interpretation, or other prose between a quoted passage and its source label; clickable quote citations depend on this adjacency.",
         "- Use the EXACT source label above. Do NOT translate or romanize author names.",
@@ -315,6 +314,8 @@ export function buildPaperQuoteCitationGuidance(
       formatPaperSourceLabel(paperContext),
       "",
       "- If exact passages are available, include short blockquotes when useful for grounding the answer.",
+      "- Direct quote text must be copied verbatim in the original source language; never translate quote text to match the user's language.",
+      "- Put any translation outside the blockquote as explanation, not as the source quote.",
       "- Put the source label on the next non-empty line after the blockquote, before any commentary.",
       "- Never put headings, bullets, interpretation, or other prose between a quoted passage and its source label; clickable quote citations depend on this adjacency.",
       "- Use the EXACT source label above. Do NOT translate or romanize author names.",
@@ -329,6 +330,8 @@ export function buildPaperQuoteCitationGuidance(
     "(Author, Year)",
     "",
     "- If exact passages are available, include short blockquotes when useful for grounding the answer.",
+    "- Direct quote text must be copied verbatim in the original source language; never translate quote text to match the user's language.",
+    "- Put any translation outside the blockquote as explanation, not as the source quote.",
     "- Put the source label on the next non-empty line after the blockquote, before any commentary.",
     "- Never put headings, bullets, interpretation, or other prose between a quoted passage and its source label; clickable quote citations depend on this adjacency.",
     "- Use the EXACT source label provided for each paper. Do NOT translate or romanize author names.",
@@ -346,6 +349,8 @@ export function buildGenericSourceQuoteCitationGuidance(): string[] {
     "(Source label)",
     "",
     "- If exact passages are available, include short blockquotes when useful for grounding the answer.",
+    "- Direct quote text must be copied verbatim in the original source language; never translate quote text to match the user's language.",
+    "- Put any translation outside the blockquote as explanation, not as the source quote.",
     "- Put the source label on the next non-empty line after the blockquote, before any commentary.",
     "- Never put headings, bullets, interpretation, or other prose between a quoted passage and its source label; clickable quote citations depend on this adjacency.",
     "- Use the EXACT source label provided for each source. Do NOT translate or romanize author names.",

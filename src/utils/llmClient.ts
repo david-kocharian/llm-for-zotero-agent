@@ -11,6 +11,7 @@ import {
   getDeepseekReasoningProfileForModel,
   getGeminiReasoningProfileForModel,
   getGrokReasoningProfileForModel,
+  getMimoReasoningProfileForModel,
   getOpenAIReasoningProfileForModel,
   getQwenReasoningProfileForModel,
   getReasoningDefaultLevelForModel,
@@ -2122,6 +2123,21 @@ export function buildReasoningPayload(
       extra,
       omitTemperature:
         thinkingType === "enabled" && profile.omitTemperatureWhenThinking,
+    };
+  }
+
+  if (reasoning.provider === "mimo") {
+    const profile = getMimoReasoningProfileForModel(modelName);
+    const thinkingType =
+      profile.levelToThinkingType[reasoning.level] ??
+      profile.levelToThinkingType[profile.defaultLevel] ??
+      null;
+    if (!thinkingType) {
+      return emptyReasoningPayload();
+    }
+    return {
+      extra: { thinking: { type: thinkingType } },
+      omitTemperature: false,
     };
   }
 

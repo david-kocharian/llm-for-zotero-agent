@@ -726,6 +726,18 @@ function normalizeCodexAppServerFieldText(
   return text ? text.slice(0, maxLength) : undefined;
 }
 
+function redactCodexAppServerUserMessageTransportContext(
+  value: string | undefined,
+): string | undefined {
+  const text = normalizeCodexAppServerText(value);
+  if (!text) return undefined;
+  if (!/^Zotero context for this turn:/i.test(text.trimStart())) return text;
+  const marker = text.match(/\n\nUser request:\n/i);
+  if (!marker || marker.index === undefined) return "User request";
+  const requestText = text.slice(marker.index + marker[0].length).trim();
+  return requestText || "User request";
+}
+
 function normalizeCodexAppServerRawString(
   value: unknown,
   maxLength = 4000,
@@ -865,26 +877,39 @@ function extractCodexAppServerItem(
     receiver_thread_ids?: unknown;
   };
   const status = typeof item.status === "string" ? item.status.trim() : "";
+  const type =
+    typeof item.type === "string" && item.type.trim()
+      ? item.type.trim().toLowerCase()
+      : undefined;
+  const role =
+    typeof item.role === "string" && item.role.trim()
+      ? item.role.trim().toLowerCase()
+      : undefined;
+  const rawSummary = normalizeCodexAppServerText(item.summary) || undefined;
+  const rawDetails =
+    normalizeCodexAppServerText(item.content) ||
+    normalizeCodexAppServerText(item.reasoning) ||
+    normalizeCodexAppServerText(item.text) ||
+    undefined;
+  const isUserMessageItem =
+    role === "user" ||
+    (type || "").replace(/[-_\s]+/g, "").toLowerCase() === "usermessage";
+  const summary = isUserMessageItem
+    ? redactCodexAppServerUserMessageTransportContext(rawSummary)
+    : rawSummary;
+  const details = isUserMessageItem
+    ? redactCodexAppServerUserMessageTransportContext(rawDetails)
+    : rawDetails;
   return {
     id:
       typeof item.id === "string" && item.id.trim()
         ? item.id.trim()
         : undefined,
-    type:
-      typeof item.type === "string" && item.type.trim()
-        ? item.type.trim().toLowerCase()
-        : undefined,
-    role:
-      typeof item.role === "string" && item.role.trim()
-        ? item.role.trim().toLowerCase()
-        : undefined,
+    type,
+    role,
     status: status || undefined,
-    summary: normalizeCodexAppServerText(item.summary) || undefined,
-    details:
-      normalizeCodexAppServerText(item.content) ||
-      normalizeCodexAppServerText(item.reasoning) ||
-      normalizeCodexAppServerText(item.text) ||
-      undefined,
+    summary,
+    details,
     error:
       normalizeCodexAppServerFieldText(item.error, 500) ||
       normalizeCodexAppServerFieldText(

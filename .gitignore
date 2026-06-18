@@ -19,6 +19,7 @@ logs
 .claude/
 
 # Local design notes
+/docs/
 /docs/claude-session-isolation-design.md
 /docs/claude-code-mode-user-guide.md
 /docs/claude-code-mode-user-guide.zh-CN.md

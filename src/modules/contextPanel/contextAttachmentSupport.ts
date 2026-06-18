@@ -1,23 +1,11 @@
-import {
-  resolveTextAttachmentSourceModeFromMetadata,
-  type TextAttachmentSourceMode,
-} from "./textAttachmentExtraction";
-
-export type SupportedContextAttachmentType = "pdf" | TextAttachmentSourceMode;
-export type ContextAttachmentReadableVia = "paper_read" | "read_attachment";
-
-export type ContextAttachmentSupport =
-  | {
-      kind: "pdf";
-      attachmentType: "pdf";
-      readableVia: "paper_read";
-    }
-  | {
-      kind: "text";
-      attachmentType: TextAttachmentSourceMode;
-      contentSourceMode: TextAttachmentSourceMode;
-      readableVia: "read_attachment";
-    };
+import { resolveTextAttachmentSourceModeFromMetadata } from "./textAttachmentExtraction";
+import type { ContextAttachmentSupport } from "./contextAttachmentTypes";
+export type {
+  ContextAttachmentReadableVia,
+  ContextAttachmentSupport,
+  SupportedContextAttachmentType,
+  TextAttachmentSourceMode,
+} from "./contextAttachmentTypes";
 
 function normalizeMetadataText(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase() : "";

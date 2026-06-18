@@ -143,10 +143,7 @@ describe("action compatibility after tool refactors", function () {
     assert.isTrue(result.ok);
     if (!result.ok) return;
     assert.equal(searchArgs?.doi, "10.1000/seed");
-    assert.deepEqual(
-      importArgs?.identifiers,
-      ["10.1000/r1", "10.1000/r2"],
-    );
+    assert.deepEqual(importArgs?.identifiers, ["10.1000/r1", "10.1000/r2"]);
     assert.deepEqual(result.output, {
       seedTitle: "Seed Paper",
       discovered: 2,
@@ -214,12 +211,14 @@ describe("action compatibility after tool refactors", function () {
       unfiled: 3,
       moved: 2,
       remaining: 1,
+      processed: 3,
+      stopped: undefined,
     });
     assert.include(
       progress
         .filter((event) => event.type === "step_done")
         .map((event) => ("summary" in event ? event.summary : "")),
-      "2 collections available",
+      "Moved 2 items",
     );
   });
 
@@ -247,45 +246,54 @@ describe("action compatibility after tool refactors", function () {
     );
 
     const { ctx } = createActionContext(registry);
+    let invalidations = 0;
+    let listedAfterInvalidation = false;
     ctx.zoteroGateway = {
-      listBibliographicItemTargets: async () => ({
-        items: [
-          {
-            itemId: 1,
-            itemType: "journalArticle",
-            title: "Paper One",
-            firstCreator: "Alice Example",
-            year: "2024",
-            attachments: [],
-            tags: [],
-            collectionIds: [],
-          },
-          {
-            itemId: 2,
-            itemType: "journalArticle",
-            title: "Paper Two",
-            firstCreator: "Bob Example",
-            year: "2023",
-            attachments: [],
-            tags: ["existing"],
-            collectionIds: [],
-          },
-          {
-            itemId: 3,
-            itemType: "journalArticle",
-            title: "Paper Three",
-            firstCreator: "Cara Example",
-            year: "2022",
-            attachments: [],
-            tags: [],
-            collectionIds: [],
-          },
-        ],
-        totalCount: 3,
-      }),
+      invalidateLibrarySearchCache: () => {
+        invalidations += 1;
+      },
+      listBibliographicItemTargets: async () => {
+        listedAfterInvalidation = invalidations > 0;
+        return {
+          items: [
+            {
+              itemId: 1,
+              itemType: "journalArticle",
+              title: "Hippocampal Memory Consolidation",
+              firstCreator: "Alice Example",
+              year: "2024",
+              attachments: [],
+              tags: [],
+              collectionIds: [],
+            },
+            {
+              itemId: 2,
+              itemType: "journalArticle",
+              title: "Neural Drift Dynamics",
+              firstCreator: "Bob Example",
+              year: "2023",
+              attachments: [],
+              tags: ["existing"],
+              collectionIds: [],
+            },
+            {
+              itemId: 3,
+              itemType: "journalArticle",
+              title: "Cortical Representational Stability",
+              firstCreator: "Cara Example",
+              year: "2022",
+              attachments: [],
+              tags: [],
+              collectionIds: [],
+            },
+          ],
+          totalCount: 3,
+        };
+      },
       getEditableArticleMetadata: () => ({
         fields: {
-          abstractNote: "Abstract",
+          abstractNote:
+            "Memory consolidation and neural drift dynamics in cortical representations.",
         },
       }),
       getItem: (itemId: number) => ({ id: itemId }),
@@ -294,11 +302,93 @@ describe("action compatibility after tool refactors", function () {
 
     assert.isTrue(result.ok);
     if (!result.ok) return;
-    assert.deepEqual(result.output, {
+    assert.isAtLeast(invalidations, 1);
+    assert.isTrue(listedAfterInvalidation);
+    assert.deepInclude(result.output, {
       targeted: 3,
       tagged: 2,
       skipped: 1,
     });
+  });
+
+  it("auto_tag refresh reloads library targets before rebuilding the current page", async function () {
+    const registry = new AgentToolRegistry();
+    let applyCalls = 0;
+
+    registry.register(
+      createStubTool(
+        {
+          name: "apply_tags",
+          description: "apply tags",
+          inputSchema: { type: "object" },
+          mutability: "write",
+          requiresConfirmation: true,
+        },
+        (args) => ({ ok: true, value: args as Record<string, unknown> }),
+        async () => ({
+          result: {
+            selectedCount: 1,
+            updatedCount: 1,
+            skippedCount: 0,
+          },
+        }),
+      ),
+    );
+    registry.getTool("apply_tags")!.createPendingAction = () => ({
+      toolName: "apply_tags",
+      mode: "review",
+      title: "Page 1 of 1: Add tags",
+      fields: [],
+      actions: [
+        { id: "confirm", label: "Confirm" },
+        { id: "refresh", label: "Refresh", approved: false },
+        { id: "cancel", label: "Cancel", approved: false },
+      ],
+      defaultActionId: "confirm",
+      cancelActionId: "cancel",
+    });
+
+    const { ctx } = createActionContext(registry, async () => {
+      applyCalls += 1;
+      return applyCalls === 1
+        ? { approved: false, actionId: "refresh", data: {} }
+        : { approved: true, actionId: "confirm", data: {} };
+    });
+    let listCalls = 0;
+    ctx.zoteroGateway = {
+      invalidateLibrarySearchCache: () => undefined,
+      listBibliographicItemTargets: async () => {
+        listCalls += 1;
+        const title =
+          listCalls === 1
+            ? "Initial Hippocampal Memory"
+            : "Fresh Collection Item";
+        return {
+          items: [
+            {
+              itemId: listCalls,
+              itemType: "journalArticle",
+              title,
+              firstCreator: "Alice Example",
+              year: "2024",
+              attachments: [],
+              tags: [],
+              collectionIds: [],
+            },
+          ],
+          totalCount: 1,
+        };
+      },
+      getEditableArticleMetadata: () => ({
+        fields: { abstractNote: "memory dynamics" },
+      }),
+      getItem: (itemId: number) => ({ id: itemId }),
+    } as never;
+
+    const result = await autoTagAction.execute({}, ctx);
+
+    assert.isTrue(result.ok);
+    assert.isAtLeast(listCalls, 2);
   });
 
   it("audit_library still succeeds when save_note returns status without a note id", async function () {
@@ -328,8 +418,8 @@ describe("action compatibility after tool refactors", function () {
                 },
                 creators: [],
               },
-              tags: [],
               attachments: [],
+              tags: [],
             },
           ],
         }),
@@ -354,7 +444,7 @@ describe("action compatibility after tool refactors", function () {
       ),
     );
 
-    const { ctx } = createActionContext(registry);
+    const { ctx, progress } = createActionContext(registry);
     const result = await auditLibraryAction.execute({ saveNote: true }, ctx);
 
     assert.isTrue(result.ok);
@@ -366,12 +456,30 @@ describe("action compatibility after tool refactors", function () {
         {
           itemId: 11,
           title: "Incomplete Paper",
-          missingFields: ["abstract", "DOI/URL", "tags", "PDF"],
+          missingFields: [
+            "creators",
+            "date/year",
+            "abstract",
+            "DOI/URL",
+            "publication venue",
+            "tags",
+            "PDF",
+          ],
         },
       ],
       metadataFixed: 0,
+      fixable: 0,
+      skipped: 1,
+      remaining: 1,
+      stopped: undefined,
       noteId: undefined,
     });
+    assert.notInclude(
+      progress
+        .filter((event) => event.type === "step_done")
+        .map((event) => ("summary" in event ? event.summary : "")),
+      "No fixable metadata changes for this page",
+    );
   });
 
   it("discover_related surfaces failure when every search mode fails", async function () {
@@ -425,6 +533,94 @@ describe("action compatibility after tool refactors", function () {
       result.ok,
       "action must fail when every search mode fails (currently collapses to empty-success)",
     );
+  });
+
+  it("discover_related treats load more as best-effort and hides it once results stop growing to the limit", async function () {
+    const registry = new AgentToolRegistry();
+    const searchedLimits: number[] = [];
+
+    registry.register(
+      createStubTool(
+        {
+          name: "read_library",
+          description: "read",
+          inputSchema: { type: "object" },
+          mutability: "read",
+          requiresConfirmation: false,
+        },
+        (args) => ({ ok: true, value: args as Record<string, unknown> }),
+        async () => ({
+          results: {
+            "101": {
+              metadata: {
+                title: "Seed Paper",
+                fields: { DOI: "10.1000/seed" },
+                creators: [],
+              },
+            },
+          },
+        }),
+      ),
+    );
+
+    registry.register(
+      createStubTool(
+        {
+          name: "search_literature_online",
+          description: "search",
+          inputSchema: { type: "object" },
+          mutability: "read",
+          requiresConfirmation: false,
+        },
+        (args) => ({ ok: true, value: args as Record<string, unknown> }),
+        async (input) => {
+          const limit = Number(input.limit || 20);
+          searchedLimits.push(limit);
+          const returnedCount = limit >= 40 ? 21 : limit;
+          return {
+            results: Array.from({ length: returnedCount }, (_entry, index) => ({
+              title: `Related ${index + 1}`,
+              doi: `10.1000/${input.mode}-${index + 1}`,
+              authors: [],
+              year: 2024,
+            })),
+          };
+        },
+      ),
+    );
+
+    let reviewCount = 0;
+    const { ctx } = createActionContext(
+      registry,
+      async (_requestId, action) => {
+        const field = action.fields[0] as {
+          loadMoreActionId?: string;
+          loadMoreLabel?: string;
+        };
+        reviewCount += 1;
+        if (reviewCount === 1) {
+          assert.equal(field.loadMoreActionId, "load_more");
+          assert.equal(field.loadMoreLabel, "Load more");
+          return {
+            approved: true,
+            actionId: "load_more",
+            data: { selectedPaperIds: [] },
+          };
+        }
+        assert.isUndefined(field.loadMoreActionId);
+        assert.equal(field.loadMoreLabel, "Load more");
+        return {
+          approved: false,
+          actionId: "cancel",
+          data: { selectedPaperIds: [] },
+        };
+      },
+    );
+
+    const result = await discoverRelatedAction.execute({ itemId: 101 }, ctx);
+
+    assert.isTrue(result.ok);
+    assert.includeMembers(searchedLimits, [20, 40]);
   });
 
   it("discover_related does not import when the load_more iteration cap is hit", async function () {

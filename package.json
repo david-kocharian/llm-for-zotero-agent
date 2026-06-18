@@ -1,7 +1,7 @@
 {
   "name": "llm-for-zotero",
   "type": "module",
-  "version": "3.8.16",
+  "version": "3.8.19",
   "description": "AI research agent rooted in your Zotero library",
   "config": {
     "addonName": "llm-for-zotero",
@@ -30,6 +30,7 @@
     "typecheck": "tsc --noEmit",
     "test": "npm run typecheck && zotero-plugin test",
     "test:unit": "npx tsx node_modules/mocha/bin/mocha.js --require ./test/register.cjs 'test/**/*.test.ts'",
+    "test:workflow": "node scripts/run-workflow-tests.mjs",
     "update-deps": "npm update --save"
   },
   "dependencies": {

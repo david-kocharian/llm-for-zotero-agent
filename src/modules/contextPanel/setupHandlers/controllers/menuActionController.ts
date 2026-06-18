@@ -3,36 +3,48 @@ import {
   copyGeneratedImageToClipboard,
   copyRenderedMarkdownToClipboard,
   copyTextToClipboard,
+  resolveAssistantResponseMenuContent,
 } from "../../chat";
+import { getMessageCitationPaperContexts } from "../../citationContexts";
 import {
   buildChatHistoryNotePayload,
-  createNoteFromAssistantText,
+  createAssistantResponseNote,
   createNoteFromChatHistory,
-  createStandaloneNoteFromAssistantText,
   createStandaloneNoteFromChatHistory,
 } from "../../notes";
 import { isGlobalPortalItem } from "../../portalScope";
 import { isClaudeGlobalPortalItem } from "../../../../claudeCode/portal";
 import { positionMenuBelowButton } from "../../menuPositioning";
+import { renderMermaidSourceToSvg } from "../../renderedMarkdown";
 import { setStatus } from "../../textUtils";
 import type {
   ConversationSystem,
   GeneratedChatImage,
   QuoteCitation,
 } from "../../../../shared/types";
-import type { ChatRuntimeMode, Message } from "../../types";
+import type { ChatRuntimeMode, Message, PaperContextRef } from "../../types";
+import { setResponseActionRunner } from "../../state";
 
-type ResponseMenuTarget = {
+export type ResponseMenuTarget = {
   item: Zotero.Item;
   contentText: string;
+  queryText?: string;
   modelName: string;
   conversationKey?: number;
   userTimestamp?: number;
   assistantTimestamp?: number;
-  paperContexts?: import("../../types").PaperContextRef[];
+  paperContexts?: PaperContextRef[];
   quoteCitations?: QuoteCitation[];
   generatedImages?: GeneratedChatImage[];
 } | null;
+
+type ResponseActionKind = "copy" | "note" | "fork" | "delete";
+
+type ResponseTurnReference = {
+  conversationKey: number;
+  userTimestamp: number;
+  assistantTimestamp: number;
+};
 
 type PromptMenuTarget = {
   item: Zotero.Item;
@@ -105,6 +117,305 @@ function stopFloatingMenuPropagation(menu: HTMLDivElement): void {
   });
 }
 
+function parsePositiveFiniteNumber(value: unknown): number {
+  const parsed = Number(value || 0);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 0;
+  return Math.floor(parsed);
+}
+
+function normalizeResponseTurnReference(
+  input: Partial<ResponseTurnReference> | null | undefined,
+): ResponseTurnReference | null {
+  const conversationKey = parsePositiveFiniteNumber(input?.conversationKey);
+  const userTimestamp = parsePositiveFiniteNumber(input?.userTimestamp);
+  const assistantTimestamp = parsePositiveFiniteNumber(
+    input?.assistantTimestamp,
+  );
+  if (!conversationKey || !userTimestamp || !assistantTimestamp) return null;
+  return { conversationKey, userTimestamp, assistantTimestamp };
+}
+
+function findResponseTurnPair(
+  history: Message[],
+  reference: ResponseTurnReference,
+): { userMessage: Message; assistantMessage: Message } | null {
+  for (let index = 0; index < history.length - 1; index += 1) {
+    const userMessage = history[index];
+    const assistantMessage = history[index + 1];
+    if (
+      userMessage?.role !== "user" ||
+      assistantMessage?.role !== "assistant"
+    ) {
+      continue;
+    }
+    if (
+      Math.floor(userMessage.timestamp) === reference.userTimestamp &&
+      Math.floor(assistantMessage.timestamp) === reference.assistantTimestamp
+    ) {
+      return { userMessage, assistantMessage };
+    }
+  }
+  return null;
+}
+
+export function buildResponseActionTargetFromHistory(params: {
+  item: Zotero.Item;
+  history: Message[];
+  conversationKey: number;
+  userTimestamp: number;
+  assistantTimestamp: number;
+}): ResponseMenuTarget {
+  const reference = normalizeResponseTurnReference(params);
+  if (!reference) return null;
+  const pair = findResponseTurnPair(params.history, reference);
+  if (!pair) return null;
+  const menuContent = resolveAssistantResponseMenuContent(
+    pair.assistantMessage,
+  );
+  if (!menuContent) return null;
+  return {
+    item: params.item,
+    contentText: menuContent.contentText,
+    queryText: pair.userMessage.text || "",
+    modelName: pair.assistantMessage.modelName?.trim() || "unknown",
+    conversationKey: reference.conversationKey,
+    userTimestamp: reference.userTimestamp,
+    assistantTimestamp: reference.assistantTimestamp,
+    paperContexts: getMessageCitationPaperContexts(pair.userMessage),
+    quoteCitations: pair.assistantMessage.quoteCitations,
+    generatedImages: menuContent.generatedImages,
+  };
+}
+
+async function copyResponseTarget(
+  deps: MenuActionControllerDeps,
+  target: ResponseMenuTarget,
+  setStatusMessage: (
+    message: string,
+    level: "ready" | "warning" | "error",
+  ) => void,
+): Promise<void> {
+  if (!target) return;
+  if (target.contentText.trim()) {
+    await copyRenderedMarkdownToClipboard(
+      deps.body,
+      target.contentText,
+      target.quoteCitations,
+    );
+    setStatusMessage(t("Copied response"), "ready");
+  } else if (target.generatedImages?.length) {
+    const result = await copyGeneratedImageToClipboard(
+      deps.body,
+      target.generatedImages[0]!,
+    );
+    setStatusMessage(
+      result === "image" ? "Copied image" : "Copied image source",
+      "ready",
+    );
+  }
+}
+
+function buildNoteFigureRenderOptions(deps: MenuActionControllerDeps) {
+  const doc = deps.body.ownerDocument || null;
+  const body = deps.body as HTMLElement | null;
+  return doc
+    ? {
+        doc,
+        omitUnconvertedVisualFences: true,
+        renderMermaidSvg: async (
+          source: string,
+          renderDoc: Document,
+          anchor?: HTMLElement,
+        ) =>
+          findRenderedMermaidSvgForSource(deps.body, source) ||
+          renderMermaidSourceToSvg(
+            source,
+            renderDoc,
+            anchor || body || undefined,
+          ),
+      }
+    : undefined;
+}
+
+function findRenderedMermaidSvgForSource(
+  root: ParentNode,
+  source: string,
+): string | null {
+  const normalizedSource = source.trim();
+  if (!normalizedSource || typeof root.querySelectorAll !== "function") {
+    return null;
+  }
+  const previews = Array.from(
+    root.querySelectorAll(".llm-mermaid-preview[data-llm-mermaid-source]"),
+  ) as HTMLElement[];
+  for (const preview of previews) {
+    if ((preview.dataset.llmMermaidSource || "").trim() !== normalizedSource) {
+      continue;
+    }
+    const renderedSvg = (preview.dataset.llmRenderedSvg || "").trim();
+    if (renderedSvg) return renderedSvg;
+  }
+  return null;
+}
+
+async function saveResponseTargetAsNote(
+  deps: MenuActionControllerDeps,
+  target: ResponseMenuTarget,
+  setStatusMessage: (
+    message: string,
+    level: "ready" | "warning" | "error",
+  ) => void,
+): Promise<void> {
+  if (!target) {
+    deps.logError("LLM: Note save - no responseMenuTarget", null);
+    return;
+  }
+  const {
+    item: targetItem,
+    contentText,
+    queryText,
+    modelName,
+    paperContexts,
+    quoteCitations,
+    generatedImages,
+  } = target;
+  if (!targetItem || (!contentText && !generatedImages?.length)) {
+    deps.logError("LLM: Note save - missing item or response content", null);
+    return;
+  }
+  try {
+    const figureRender = buildNoteFigureRenderOptions(deps);
+    const targetNoteSession = deps.resolveActiveNoteSession(targetItem);
+    if (
+      deps.isGlobalMode() ||
+      isGlobalPortalItem(targetItem) ||
+      isClaudeGlobalPortalItem(targetItem) ||
+      targetNoteSession?.noteKind === "standalone"
+    ) {
+      const libraryID =
+        Number.isFinite(targetItem.libraryID) && targetItem.libraryID > 0
+          ? Math.floor(targetItem.libraryID)
+          : deps.getCurrentLibraryID();
+      await createAssistantResponseNote({
+        destination: { kind: "standalone", libraryID },
+        contentText,
+        queryText,
+        modelName,
+        paperContexts,
+        quoteCitations,
+        generatedImages,
+        figureRender,
+      });
+      setStatusMessage(t("Created a new note"), "ready");
+      return;
+    }
+    await createAssistantResponseNote({
+      destination: { kind: "item", item: targetItem },
+      contentText,
+      queryText,
+      modelName,
+      paperContexts,
+      quoteCitations,
+      generatedImages,
+      figureRender,
+    });
+    setStatusMessage(t("Created a new note"), "ready");
+  } catch (err) {
+    deps.logError("Create note failed:", err);
+    setStatusMessage(t("Failed to create note"), "error");
+  }
+}
+
+async function queueResponseTurnDeletion(
+  deps: MenuActionControllerDeps,
+  reference: Partial<ResponseTurnReference> | null | undefined,
+  setStatusMessage: (
+    message: string,
+    level: "ready" | "warning" | "error",
+  ) => void,
+): Promise<void> {
+  const normalized = normalizeResponseTurnReference(reference);
+  const item = deps.getItem();
+  if (!normalized || !item) return;
+  if (deps.getConversationKey(item) !== normalized.conversationKey) {
+    setStatusMessage(t("Delete target changed"), "error");
+    return;
+  }
+  const pair = findResponseTurnPair(
+    deps.getHistory(normalized.conversationKey),
+    normalized,
+  );
+  if (!pair) {
+    setStatusMessage(t("No deletable turn found"), "error");
+    return;
+  }
+  if (pair.assistantMessage.streaming) {
+    setStatusMessage(t("Cannot delete while generating"), "ready");
+    return;
+  }
+  await deps.queueTurnDeletion(normalized);
+}
+
+function normalizeTurnTarget(
+  target: Pick<
+    NonNullable<ResponseMenuTarget | PromptMenuTarget>,
+    "item" | "conversationKey" | "userTimestamp" | "assistantTimestamp"
+  > | null,
+): {
+  item: Zotero.Item;
+  conversationKey: number;
+  userTimestamp: number;
+  assistantTimestamp: number;
+} | null {
+  if (!target?.item) return null;
+  const conversationKey = parsePositiveFiniteNumber(target.conversationKey);
+  const userTimestamp = parsePositiveFiniteNumber(target.userTimestamp);
+  const assistantTimestamp = parsePositiveFiniteNumber(
+    target.assistantTimestamp,
+  );
+  if (!conversationKey || !userTimestamp || !assistantTimestamp) return null;
+  return {
+    item: target.item,
+    conversationKey,
+    userTimestamp,
+    assistantTimestamp,
+  };
+}
+
+export async function runResponseMenuAction(
+  deps: MenuActionControllerDeps,
+  action: ResponseActionKind,
+  target: ResponseMenuTarget,
+  setStatusMessage: (
+    message: string,
+    level: "ready" | "warning" | "error",
+  ) => void,
+): Promise<void> {
+  try {
+    if (action === "copy") {
+      await copyResponseTarget(deps, target, setStatusMessage);
+      return;
+    }
+    if (action === "note") {
+      await saveResponseTargetAsNote(deps, target, setStatusMessage);
+      return;
+    }
+    if (action === "fork") {
+      const normalized = normalizeTurnTarget(target);
+      if (!normalized) {
+        setStatusMessage(t("No forkable turn found"), "error");
+        return;
+      }
+      await deps.forkConversationFromTurn(normalized);
+      return;
+    }
+    await queueResponseTurnDeletion(deps, target, setStatusMessage);
+  } catch (err) {
+    deps.logError("Response action failed:", err);
+    setStatusMessage(t("Response action failed"), "error");
+  }
+}
+
 export function attachMenuActionController(
   deps: MenuActionControllerDeps,
 ): void {
@@ -115,38 +426,9 @@ export function attachMenuActionController(
     if (deps.status) setStatus(deps.status, message, level);
   };
 
-  const normalizeTurnTarget = (
-    target: Pick<
-      NonNullable<ResponseMenuTarget>,
-      "item" | "conversationKey" | "userTimestamp" | "assistantTimestamp"
-    > | null,
-  ): {
-    item: Zotero.Item;
-    conversationKey: number;
-    userTimestamp: number;
-    assistantTimestamp: number;
-  } | null => {
-    if (!target?.item) return null;
-    const conversationKey = Number(target.conversationKey || 0);
-    const userTimestamp = Number(target.userTimestamp || 0);
-    const assistantTimestamp = Number(target.assistantTimestamp || 0);
-    if (
-      !Number.isFinite(conversationKey) ||
-      conversationKey <= 0 ||
-      !Number.isFinite(userTimestamp) ||
-      userTimestamp <= 0 ||
-      !Number.isFinite(assistantTimestamp) ||
-      assistantTimestamp <= 0
-    ) {
-      return null;
-    }
-    return {
-      item: target.item,
-      conversationKey: Math.floor(conversationKey),
-      userTimestamp: Math.floor(userTimestamp),
-      assistantTimestamp: Math.floor(assistantTimestamp),
-    };
-  };
+  setResponseActionRunner(deps.body, (action, target) =>
+    runResponseMenuAction(deps, action, target, setStatusMessage),
+  );
 
   if (
     deps.responseMenu &&
@@ -161,136 +443,28 @@ export function attachMenuActionController(
       e.stopPropagation();
       const target = deps.getResponseMenuTarget();
       deps.closeResponseMenu();
-      if (!target) return;
-      if (target.contentText.trim()) {
-        await copyRenderedMarkdownToClipboard(
-          deps.body,
-          target.contentText,
-          target.quoteCitations,
-        );
-        setStatusMessage(t("Copied response"), "ready");
-      } else if (target.generatedImages?.length) {
-        const result = await copyGeneratedImageToClipboard(
-          deps.body,
-          target.generatedImages[0]!,
-        );
-        setStatusMessage(
-          result === "image" ? "Copied image" : "Copied image source",
-          "ready",
-        );
-      }
+      await runResponseMenuAction(deps, "copy", target, setStatusMessage);
     });
     deps.responseMenuNoteBtn.addEventListener("click", async (e: Event) => {
       e.preventDefault();
       e.stopPropagation();
       const target = deps.getResponseMenuTarget();
       deps.closeResponseMenu();
-      if (!target) {
-        deps.logError("LLM: Note save - no responseMenuTarget", null);
-        return;
-      }
-      const {
-        item: targetItem,
-        contentText,
-        modelName,
-        paperContexts,
-        quoteCitations,
-        generatedImages,
-      } = target;
-      if (!targetItem || (!contentText && !generatedImages?.length)) {
-        deps.logError(
-          "LLM: Note save - missing item or response content",
-          null,
-        );
-        return;
-      }
-      try {
-        const targetNoteSession = deps.resolveActiveNoteSession(targetItem);
-        if (
-          deps.isGlobalMode() ||
-          isGlobalPortalItem(targetItem) ||
-          isClaudeGlobalPortalItem(targetItem) ||
-          targetNoteSession?.noteKind === "standalone"
-        ) {
-          const libraryID =
-            Number.isFinite(targetItem.libraryID) && targetItem.libraryID > 0
-              ? Math.floor(targetItem.libraryID)
-              : deps.getCurrentLibraryID();
-          await createStandaloneNoteFromAssistantText(
-            libraryID,
-            contentText,
-            modelName,
-            paperContexts,
-            quoteCitations,
-            generatedImages,
-          );
-          setStatusMessage(t("Created a new note"), "ready");
-          return;
-        }
-        const saveResult = await createNoteFromAssistantText(
-          targetItem,
-          contentText,
-          modelName,
-          paperContexts,
-          {
-            appendToTrackedNote: true,
-            rememberCreatedNote: true,
-            quoteCitations,
-            generatedImages,
-          },
-        );
-        setStatusMessage(
-          saveResult === "appended"
-            ? t("Appended to existing note")
-            : t("Created a new note"),
-          "ready",
-        );
-      } catch (err) {
-        deps.logError("Create note failed:", err);
-        setStatusMessage(t("Failed to create note"), "error");
-      }
+      await runResponseMenuAction(deps, "note", target, setStatusMessage);
     });
     deps.responseMenuDeleteBtn?.addEventListener("click", async (e: Event) => {
       e.preventDefault();
       e.stopPropagation();
       const target = deps.getResponseMenuTarget();
       deps.closeResponseMenu();
-      if (!target || !deps.getItem()) return;
-      const conversationKey = Number(target.conversationKey || 0);
-      const userTimestamp = Number(target.userTimestamp || 0);
-      const assistantTimestamp = Number(target.assistantTimestamp || 0);
-      if (
-        !Number.isFinite(conversationKey) ||
-        conversationKey <= 0 ||
-        !Number.isFinite(userTimestamp) ||
-        userTimestamp <= 0 ||
-        !Number.isFinite(assistantTimestamp) ||
-        assistantTimestamp <= 0
-      ) {
-        setStatusMessage(t("No deletable turn found"), "error");
-        return;
-      }
-      await deps.queueTurnDeletion({
-        conversationKey: Math.floor(conversationKey),
-        userTimestamp: Math.floor(userTimestamp),
-        assistantTimestamp: Math.floor(assistantTimestamp),
-      });
+      await runResponseMenuAction(deps, "delete", target, setStatusMessage);
     });
     deps.responseMenuForkBtn?.addEventListener("click", async (e: Event) => {
       e.preventDefault();
       e.stopPropagation();
-      const target = normalizeTurnTarget(deps.getResponseMenuTarget());
+      const target = deps.getResponseMenuTarget();
       deps.closeResponseMenu();
-      if (!target) {
-        setStatusMessage(t("No forkable turn found"), "error");
-        return;
-      }
-      try {
-        await deps.forkConversationFromTurn(target);
-      } catch (err) {
-        deps.logError("Fork conversation failed:", err);
-        setStatusMessage(t("Failed to fork conversation"), "error");
-      }
+      await runResponseMenuAction(deps, "fork", target, setStatusMessage);
     });
   }
 
@@ -380,9 +554,13 @@ export function attachMenuActionController(
           return;
         }
         if (deps.isGlobalMode()) {
-          await createStandaloneNoteFromChatHistory(currentLibraryID, history);
+          await createStandaloneNoteFromChatHistory(currentLibraryID, history, {
+            figureRender: buildNoteFigureRenderOptions(deps),
+          });
         } else {
-          await createNoteFromChatHistory(currentItem, history);
+          await createNoteFromChatHistory(currentItem, history, {
+            figureRender: buildNoteFigureRenderOptions(deps),
+          });
         }
         setStatusMessage(t("Saved chat history to new note"), "ready");
       } catch (err) {

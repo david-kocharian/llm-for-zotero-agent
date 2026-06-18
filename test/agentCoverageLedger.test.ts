@@ -7,7 +7,7 @@ import {
   commitAgentCoverageActivities,
   hydrateAgentCoverageLedger,
 } from "../src/agent/context/coverageLedger";
-import { buildAgentResourceContextPlan } from "../src/agent/context/resourceLifecycle";
+import { buildAgentResourceContextPlan } from "../src/agent/context/resourceContextPlan";
 import { buildAgentInitialMessages } from "../src/agent/model/messageBuilder";
 import type {
   AgentModelMessage,

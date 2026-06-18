@@ -3,11 +3,14 @@ import type {
   ChatAttachment,
   CollectionContextRef,
   PaperContextRef,
+  ResolvedContextSource,
   SelectedTextContext,
   TagContextRef,
 } from "../src/modules/contextPanel/types";
+import { includeAutoLoadedPaperContextForTests } from "../src/modules/contextPanel/chat";
 import { createSendFlowController } from "../src/modules/contextPanel/setupHandlers/controllers/sendFlowController";
 import { FULL_PDF_UNSUPPORTED_MESSAGE } from "../src/modules/contextPanel/pdfSupportMessages";
+import { setUserSkills, type AgentSkill } from "../src/agent/skills";
 
 describe("sendFlowController", function () {
   const item = { id: 101 } as unknown as Zotero.Item;
@@ -37,6 +40,77 @@ describe("sendFlowController", function () {
     libraryID: 1,
   };
 
+  afterEach(function () {
+    setUserSkills([]);
+  });
+
+  function makeTestSkill(
+    id: string,
+    overrides: Partial<AgentSkill> = {},
+  ): AgentSkill {
+    return {
+      id,
+      description: `${id} description`,
+      version: 1,
+      patterns: [],
+      contexts: ["any"],
+      activation: "auto",
+      instruction: `${id} instructions`,
+      source: "personal",
+      ...overrides,
+    };
+  }
+
+  it("uses explicit Markdown source context before ambient reader context", function () {
+    const currentItem = {
+      id: 707,
+      isAttachment: () => false,
+      isRegularItem: () => true,
+    } as unknown as Zotero.Item;
+    const activePdfReaderItem = {
+      id: 909,
+      parentID: 707,
+      attachmentContentType: "application/pdf",
+      attachmentFilename: "active.pdf",
+      isAttachment: () => true,
+      isRegularItem: () => false,
+      getField: () => "active.pdf",
+    } as unknown as Zotero.Item;
+    const markdownContext: PaperContextRef = {
+      itemId: 707,
+      contextItemId: 808,
+      title: "Parent paper",
+      attachmentTitle: "test",
+      contentSourceMode: "markdown",
+    };
+
+    const result = includeAutoLoadedPaperContextForTests(
+      currentItem,
+      [],
+      undefined,
+      undefined,
+      {
+        contextItem: activePdfReaderItem,
+        paperContext: markdownContext,
+        statusText: "using the selected Markdown attachment as context",
+      },
+    );
+
+    assert.lengthOf(result.paperContexts, 1);
+    assert.equal(result.paperContexts[0].itemId, markdownContext.itemId);
+    assert.equal(
+      result.paperContexts[0].contextItemId,
+      markdownContext.contextItemId,
+    );
+    assert.equal(result.paperContexts[0].contentSourceMode, "markdown");
+    assert.lengthOf(result.fullTextPaperContexts, 1);
+    assert.equal(
+      result.fullTextPaperContexts[0].contextItemId,
+      markdownContext.contextItemId,
+    );
+    assert.equal(result.fullTextPaperContexts[0].contentSourceMode, "markdown");
+  });
+
   function createBaseDeps(overrides: Record<string, unknown> = {}) {
     const inputBox = {
       value: "ask question",
@@ -52,7 +126,9 @@ describe("sendFlowController", function () {
     let retainTextCalled = 0;
     let persistDraftInputCalls = 0;
     let setActiveEditSessionCalls = 0;
+    let composerDraftClearedCalls = 0;
     let lastSentQuestion = "";
+    let lastSentDisplayQuestion: string | undefined;
     let lastRuntimeMode = "";
     let lastSentAuthMode = "";
     let lastSentProviderProtocol = "";
@@ -60,13 +136,15 @@ describe("sendFlowController", function () {
     let lastSentImages: string[] | undefined;
     let lastSentAttachments: ChatAttachment[] | undefined;
     let lastSentModelAttachments: ChatAttachment[] | undefined;
-    let lastSentContextSourceItem: Zotero.Item | null | undefined;
+    let lastSentForcedSkillIds: string[] | undefined;
+    let lastSentContextSource: ResolvedContextSource | null | undefined;
     let lastEditRuntimeMode = "";
+    let lastEditDisplayQuestion = "";
     let lastEditImages: string[] | undefined;
     let lastEditAttachments: ChatAttachment[] | undefined;
     let lastEditModelAttachments: ChatAttachment[] | undefined;
     let lastEditPdfUploadSystemMessages: string[] | undefined;
-    let lastEditContextSourceItem: Zotero.Item | null | undefined;
+    let lastEditContextSource: ResolvedContextSource | null | undefined;
     let lastSentCollectionContexts: CollectionContextRef[] | undefined;
     let lastSentTagContexts: TagContextRef[] | undefined;
     let lastEditCollectionContexts: CollectionContextRef[] | undefined;
@@ -78,7 +156,11 @@ describe("sendFlowController", function () {
       body: {} as Element,
       inputBox,
       getItem: () => item,
-      resolveContextSourceItem: async () => item,
+      resolveContextSource: async () => ({
+        contextItem: item,
+        paperContext: null,
+        statusText: "",
+      }),
       closeSlashMenu: () => undefined,
       closePaperPicker: () => undefined,
       getSelectedTextContextEntries: () => selectedTextContexts,
@@ -127,18 +209,20 @@ describe("sendFlowController", function () {
       editLatestUserMessageAndRetry: async (opts: any) => {
         editCalled += 1;
         lastEditRuntimeMode = opts.targetRuntimeMode || "";
+        lastEditDisplayQuestion = opts.displayQuestion || "";
         lastEditImages = opts.screenshotImages;
         lastEditAttachments = opts.attachments;
         lastEditModelAttachments = opts.modelAttachments;
         lastEditPdfUploadSystemMessages = opts.pdfUploadSystemMessages;
         lastEditCollectionContexts = opts.selectedCollectionContexts;
         lastEditTagContexts = opts.selectedTagContexts;
-        lastEditContextSourceItem = opts.contextSourceItem;
+        lastEditContextSource = opts.contextSource;
         return "ok" as const;
       },
       sendQuestion: async (opts: any) => {
         sendCalled += 1;
         lastSentQuestion = opts.question;
+        lastSentDisplayQuestion = opts.displayQuestion;
         lastRuntimeMode = opts.runtimeMode || "";
         lastSentAuthMode = opts.authMode || "";
         lastSentProviderProtocol = opts.providerProtocol || "";
@@ -146,9 +230,10 @@ describe("sendFlowController", function () {
         lastSentImages = opts.images;
         lastSentAttachments = opts.attachments;
         lastSentModelAttachments = opts.modelAttachments;
+        lastSentForcedSkillIds = opts.forcedSkillIds;
         lastSentCollectionContexts = opts.selectedCollectionContexts;
         lastSentTagContexts = opts.selectedTagContexts;
-        lastSentContextSourceItem = opts.contextSourceItem;
+        lastSentContextSource = opts.contextSource;
       },
       retainPinnedImageState: () => {
         retainImageCalled += 1;
@@ -182,6 +267,9 @@ describe("sendFlowController", function () {
         statuses.push({ message, level });
       },
       editStaleStatusText: "stale",
+      onComposerDraftCleared: () => {
+        composerDraftClearedCalls += 1;
+      },
       ...overrides,
     };
 
@@ -199,10 +287,12 @@ describe("sendFlowController", function () {
         retainTextCalled,
         persistDraftInputCalls,
         setActiveEditSessionCalls,
+        composerDraftClearedCalls,
       }),
       getDraftValue: () => draftValue,
       getLastSend: () => ({
         lastSentQuestion,
+        lastSentDisplayQuestion,
         lastRuntimeMode,
         lastSentAuthMode,
         lastSentProviderProtocol,
@@ -210,18 +300,20 @@ describe("sendFlowController", function () {
         lastSentImages,
         lastSentAttachments,
         lastSentModelAttachments,
+        lastSentForcedSkillIds,
         lastSentCollectionContexts,
         lastSentTagContexts,
-        lastSentContextSourceItem,
+        lastSentContextSource,
       }),
       getLastEditRuntimeMode: () => lastEditRuntimeMode,
+      getLastEditDisplayQuestion: () => lastEditDisplayQuestion,
       getLastEditImages: () => lastEditImages,
       getLastEditAttachments: () => lastEditAttachments,
       getLastEditModelAttachments: () => lastEditModelAttachments,
       getLastEditPdfUploadSystemMessages: () => lastEditPdfUploadSystemMessages,
       getLastEditCollectionContexts: () => lastEditCollectionContexts,
       getLastEditTagContexts: () => lastEditTagContexts,
-      getLastEditContextSourceItem: () => lastEditContextSourceItem,
+      getLastEditContextSource: () => lastEditContextSource,
       getLastStatus: () => lastStatus,
       getStatuses: () => statuses.slice(),
     };
@@ -242,11 +334,23 @@ describe("sendFlowController", function () {
     assert.equal(counts.retainTextCalled, 1);
   });
 
+  it("resets the composer draft height after a normal send clears the input", async function () {
+    const { controller, getCounts } = createBaseDeps();
+
+    await controller.doSend();
+
+    assert.equal(getCounts().composerDraftClearedCalls, 1);
+  });
+
   it("awaits the resolved context source before selecting paper contexts", async function () {
-    const resolvedContextSource = { id: 404 } as unknown as Zotero.Item;
+    const resolvedContextSource: ResolvedContextSource = {
+      contextItem: { id: 404 } as unknown as Zotero.Item,
+      paperContext: null,
+      statusText: "resolved",
+    };
     let resolverFinished = false;
     const { controller, getLastSend } = createBaseDeps({
-      resolveContextSourceItem: async () => {
+      resolveContextSource: async () => {
         await Promise.resolve();
         resolverFinished = true;
         return resolvedContextSource;
@@ -259,13 +363,20 @@ describe("sendFlowController", function () {
 
     await controller.doSend();
 
-    assert.equal(getLastSend().lastSentContextSourceItem, resolvedContextSource);
+    assert.deepEqual(
+      getLastSend().lastSentContextSource,
+      resolvedContextSource,
+    );
   });
 
   it("passes the resolved context source into latest-turn edit retries", async function () {
-    const resolvedContextSource = { id: 505 } as unknown as Zotero.Item;
-    const { controller, getLastEditContextSourceItem } = createBaseDeps({
-      resolveContextSourceItem: async () => resolvedContextSource,
+    const resolvedContextSource: ResolvedContextSource = {
+      contextItem: { id: 505 } as unknown as Zotero.Item,
+      paperContext: null,
+      statusText: "resolved",
+    };
+    const { controller, getLastEditContextSource } = createBaseDeps({
+      resolveContextSource: async () => resolvedContextSource,
       getActiveEditSession: () => ({
         conversationKey: item.id,
         userTimestamp: 10,
@@ -282,7 +393,57 @@ describe("sendFlowController", function () {
 
     await controller.doSend();
 
-    assert.equal(getLastEditContextSourceItem(), resolvedContextSource);
+    assert.deepEqual(getLastEditContextSource(), resolvedContextSource);
+  });
+
+  it("passes explicit Markdown source context through sends and edit retries", async function () {
+    const markdownItem = { id: 808 } as unknown as Zotero.Item;
+    const markdownContext: PaperContextRef = {
+      itemId: 707,
+      contextItemId: 808,
+      title: "Parent paper",
+      attachmentTitle: "test",
+      contentSourceMode: "markdown",
+    };
+    const markdownSource: ResolvedContextSource = {
+      contextItem: markdownItem,
+      paperContext: markdownContext,
+      statusText: "using the selected Markdown attachment as context",
+    };
+    const sendCase = createBaseDeps({
+      resolveContextSource: async () => markdownSource,
+      getSelectedPaperContexts: () => [],
+      getFullTextPaperContexts: () => [],
+    });
+
+    await sendCase.controller.doSend();
+
+    assert.deepEqual(
+      sendCase.getLastSend().lastSentContextSource,
+      markdownSource,
+    );
+
+    const editCase = createBaseDeps({
+      resolveContextSource: async () => markdownSource,
+      getSelectedPaperContexts: () => [],
+      getFullTextPaperContexts: () => [],
+      getActiveEditSession: () => ({
+        conversationKey: item.id,
+        userTimestamp: 10,
+        assistantTimestamp: 20,
+      }),
+      getLatestEditablePair: async () => ({
+        conversationKey: item.id,
+        pair: {
+          userMessage: { timestamp: 10 },
+          assistantMessage: { timestamp: 20, streaming: false },
+        },
+      }),
+    });
+
+    await editCase.controller.doSend();
+
+    assert.deepEqual(editCase.getLastEditContextSource(), markdownSource);
   });
 
   it("sends override text while preserving the current draft", async function () {
@@ -306,23 +467,25 @@ describe("sendFlowController", function () {
     assert.equal(getLastSend().lastSentQuestion, "queued follow-up");
     assert.equal(inputBox.value, "draft typed while waiting");
     assert.equal(getCounts().persistDraftInputCalls, 0);
+    assert.equal(getCounts().composerDraftClearedCalls, 0);
   });
 
   it("uses retain-pinned callbacks for edit-latest flow", async function () {
-    const { controller, inputBox, getCounts, getLastEditRuntimeMode } = createBaseDeps({
-      getActiveEditSession: () => ({
-        conversationKey: item.id,
-        userTimestamp: 10,
-        assistantTimestamp: 20,
-      }),
-      getLatestEditablePair: async () => ({
-        conversationKey: item.id,
-        pair: {
-          userMessage: { timestamp: 10 },
-          assistantMessage: { timestamp: 20, streaming: false },
-        },
-      }),
-    });
+    const { controller, inputBox, getCounts, getLastEditRuntimeMode } =
+      createBaseDeps({
+        getActiveEditSession: () => ({
+          conversationKey: item.id,
+          userTimestamp: 10,
+          assistantTimestamp: 20,
+        }),
+        getLatestEditablePair: async () => ({
+          conversationKey: item.id,
+          pair: {
+            userMessage: { timestamp: 10 },
+            assistantMessage: { timestamp: 20, streaming: false },
+          },
+        }),
+      });
     await controller.doSend();
     const counts = getCounts();
 
@@ -336,6 +499,27 @@ describe("sendFlowController", function () {
     assert.equal(counts.retainTextCalled, 1);
     assert.isAtLeast(counts.setActiveEditSessionCalls, 1);
     assert.equal(getLastEditRuntimeMode(), "chat");
+  });
+
+  it("resets the composer draft height after an edit retry clears the input", async function () {
+    const { controller, getCounts } = createBaseDeps({
+      getActiveEditSession: () => ({
+        conversationKey: item.id,
+        userTimestamp: 10,
+        assistantTimestamp: 20,
+      }),
+      getLatestEditablePair: async () => ({
+        conversationKey: item.id,
+        pair: {
+          userMessage: { timestamp: 10 },
+          assistantMessage: { timestamp: 20, streaming: false },
+        },
+      }),
+    });
+
+    await controller.doSend();
+
+    assert.equal(getCounts().composerDraftClearedCalls, 1);
   });
 
   it("passes the current runtime mode into latest-turn edit retries", async function () {
@@ -604,6 +788,7 @@ describe("sendFlowController", function () {
 
     assert.equal(getCounts().sendCalled, 0);
     assert.equal(getCounts().editCalled, 0);
+    assert.equal(getCounts().composerDraftClearedCalls, 0);
     assert.equal(inputBox.value, "ask question");
     assert.deepEqual(getLastStatus(), {
       message: FULL_PDF_UNSUPPORTED_MESSAGE,
@@ -722,6 +907,32 @@ describe("sendFlowController", function () {
     assert.equal(lastSend.lastRuntimeMode, "agent");
   });
 
+  it("sends Claude Code turns with the original agent-style request envelope", async function () {
+    const { controller, getLastSend } = createBaseDeps({
+      isClaudeConversationSystem: () => true,
+      getSelectedCollectionContexts: () => [selectedCollection],
+      getSelectedTagContexts: () => [selectedTag],
+      getSelectedProfile: () => ({
+        entryId: "claude_code::haiku",
+        model: "haiku",
+        apiBase: "",
+        apiKey: "",
+        providerLabel: "Claude Code",
+        authMode: "api_key",
+        providerProtocol: "anthropic_messages",
+      }),
+    });
+
+    await controller.doSend();
+    const lastSend = getLastSend();
+
+    assert.equal(lastSend.lastSentQuestion, "ask question");
+    assert.equal(lastSend.lastRuntimeMode, "agent");
+    assert.equal(lastSend.lastSentModelProviderLabel, "Claude Code");
+    assert.deepEqual(lastSend.lastSentCollectionContexts, [selectedCollection]);
+    assert.deepEqual(lastSend.lastSentTagContexts, [selectedTag]);
+  });
+
   it("routes Codex sends through native chat mode with app-server metadata", async function () {
     const { controller, getLastSend } = createBaseDeps({
       getSelectedTextContextEntries: () => [],
@@ -754,6 +965,290 @@ describe("sendFlowController", function () {
     assert.equal(lastSend.lastSentModelProviderLabel, "Codex");
   });
 
+  async function sendCodexNativeSkillInput(
+    input: string,
+    skills: AgentSkill[],
+  ) {
+    setUserSkills(skills);
+    const { controller, inputBox, getLastSend } = createBaseDeps({
+      getSelectedTextContextEntries: () => [],
+      getSelectedPaperContexts: () => [],
+      getFullTextPaperContexts: () => [],
+      getSelectedFiles: () => [],
+      getSelectedImages: () => [],
+      isAgentMode: () => true,
+      isCodexConversationSystem: () => true,
+      getSelectedProfile: () => ({
+        entryId: "codex_app_server::gpt-5.4",
+        model: "gpt-5.4",
+        apiBase: "",
+        apiKey: "",
+        providerLabel: "Codex",
+        authMode: "codex_app_server",
+        providerProtocol: "codex_responses",
+      }),
+      resolvePromptText: (text: string) => text,
+      buildModelPromptWithFileContext: (question: string) => question,
+    });
+    inputBox.value = input;
+
+    await controller.doSend();
+
+    return getLastSend();
+  }
+
+  it("translates chip-selected Codex app-server skills only in the submitted question", async function () {
+    setUserSkills([makeTestSkill("write-note")]);
+    const { controller, inputBox, getLastSend } = createBaseDeps({
+      getSelectedTextContextEntries: () => [],
+      getSelectedPaperContexts: () => [],
+      getFullTextPaperContexts: () => [],
+      getSelectedFiles: () => [],
+      getSelectedImages: () => [],
+      consumeForcedSkillIds: () => ["write-note"],
+      isAgentMode: () => true,
+      isCodexConversationSystem: () => true,
+      getSelectedProfile: () => ({
+        entryId: "codex_app_server::gpt-5.4",
+        model: "gpt-5.4",
+        apiBase: "",
+        apiKey: "",
+        providerLabel: "Codex",
+        authMode: "codex_app_server",
+        providerProtocol: "codex_responses",
+      }),
+      resolvePromptText: (text: string) => text,
+      buildModelPromptWithFileContext: (question: string) => question,
+    });
+    inputBox.value = "please draft this note";
+
+    await controller.doSend();
+
+    const lastSend = getLastSend();
+    assert.equal(
+      lastSend.lastSentQuestion,
+      "$write-note\n\nplease draft this note",
+    );
+    assert.equal(lastSend.lastSentDisplayQuestion, "please draft this note");
+    assert.deepEqual(lastSend.lastSentForcedSkillIds, ["write-note"]);
+  });
+
+  it("converts slash skill sends to native $skill mentions for Codex app-server", async function () {
+    setUserSkills([makeTestSkill("write-note")]);
+    const { controller, inputBox, getLastSend } = createBaseDeps({
+      getSelectedTextContextEntries: () => [],
+      getSelectedPaperContexts: () => [],
+      getFullTextPaperContexts: () => [],
+      getSelectedFiles: () => [],
+      getSelectedImages: () => [],
+      isAgentMode: () => true,
+      isCodexConversationSystem: () => true,
+      getSelectedProfile: () => ({
+        entryId: "codex_app_server::gpt-5.4",
+        model: "gpt-5.4",
+        apiBase: "",
+        apiKey: "",
+        providerLabel: "Codex",
+        authMode: "codex_app_server",
+        providerProtocol: "codex_responses",
+      }),
+      resolvePromptText: (text: string) => text,
+      buildModelPromptWithFileContext: (question: string) => question,
+    });
+    inputBox.value = "/write-note please draft this note";
+
+    await controller.doSend();
+
+    const lastSend = getLastSend();
+    assert.equal(
+      lastSend.lastSentQuestion,
+      "$write-note\n\nplease draft this note",
+    );
+    assert.equal(
+      lastSend.lastSentDisplayQuestion,
+      "/write-note please draft this note",
+    );
+    assert.deepEqual(lastSend.lastSentForcedSkillIds, ["write-note"]);
+  });
+
+  it("keeps raw native $skill sends from being double-prefixed", async function () {
+    setUserSkills([makeTestSkill("write-note")]);
+    const { controller, inputBox, getLastSend } = createBaseDeps({
+      getSelectedTextContextEntries: () => [],
+      getSelectedPaperContexts: () => [],
+      getFullTextPaperContexts: () => [],
+      getSelectedFiles: () => [],
+      getSelectedImages: () => [],
+      isAgentMode: () => true,
+      isCodexConversationSystem: () => true,
+      getSelectedProfile: () => ({
+        entryId: "codex_app_server::gpt-5.4",
+        model: "gpt-5.4",
+        apiBase: "",
+        apiKey: "",
+        providerLabel: "Codex",
+        authMode: "codex_app_server",
+        providerProtocol: "codex_responses",
+      }),
+      resolvePromptText: (text: string) => text,
+      buildModelPromptWithFileContext: (question: string) => question,
+    });
+    inputBox.value = "$write-note\n\nplease draft this note";
+
+    await controller.doSend();
+
+    const lastSend = getLastSend();
+    assert.equal(
+      lastSend.lastSentQuestion,
+      "$write-note\n\nplease draft this note",
+    );
+    assert.deepEqual(lastSend.lastSentForcedSkillIds, ["write-note"]);
+  });
+
+  it("recognizes fuzzy natural-language Codex skill directives", async function () {
+    const skills = [
+      makeTestSkill("evidence-based-qa", {
+        description:
+          "Locate specific passages in selected papers that support a claim with quoted evidence.",
+      }),
+      makeTestSkill("write-note", {
+        description: "Write a long-form reading or literature note.",
+      }),
+    ];
+
+    const partial = await sendCodexNativeSkillInput(
+      "use evidence base skill to read the paper",
+      skills,
+    );
+    assert.equal(
+      partial.lastSentQuestion,
+      "$evidence-based-qa\n\nread the paper",
+    );
+    assert.equal(
+      partial.lastSentDisplayQuestion,
+      "use evidence base skill to read the paper",
+    );
+    assert.deepEqual(partial.lastSentForcedSkillIds, ["evidence-based-qa"]);
+
+    const typo = await sendCodexNativeSkillInput(
+      "use evidnce based skill to read the paper",
+      skills,
+    );
+    assert.equal(typo.lastSentQuestion, "$evidence-based-qa\n\nread the paper");
+    assert.deepEqual(typo.lastSentForcedSkillIds, ["evidence-based-qa"]);
+
+    const writeNote = await sendCodexNativeSkillInput(
+      "please use write not skill to draft a note",
+      skills,
+    );
+    assert.equal(writeNote.lastSentQuestion, "$write-note\n\ndraft a note");
+    assert.deepEqual(writeNote.lastSentForcedSkillIds, ["write-note"]);
+
+    const description = await sendCodexNativeSkillInput(
+      "use reading note skill to summarize",
+      skills,
+    );
+    assert.equal(description.lastSentQuestion, "$write-note\n\nsummarize");
+    assert.deepEqual(description.lastSentForcedSkillIds, ["write-note"]);
+
+    const quoted = await sendCodexNativeSkillInput(
+      'use "evidence base" skill: quote the method',
+      skills,
+    );
+    assert.equal(
+      quoted.lastSentQuestion,
+      "$evidence-based-qa\n\nquote the method",
+    );
+    assert.deepEqual(quoted.lastSentForcedSkillIds, ["evidence-based-qa"]);
+  });
+
+  it("does not force ambiguous or non-leading natural-language skill mentions", async function () {
+    const evidenceSkill = makeTestSkill("evidence-based-qa", {
+      description:
+        "Locate specific passages in selected papers that support a claim with quoted evidence.",
+    });
+
+    const unknown = await sendCodexNativeSkillInput(
+      "use imaginary skill to draft a note",
+      [evidenceSkill],
+    );
+    assert.equal(
+      unknown.lastSentQuestion,
+      "use imaginary skill to draft a note",
+    );
+    assert.isUndefined(unknown.lastSentForcedSkillIds);
+
+    const vague = await sendCodexNativeSkillInput(
+      "use paper skill to read the paper",
+      [evidenceSkill],
+    );
+    assert.equal(vague.lastSentQuestion, "use paper skill to read the paper");
+    assert.isUndefined(vague.lastSentForcedSkillIds);
+
+    const tied = await sendCodexNativeSkillInput(
+      "use paper not skill to draft",
+      [makeTestSkill("paper-note"), makeTestSkill("paper-nots")],
+    );
+    assert.equal(tied.lastSentQuestion, "use paper not skill to draft");
+    assert.isUndefined(tied.lastSentForcedSkillIds);
+
+    const midSentence = await sendCodexNativeSkillInput(
+      "should I use evidence base skill?",
+      [evidenceSkill],
+    );
+    assert.equal(
+      midSentence.lastSentQuestion,
+      "should I use evidence base skill?",
+    );
+    assert.isUndefined(midSentence.lastSentForcedSkillIds);
+  });
+
+  it("allows natural-language directives to force manual Codex skills", async function () {
+    const manual = await sendCodexNativeSkillInput(
+      "use manual helper skill to run this",
+      [
+        makeTestSkill("manual-helper", {
+          activation: "manual",
+          description: "Manual helper for explicit workflow testing.",
+        }),
+      ],
+    );
+
+    assert.equal(manual.lastSentQuestion, "$manual-helper\n\nrun this");
+    assert.deepEqual(manual.lastSentForcedSkillIds, ["manual-helper"]);
+  });
+
+  it("keeps slash skill text unchanged outside Codex app-server mode", async function () {
+    setUserSkills([makeTestSkill("write-note")]);
+    const { controller, inputBox, getLastSend } = createBaseDeps({
+      getSelectedTextContextEntries: () => [],
+      getSelectedPaperContexts: () => [],
+      getFullTextPaperContexts: () => [],
+      getSelectedFiles: () => [],
+      getSelectedImages: () => [],
+      isAgentMode: () => true,
+      getSelectedProfile: () => ({
+        entryId: "openai::gpt-4.1",
+        model: "gpt-4.1",
+        apiBase: "https://api.openai.com/v1",
+        apiKey: "test-key",
+        providerLabel: "OpenAI",
+        authMode: "api_key",
+        providerProtocol: "responses_api",
+      }),
+      resolvePromptText: (text: string) => text,
+      buildModelPromptWithFileContext: (question: string) => question,
+    });
+    inputBox.value = "/write-note please draft this note";
+
+    await controller.doSend();
+
+    assert.equal(
+      getLastSend().lastSentQuestion,
+      "/write-note please draft this note",
+    );
+  });
+
   it("allows collection-only sends and uses the default collection prompt", async function () {
     const { controller, inputBox, getCounts, getLastSend } = createBaseDeps({
       getSelectedTextContextEntries: () => [],
@@ -770,7 +1265,10 @@ describe("sendFlowController", function () {
     await controller.doSend();
 
     assert.equal(getCounts().sendCalled, 1);
-    assert.equal(getLastSend().lastSentQuestion, "Please analyze selected collection.");
+    assert.equal(
+      getLastSend().lastSentQuestion,
+      "Please analyze selected collection.",
+    );
     assert.deepEqual(getLastSend().lastSentCollectionContexts, [
       selectedCollection,
     ]);

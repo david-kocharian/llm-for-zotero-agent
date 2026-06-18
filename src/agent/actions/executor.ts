@@ -32,13 +32,46 @@ function buildToolContext(
       activeItemId: ctx.requestContext?.activeItemId,
       selectedPaperContexts: ctx.requestContext?.selectedPaperContexts,
       fullTextPaperContexts: ctx.requestContext?.fullTextPaperContexts,
-      selectedCollectionContexts: ctx.requestContext?.selectedCollectionContexts,
+      selectedCollectionContexts:
+        ctx.requestContext?.selectedCollectionContexts,
       selectedTagContexts: ctx.requestContext?.selectedTagContexts,
     },
     item: syntheticItem,
     currentAnswerText: "",
     modelName: "action",
   };
+}
+
+function attachConfirmationResolution(
+  result: AgentToolResult,
+  resolution: { actionId?: string; data?: unknown },
+): AgentToolResult {
+  if (!resolution.actionId) return result;
+  const content: Record<string, unknown> =
+    result.content &&
+    typeof result.content === "object" &&
+    !Array.isArray(result.content)
+      ? { ...(result.content as Record<string, unknown>) }
+      : { value: result.content };
+  content.confirmationActionId = resolution.actionId;
+  if (resolution.data !== undefined) {
+    content.confirmationData = resolution.data;
+  }
+  return {
+    ...result,
+    content,
+  };
+}
+
+function withConfirmationActionId(
+  data: unknown,
+  actionId: string | undefined,
+): unknown {
+  if (!actionId) return data;
+  if (data && typeof data === "object" && !Array.isArray(data)) {
+    return { ...(data as Record<string, unknown>), __actionId: actionId };
+  }
+  return { __actionId: actionId, value: data };
 }
 
 /**
@@ -93,12 +126,23 @@ export async function callTool(
     action: prepared.action,
   });
 
-  const resolution = await ctx.requestConfirmation(prepared.requestId, prepared.action);
+  const resolution = await ctx.requestConfirmation(
+    prepared.requestId,
+    prepared.action,
+  );
 
   if (!resolution.approved) {
-    return prepared.deny(resolution.data).result;
+    return attachConfirmationResolution(prepared.deny(resolution.data).result, {
+      actionId: resolution.actionId,
+      data: resolution.data,
+    });
   }
 
-  const execution = await prepared.execute(resolution.data);
-  return execution.result;
+  const execution = await prepared.execute(
+    withConfirmationActionId(resolution.data, resolution.actionId),
+  );
+  return attachConfirmationResolution(execution.result, {
+    actionId: resolution.actionId,
+    data: resolution.data,
+  });
 }

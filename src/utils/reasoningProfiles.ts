@@ -5,6 +5,7 @@ export type ReasoningProvider =
   | "gemini"
   | "deepseek"
   | "kimi"
+  | "mimo"
   | "qwen"
   | "grok"
   | "anthropic";
@@ -80,6 +81,11 @@ export type DeepseekReasoningProfile = {
   defaultLevel: ReasoningLevel;
   omitTemperatureWhenThinking: boolean;
 };
+export type MimoThinkingType = "enabled";
+export type MimoReasoningProfile = {
+  levelToThinkingType: Partial<Record<ReasoningLevel, MimoThinkingType | null>>;
+  defaultLevel: ReasoningLevel;
+};
 
 type ProviderProfile = {
   supportsReasoning: boolean;
@@ -116,6 +122,11 @@ type ProviderProfile = {
       Record<ReasoningLevel, DeepseekReasoningEffort | null>
     >;
     omitTemperatureWhenThinking?: boolean;
+  };
+  mimo?: {
+    levelToThinkingType: Partial<
+      Record<ReasoningLevel, MimoThinkingType | null>
+    >;
   };
 };
 
@@ -434,6 +445,18 @@ const KIMI_NON_THINKING_PROFILE: ProviderProfile = {
   options: [],
 };
 
+const MIMO_THINKING_PROFILE: ProviderProfile = {
+  supportsReasoning: true,
+  defaultLevel: "default",
+  options: [option("default", "default"), option("high", "enabled")],
+  mimo: {
+    levelToThinkingType: {
+      default: null,
+      high: "enabled",
+    },
+  },
+};
+
 const QWEN_TOGGLE_PROFILE: ProviderProfile = {
   supportsReasoning: true,
   defaultLevel: "default",
@@ -686,6 +709,15 @@ const PROFILE_RULES: Record<
     ],
     fallback: KIMI_NON_THINKING_PROFILE,
   },
+  mimo: {
+    rules: [
+      {
+        match: /(^|[/:])mimo-v2(?:\.5)?(?:-(?:pro|omni|flash))?(?:\b|[.-])/,
+        profile: MIMO_THINKING_PROFILE,
+      },
+    ],
+    fallback: UNSUPPORTED_PROFILE,
+  },
   qwen: {
     rules: [
       {
@@ -842,6 +874,18 @@ export function getDeepseekReasoningProfileForModel(
     omitTemperatureWhenThinking: Boolean(
       deepseekProfile?.omitTemperatureWhenThinking,
     ),
+  };
+}
+
+export function getMimoReasoningProfileForModel(
+  modelName?: string,
+): MimoReasoningProfile {
+  const profile = resolveProviderProfile("mimo", modelName);
+  const mimoProfile = profile.mimo;
+  const defaultLevel = getResolvedDefaultLevel("mimo", modelName, "default");
+  return {
+    levelToThinkingType: cloneLevelMap(mimoProfile?.levelToThinkingType),
+    defaultLevel,
   };
 }
 

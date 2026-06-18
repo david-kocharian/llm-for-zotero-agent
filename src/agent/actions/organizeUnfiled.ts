@@ -1,20 +1,48 @@
-import type { AgentAction, ActionExecutionContext, ActionResult } from "./types";
+import type {
+  AgentAction,
+  ActionExecutionContext,
+  ActionResult,
+} from "./types";
 import { callTool } from "./executor";
-import { callLLM } from "../../utils/llmClient";
+import {
+  formatActionPageLabel,
+  getPagedActionOptionsForStartOffset,
+  getPagedActionOptions,
+  getPagedActionPageCursorForOffset,
+  getPagedActionPages,
+  getPagedOperationId,
+  isUserCancelledToolResult,
+  normalizeActionPageSize,
+  readToolConfirmationActionId,
+  readToolConfirmationData,
+  readToolResultError,
+  type PagedActionInput,
+} from "./pagedWorkflow";
+import {
+  callActionLlm,
+  collectActionLlmBatchResults,
+  extractJsonArray,
+} from "./llmBatchHelpers";
+import type {
+  CollectionSummary,
+  LibraryItemTarget,
+} from "../services/zoteroGateway";
 
-type OrganizeUnfiledInput = {
-  /** Maximum number of unfiled items to process. Default: no limit. */
-  limit?: number;
+type OrganizeUnfiledInput = PagedActionInput & {
+  userQuery?: string;
 };
 
 type OrganizeUnfiledOutput = {
   unfiled: number;
   moved: number;
   remaining: number;
+  processed?: number;
+  stopped?: boolean;
 };
 
 type UnfiledItem = {
   itemId: number;
+  itemType?: string;
   title: string;
   abstract: string;
   creator: string;
@@ -30,28 +58,36 @@ type Collection = {
 const LLM_BATCH_SIZE = 12;
 
 /**
- * Finds all unfiled papers and presents a collection-assignment HITL card
- * pre-selected with AI-suggested destinations. When an LLM config is
- * available, each paper is matched to the best-fitting existing collection
- * using title + abstract + collection names as context. The user reviews and
- * corrects the dropdowns before the batch move runs. When no LLM config is
- * available (e.g. MCP mode), the card falls back to "Leave untouched" for
- * every row.
+ * Finds unfiled library items and pages through native
+ * collection-assignment cards. Each page re-reads collection summaries so new
+ * folders created while the workflow is running can be selected later.
  */
-export const organizeUnfiledAction: AgentAction<OrganizeUnfiledInput, OrganizeUnfiledOutput> = {
+export const organizeUnfiledAction: AgentAction<
+  OrganizeUnfiledInput,
+  OrganizeUnfiledOutput
+> = {
   name: "organize_unfiled",
   modes: ["library"],
   description:
-    "Find all unfiled Zotero papers and open a batch-assignment dialog to move them into collections. " +
-    "The agent proposes a destination collection for each paper based on its title, abstract, and the available collection names; " +
-    "the user reviews and adjusts the assignments before they are applied.",
+    "Find unfiled Zotero items and page through batch-assignment dialogs to move them into collections. " +
+    "The agent proposes destinations from fresh collection data; the user reviews each page before edits are applied.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
     properties: {
       limit: {
         type: "number",
-        description: "Max number of unfiled items to process per run. Default: no limit.",
+        description: "Optional total cap across all pages. Default: no limit.",
+      },
+      pageSize: {
+        type: "number",
+        description:
+          "Items to show per review page. Default: 20; maximum: 100.",
+      },
+      startOffset: {
+        type: "number",
+        description:
+          "Internal resume offset for paged workflows. Defaults to 0.",
       },
     },
   },
@@ -60,156 +96,338 @@ export const organizeUnfiledAction: AgentAction<OrganizeUnfiledInput, OrganizeUn
     input: OrganizeUnfiledInput,
     ctx: ActionExecutionContext,
   ): Promise<ActionResult<OrganizeUnfiledOutput>> {
-    const STEPS = ctx.llm ? 4 : 3;
-    let step = 0;
-
-    // Step 1: get unfiled items
-    ctx.onProgress({
-      type: "step_start",
-      step: "Finding unfiled items",
-      index: ++step,
-      total: STEPS,
-    });
-
-    const queryArgs: Record<string, unknown> = {
-      entity: "items",
-      mode: "list",
-      filters: { unfiled: true },
-      include: ["metadata"],
-    };
-    if (input.limit) queryArgs.limit = input.limit;
-
-    const queryResult = await callTool("query_library", queryArgs, ctx, "Finding unfiled items");
-    if (!queryResult.ok) {
-      return { ok: false, error: `Failed to query library: ${JSON.stringify(queryResult.content)}` };
-    }
-
-    const queryContent = queryResult.content as Record<string, unknown>;
-    const unfiledRaw = Array.isArray(queryContent.results) ? queryContent.results : [];
-    const unfiledItems = normalizeUnfiledItems(unfiledRaw);
-
-    ctx.onProgress({
-      type: "step_done",
-      step: "Finding unfiled items",
-      summary: `${unfiledItems.length} unfiled item${unfiledItems.length === 1 ? "" : "s"}`,
-    });
-
-    if (!unfiledItems.length) {
-      return { ok: true, output: { unfiled: 0, moved: 0, remaining: 0 } };
-    }
-
-    // Step 2: get collection options
-    ctx.onProgress({
-      type: "step_start",
-      step: "Loading collections",
-      index: ++step,
-      total: STEPS,
-    });
-
-    const collectionsResult = await callTool(
-      "query_library",
-      { entity: "collections", mode: "list" },
-      ctx,
-      "Loading collections",
-    );
-
-    const collections = parseCollections(collectionsResult.content);
-
-    ctx.onProgress({
-      type: "step_done",
-      step: "Loading collections",
-      summary: `${collections.length} collection${collections.length === 1 ? "" : "s"} available`,
-    });
-
-    // Step 3 (optional): ask the LLM to match items to collections
-    const suggestionsByItemId = new Map<number, number>();
-    if (ctx.llm && collections.length) {
-      ctx.onProgress({
-        type: "step_start",
-        step: "Matching items to collections",
-        index: ++step,
-        total: STEPS,
-      });
-      try {
-        const suggested = await suggestCollectionsForItems(
-          unfiledItems,
-          collections,
-          ctx,
-        );
-        for (const entry of suggested) {
-          suggestionsByItemId.set(entry.itemId, entry.collectionId);
-        }
-        ctx.onProgress({
-          type: "step_done",
-          step: "Matching items to collections",
-          summary: `Proposed destinations for ${suggestionsByItemId.size}/${unfiledItems.length} items`,
-        });
-      } catch (err) {
-        ctx.onProgress({
-          type: "step_done",
-          step: "Matching items to collections",
-          summary: `AI matching unavailable (${err instanceof Error ? err.message : "error"}); falling back to manual assignment`,
-        });
-      }
-    }
-
-    // Final step: batch move via move_to_collection (HITL assignment_table)
-    ctx.onProgress({
-      type: "step_start",
-      step: "Assigning items to collections",
-      index: ++step,
-      total: STEPS,
-    });
-
-    const assignments = unfiledItems.map((item) => {
-      const suggestedId = suggestionsByItemId.get(item.itemId);
-      return suggestedId
-        ? { itemId: item.itemId, targetCollectionId: suggestedId }
-        : { itemId: item.itemId };
-    });
-
-    const mutateResult = await callTool(
-      "move_to_collection",
-      {
-        action: "add",
-        assignments,
-      },
-      ctx,
-      "Assigning unfiled items to collections",
-    );
-
-    const mutateContent = mutateResult.content as Record<string, unknown>;
-    const resultObj = mutateContent.result as Record<string, unknown> | undefined;
-    const movedCount = mutateResult.ok && resultObj
-      ? Number(resultObj.movedCount || 0)
-      : 0;
-    const mutateError =
-      !mutateResult.ok && typeof mutateContent.error === "string"
-        ? mutateContent.error
+    let options = getPagedActionOptions(input);
+    const windowEndOffset =
+      options.limit !== undefined
+        ? options.startOffset + options.limit
         : undefined;
 
     ctx.onProgress({
-      type: "step_done",
-      step: "Assigning items to collections",
-      summary: mutateResult.ok
-        ? `Moved ${movedCount} item${movedCount === 1 ? "" : "s"}`
-        : mutateError || "Assignment was denied or failed",
+      type: "step_start",
+      step: "Finding unfiled items",
+      index: 1,
+      total: 2,
     });
 
-    if (!mutateResult.ok && mutateError) {
-      return { ok: false, error: mutateError };
+    let unfiledItems: UnfiledItem[] = [];
+    let pages = getPagedActionPages<UnfiledItem>([], options);
+    const reloadUnfiledPages = async (): Promise<void> => {
+      invalidateLibraryCaches(ctx);
+      unfiledItems = await loadFreshUnfiledItems(ctx);
+      pages = getPagedActionPages(unfiledItems, options);
+    };
+    try {
+      await reloadUnfiledPages();
+    } catch (error) {
+      return {
+        ok: false,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to load unfiled items",
+      };
     }
+
+    ctx.onProgress({
+      type: "step_done",
+      step: "Finding unfiled items",
+      summary: `${unfiledItems.length} unfiled item${unfiledItems.length === 1 ? "" : "s"} found`,
+    });
+
+    if (!pages.length) {
+      return { ok: true, output: { unfiled: 0, moved: 0, remaining: 0 } };
+    }
+
+    ctx.onProgress({
+      type: "step_start",
+      step: "Reviewing pages",
+      index: 2,
+      total: 2,
+    });
+
+    let moved = 0;
+    let processed = 0;
+    let stopped = false;
+    let confirmed = false;
+
+    let pageCursor = 0;
+    while (pageCursor < pages.length) {
+      const page = pages[pageCursor];
+      invalidateLibraryCaches(ctx);
+      const collections = await loadFreshCollections(ctx);
+      const pageLabel = formatActionPageLabel(page);
+      const suggestionsByItemId = new Map<number, number>();
+
+      if (ctx.llm && collections.length) {
+        try {
+          const suggested = await suggestCollectionsForItems(
+            page.items,
+            collections,
+            input.userQuery,
+            ctx,
+          );
+          for (const entry of suggested) {
+            suggestionsByItemId.set(entry.itemId, entry.collectionId);
+          }
+        } catch (err) {
+          ctx.onProgress({
+            type: "step_done",
+            step: `${pageLabel}: Matching items to collections`,
+            summary: `AI matching unavailable (${err instanceof Error ? err.message : "error"}); using deterministic matching`,
+          });
+        }
+      }
+
+      for (const item of page.items) {
+        if (suggestionsByItemId.has(item.itemId)) continue;
+        const deterministic = suggestCollectionDeterministically(
+          item,
+          collections,
+        );
+        if (deterministic) {
+          suggestionsByItemId.set(item.itemId, deterministic);
+        }
+      }
+
+      ctx.onProgress({
+        type: "step_start",
+        step: `${pageLabel}: Assigning items to collections`,
+        index: page.pageIndex,
+        total: page.totalPages,
+      });
+
+      const includeManualRows = ctx.confirmationMode !== "auto_approve";
+      const assignments = page.items.flatMap((item) => {
+        const suggestedId = suggestionsByItemId.get(item.itemId);
+        return suggestedId
+          ? [{ itemId: item.itemId, targetCollectionId: suggestedId }]
+          : includeManualRows
+            ? [{ itemId: item.itemId }]
+            : [];
+      });
+
+      if (!assignments.length) {
+        processed += page.items.length;
+        ctx.onProgress({
+          type: "step_done",
+          step: `${pageLabel}: Assigning items to collections`,
+          summary: "No confident collection assignments for this page",
+        });
+        pageCursor += 1;
+        continue;
+      }
+
+      const mutateResult = await callTool(
+        "move_to_collection",
+        {
+          action: "add",
+          id: getPagedOperationId("organize_unfiled", page, {
+            pageSize: options.pageSize,
+          }),
+          assignments,
+        },
+        ctx,
+        `${pageLabel}: Assigning unfiled items to collections`,
+      );
+
+      const confirmationActionId = readToolConfirmationActionId(mutateResult);
+      const confirmationData = readToolConfirmationData(mutateResult);
+      const requestedPageSize =
+        confirmationData.pageSize !== undefined
+          ? normalizeActionPageSize(confirmationData.pageSize)
+          : options.pageSize;
+      const refreshPages = async (
+        targetOffset: number,
+        refreshOptions?: { reloadTargets?: boolean },
+      ): Promise<void> => {
+        const pageSizeChanged = requestedPageSize !== options.pageSize;
+        options = pageSizeChanged
+          ? getPagedActionOptionsForStartOffset(
+              { ...options, pageSize: requestedPageSize },
+              targetOffset,
+              windowEndOffset,
+            )
+          : { ...options, pageSize: requestedPageSize };
+        if (refreshOptions?.reloadTargets) {
+          await reloadUnfiledPages();
+        } else {
+          pages = getPagedActionPages(unfiledItems, options);
+        }
+        pageCursor = getPagedActionPageCursorForOffset(pages, targetOffset);
+      };
+      if (confirmationActionId === "previous") {
+        await refreshPages(
+          Math.max(options.startOffset, page.offset - requestedPageSize),
+        );
+        continue;
+      }
+      if (confirmationActionId === "refresh") {
+        await refreshPages(page.offset, { reloadTargets: true });
+        continue;
+      }
+      if (confirmationActionId === "next") {
+        await refreshPages(page.offset + page.items.length);
+        continue;
+      }
+      if (confirmationActionId === "cancel") {
+        stopped = true;
+        ctx.onProgress({
+          type: "step_done",
+          step: `${pageLabel}: Assigning items to collections`,
+          summary: "Stopped by user",
+        });
+        break;
+      }
+
+      const mutateContent = mutateResult.content as Record<string, unknown>;
+      const resultObj = mutateContent.result as
+        | Record<string, unknown>
+        | undefined;
+      const movedCount =
+        mutateResult.ok && resultObj ? Number(resultObj.movedCount || 0) : 0;
+      const mutateError = readToolResultError(mutateResult);
+
+      if (mutateResult.ok) {
+        moved += movedCount;
+        processed += page.items.length;
+        ctx.onProgress({
+          type: "step_done",
+          step: `${pageLabel}: Assigning items to collections`,
+          summary: `Moved ${movedCount} item${movedCount === 1 ? "" : "s"}`,
+        });
+        if (confirmationActionId === "confirm") {
+          if (pageCursor >= pages.length - 1) {
+            confirmed = true;
+            break;
+          }
+          await refreshPages(page.offset + page.items.length);
+          continue;
+        }
+        if (requestedPageSize !== options.pageSize) {
+          await refreshPages(page.offset + page.items.length);
+        } else {
+          pageCursor += 1;
+        }
+        continue;
+      }
+
+      stopped = isUserCancelledToolResult(mutateResult);
+      ctx.onProgress({
+        type: "step_done",
+        step: `${pageLabel}: Assigning items to collections`,
+        summary: stopped
+          ? "Stopped by user"
+          : mutateError || "Assignment was denied or failed",
+      });
+
+      if (!stopped) {
+        return { ok: false, error: mutateError || "Assignment failed" };
+      }
+      break;
+    }
+
+    ctx.onProgress({
+      type: "step_done",
+      step: "Reviewing pages",
+      summary: stopped
+        ? `Stopped after ${processed} item${processed === 1 ? "" : "s"}; moved ${moved}`
+        : confirmed
+          ? `Confirmed ${processed} reviewed item${processed === 1 ? "" : "s"}; moved ${moved}`
+          : `Moved ${moved} item${moved === 1 ? "" : "s"} across ${pages.length} page${pages.length === 1 ? "" : "s"}`,
+    });
 
     return {
       ok: true,
       output: {
         unfiled: unfiledItems.length,
-        moved: movedCount,
-        remaining: unfiledItems.length - movedCount,
+        moved,
+        remaining: Math.max(0, unfiledItems.length - moved),
+        processed,
+        stopped: stopped || undefined,
       },
     };
   },
 };
+
+function invalidateLibraryCaches(ctx: ActionExecutionContext): void {
+  ctx.zoteroGateway.invalidateLibrarySearchCache?.(ctx.libraryID);
+}
+
+async function loadFreshUnfiledItems(
+  ctx: ActionExecutionContext,
+): Promise<UnfiledItem[]> {
+  if (typeof ctx.zoteroGateway.listUnfiledItemTargets === "function") {
+    const result = await ctx.zoteroGateway.listUnfiledItemTargets({
+      libraryID: ctx.libraryID,
+    });
+    return result.items.map((item) => normalizeUnfiledTarget(item, ctx));
+  }
+
+  const queryResult = await callTool(
+    "query_library",
+    {
+      entity: "items",
+      mode: "list",
+      filters: { unfiled: true },
+      include: ["metadata"],
+    },
+    ctx,
+    "Finding unfiled items",
+  );
+  if (!queryResult.ok) {
+    throw new Error(
+      `Failed to query library: ${JSON.stringify(queryResult.content)}`,
+    );
+  }
+  const queryContent = queryResult.content as Record<string, unknown>;
+  const unfiledRaw = Array.isArray(queryContent.results)
+    ? queryContent.results
+    : [];
+  return normalizeUnfiledItems(unfiledRaw);
+}
+
+async function loadFreshCollections(
+  ctx: ActionExecutionContext,
+): Promise<Collection[]> {
+  if (typeof ctx.zoteroGateway.listCollectionSummaries === "function") {
+    return ctx.zoteroGateway
+      .listCollectionSummaries(ctx.libraryID)
+      .map(collectionSummaryToCollection);
+  }
+
+  const collectionsResult = await callTool(
+    "query_library",
+    { entity: "collections", mode: "list" },
+    ctx,
+    "Loading collections",
+  );
+  return parseCollections(collectionsResult.content);
+}
+
+function collectionSummaryToCollection(summary: CollectionSummary): Collection {
+  return {
+    id: summary.collectionId,
+    name: summary.name,
+    path: summary.path || summary.name,
+  };
+}
+
+function normalizeUnfiledTarget(
+  target: LibraryItemTarget,
+  ctx: ActionExecutionContext,
+): UnfiledItem {
+  const snapshot = ctx.zoteroGateway.getEditableArticleMetadata?.(
+    ctx.zoteroGateway.getItem?.(target.itemId),
+  );
+  return {
+    itemId: target.itemId,
+    itemType: target.itemType,
+    title: target.title || snapshot?.title || `Item ${target.itemId}`,
+    abstract: snapshot?.fields.abstractNote || "",
+    creator: target.firstCreator || "",
+    year: target.year || "",
+  };
+}
 
 function normalizeUnfiledItems(raw: unknown[]): UnfiledItem[] {
   const items: UnfiledItem[] = [];
@@ -229,9 +447,12 @@ function normalizeUnfiledItems(raw: unknown[]): UnfiledItem[] {
     const abstract = (fields.abstractNote || "").toString();
     items.push({
       itemId: record.itemId,
+      itemType:
+        typeof record.itemType === "string" ? record.itemType : undefined,
       title,
       abstract,
-      creator: typeof record.firstCreator === "string" ? record.firstCreator : "",
+      creator:
+        typeof record.firstCreator === "string" ? record.firstCreator : "",
       year: typeof record.year === "string" ? record.year : "",
     });
   }
@@ -258,36 +479,109 @@ function parseCollections(content: unknown): Collection[] {
   return collections;
 }
 
+function suggestCollectionDeterministically(
+  item: UnfiledItem,
+  collections: Collection[],
+): number | null {
+  const itemTokens = tokenizeForMatching(
+    [item.title, item.abstract, item.creator, item.year, item.itemType]
+      .filter(Boolean)
+      .join(" "),
+  );
+  if (!itemTokens.size) return null;
+
+  let best: { id: number; score: number } | null = null;
+  for (const collection of collections) {
+    const collectionText = `${collection.path} ${collection.name}`;
+    const collectionTokens = tokenizeForMatching(collectionText);
+    let score = 0;
+    for (const token of collectionTokens) {
+      if (itemTokens.has(token)) score += token.length >= 6 ? 2 : 1;
+    }
+    const normalizedCollection = normalizeMatchText(collectionText);
+    const normalizedItem = normalizeMatchText(`${item.title} ${item.abstract}`);
+    if (
+      normalizedCollection.length >= 6 &&
+      normalizedItem.includes(normalizedCollection)
+    ) {
+      score += 3;
+    }
+    if (!best || score > best.score) {
+      best = { id: collection.id, score };
+    }
+  }
+  return best && best.score >= 2 ? best.id : null;
+}
+
+const MATCH_STOPWORDS = new Set([
+  "and",
+  "the",
+  "for",
+  "with",
+  "from",
+  "into",
+  "onto",
+  "paper",
+  "papers",
+  "article",
+  "articles",
+  "study",
+  "studies",
+  "research",
+  "journal",
+  "conference",
+  "proceedings",
+]);
+
+function normalizeMatchText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function tokenizeForMatching(value: string): Set<string> {
+  return new Set(
+    normalizeMatchText(value)
+      .split(/\s+/)
+      .map((token) => token.trim())
+      .filter(
+        (token) =>
+          token.length >= 3 &&
+          !MATCH_STOPWORDS.has(token) &&
+          !/^\d+$/.test(token),
+      ),
+  );
+}
+
 async function suggestCollectionsForItems(
   items: UnfiledItem[],
   collections: Collection[],
+  userQuery: string | undefined,
   ctx: ActionExecutionContext,
 ): Promise<Array<{ itemId: number; collectionId: number }>> {
   if (!ctx.llm || !collections.length) return [];
-  const results: Array<{ itemId: number; collectionId: number }> = [];
-  for (let i = 0; i < items.length; i += LLM_BATCH_SIZE) {
-    const batch = items.slice(i, i + LLM_BATCH_SIZE);
-    const batchResult = await suggestCollectionsBatch(batch, collections, ctx);
-    results.push(...batchResult);
-  }
-  return results;
+  return collectActionLlmBatchResults(items, LLM_BATCH_SIZE, (batch) =>
+    suggestCollectionsBatch(
+      batch,
+      collections,
+      userQuery,
+      ctx,
+    ),
+  );
 }
 
 async function suggestCollectionsBatch(
   batch: UnfiledItem[],
   collections: Collection[],
+  userQuery: string | undefined,
   ctx: ActionExecutionContext,
 ): Promise<Array<{ itemId: number; collectionId: number }>> {
   if (!ctx.llm) return [];
-  const prompt = buildCollectionPrompt(batch, collections);
-  const raw = await callLLM({
+  const prompt = buildCollectionPrompt(batch, collections, userQuery);
+  const raw = await callActionLlm({
+    ctx,
     prompt,
-    model: ctx.llm.model,
-    apiBase: ctx.llm.apiBase,
-    apiKey: ctx.llm.apiKey,
-    authMode: ctx.llm.authMode,
-    providerProtocol: ctx.llm.providerProtocol,
-    temperature: 0,
     maxTokens: 1200,
   });
   return parseCollectionResponse(raw, batch, collections);
@@ -296,16 +590,17 @@ async function suggestCollectionsBatch(
 function buildCollectionPrompt(
   batch: UnfiledItem[],
   collections: Collection[],
+  userQuery: string | undefined,
 ): string {
   const collectionsBlock = collections
-    .map((c) => `- id=${c.id} · ${c.path}`)
+    .map((c) => `- id=${c.id} - ${c.path}`)
     .join("\n");
   const itemsBlock = batch
     .map((item) => {
       const abstract = item.abstract
         ? item.abstract.slice(0, 800).replace(/\s+/g, " ").trim()
         : "(no abstract available)";
-      const byline = [item.creator, item.year].filter(Boolean).join(" · ");
+      const byline = [item.creator, item.year].filter(Boolean).join(" - ");
       return [
         `itemId: ${item.itemId}`,
         `title: ${item.title}`,
@@ -318,18 +613,21 @@ function buildCollectionPrompt(
     .join("\n\n---\n\n");
 
   return [
-    "You are organizing unfiled papers into existing Zotero collections (folders).",
-    "For each paper, pick the single best-matching collection from the list below, or return null if no collection is a clear fit.",
+    "You are organizing unfiled Zotero library items into existing collections (folders).",
+    "For each item, pick the single best-matching collection from the list below, or return null if no collection is a clear fit.",
     "Guidelines:",
-    "- Choose based on topical fit between the paper and the collection's name or path.",
+    "- Choose based on topical fit between the item and the collection's name or path.",
     "- Prefer the most specific collection when nested paths exist.",
-    "- Use null when the paper doesn't clearly belong to any of the existing collections — do not force a poor match.",
+    "- Use null when the paper doesn't clearly belong to any of the existing collections; do not force a poor match.",
     "- Use only collection IDs from the list. Do not invent IDs.",
     "",
+    userQuery?.trim()
+      ? `Extra user instructions for this organize-unfiled action:\n${userQuery.trim()}\n`
+      : "",
     "Available collections:",
     collectionsBlock,
     "",
-    "Papers:",
+    "Items:",
     itemsBlock,
     "",
     "Respond with ONLY a JSON array, no prose, no code fence. Shape:",
@@ -365,15 +663,4 @@ function parseCollectionResponse(
     out.push({ itemId, collectionId });
   }
   return out;
-}
-
-function extractJsonArray(text: string): string | null {
-  const trimmed = text.trim();
-  if (trimmed.startsWith("[")) return trimmed;
-  const start = trimmed.indexOf("[");
-  const end = trimmed.lastIndexOf("]");
-  if (start >= 0 && end > start) {
-    return trimmed.slice(start, end + 1);
-  }
-  return null;
 }

@@ -4,7 +4,26 @@ import type {
   ActionResult,
 } from "./types";
 import { callTool } from "./executor";
-import { callLLM } from "../../utils/llmClient";
+import {
+  formatActionPageLabel,
+  getPagedActionOptions,
+  getPagedActionPageCursorForOffset,
+  getPagedActionOptionsForStartOffset,
+  getPagedActionPages,
+  getPagedOperationId,
+  isUserCancelledToolResult,
+  normalizeActionPageSize,
+  normalizeTagsPerPaper,
+  readToolConfirmationActionId,
+  readToolConfirmationData,
+  readToolResultError,
+  type PagedActionInput,
+} from "./pagedWorkflow";
+import {
+  callActionLlm,
+  collectActionLlmBatchResults,
+  extractJsonArray,
+} from "./llmBatchHelpers";
 import type { PaperScopedActionInput } from "./paperScope";
 import {
   resolvePaperScopedActionTargets,
@@ -12,12 +31,18 @@ import {
   type PaperScopedActionTarget,
 } from "./paperScope";
 
-type AutoTagInput = PaperScopedActionInput;
+type AutoTagInput = PaperScopedActionInput &
+  PagedActionInput & {
+    userQuery?: string;
+    tagsPerPaper?: number;
+  };
 
 type AutoTagOutput = {
   targeted: number;
   tagged: number;
   skipped: number;
+  processed?: number;
+  stopped?: boolean;
 };
 
 type TargetPaper = {
@@ -27,10 +52,13 @@ type TargetPaper = {
   creator: string;
   year: string;
   existingTags: string[];
+  collectionTerms: string[];
+  dateAdded?: string;
 };
 
 const LLM_BATCH_SIZE = 10;
-const MAX_TAGS_PER_ITEM = 5;
+const DEFAULT_TAGS_PER_ITEM = 5;
+const MAX_TAGS_PER_ITEM = 6;
 
 const autoTagPaperScopeProfile: PaperScopedActionProfile = {
   targetMode: "multi",
@@ -55,21 +83,21 @@ export const autoTagAction: AgentAction<AutoTagInput, AutoTagOutput> = {
   modes: ["paper", "library"],
   paperScopeProfile: autoTagPaperScopeProfile,
   description:
-    "Suggest tags for the targeted Zotero papers and open an editable batch tag-review dialog. " +
-    "By default this uses the current paper in paper chat, the selected chat-context papers/collections/tags in library chat, " +
-    "or an explicit scope like all library, a specific collection, or a specific tag.",
+    "Suggest tags for Zotero bibliographic items and page through editable batch tag-review dialogs. " +
+    "A click with no explicit scope starts on the active library with native review.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
     properties: {
       itemId: {
         type: "number",
-        description: "Single Zotero paper item ID to target.",
+        description: "Single Zotero item ID to target.",
       },
       scope: {
         type: "string",
         enum: ["all", "collection", "tag"],
-        description: "Which papers to consider when explicit itemIds, collectionIds, or tagNames are not provided.",
+        description:
+          "Which items to consider when explicit itemIds, collectionIds, or tagNames are not provided.",
       },
       collectionId: {
         type: "number",
@@ -83,17 +111,18 @@ export const autoTagAction: AgentAction<AutoTagInput, AutoTagOutput> = {
       itemIds: {
         type: "array",
         items: { type: "number" },
-        description: "Explicit Zotero paper item IDs to target.",
+        description: "Explicit Zotero item IDs to target.",
       },
       tagNames: {
         type: "array",
         items: { type: "string" },
-        description: "Tag names whose matching papers should be targeted.",
+        description: "Tag names whose matching items should be targeted.",
       },
       tagScopes: {
         type: "array",
         items: { type: "string", enum: ["allTagged", "untagged"] },
-        description: "Special tag scopes whose matching papers should be targeted.",
+        description:
+          "Special tag scopes whose matching items should be targeted.",
       },
       includeAutomaticTags: {
         type: "boolean",
@@ -101,7 +130,17 @@ export const autoTagAction: AgentAction<AutoTagInput, AutoTagOutput> = {
       },
       limit: {
         type: "number",
-        description: "Max number of targeted papers to include in this run.",
+        description: "Optional total cap across all pages. Default: no limit.",
+      },
+      pageSize: {
+        type: "number",
+        description:
+          "Items to show per review page. Default: 20; maximum: 100.",
+      },
+      startOffset: {
+        type: "number",
+        description:
+          "Internal resume offset for paged workflows. Defaults to 0.",
       },
     },
   },
@@ -110,116 +149,267 @@ export const autoTagAction: AgentAction<AutoTagInput, AutoTagOutput> = {
     input: AutoTagInput,
     ctx: ActionExecutionContext,
   ): Promise<ActionResult<AutoTagOutput>> {
-    const steps = ctx.llm ? 3 : 2;
-    let step = 0;
+    let options = getPagedActionOptions(input);
+    const initialStartOffset = options.startOffset;
+    const windowEndOffset =
+      options.limit !== undefined
+        ? options.startOffset + options.limit
+        : undefined;
+    let tagsPerPaper = normalizeTagsPerPaper(
+      input.tagsPerPaper ?? DEFAULT_TAGS_PER_ITEM,
+    );
 
     ctx.onProgress({
       type: "step_start",
-      step: "Resolving target papers",
-      index: ++step,
-      total: steps,
+      step: "Resolving target items",
+      index: 1,
+      total: 2,
     });
 
-    const targetPapers = await resolveTargetPapers(input, ctx);
+    let targetPapers: TargetPaper[] = [];
+    let pages = getPagedActionPages<TargetPaper>([], options);
+    let pagedTargetCount = 0;
+    let existingTags: string[] = [];
+    const countTargetWindow = (): number => {
+      const start = Math.min(initialStartOffset, targetPapers.length);
+      const end =
+        windowEndOffset !== undefined
+          ? Math.min(windowEndOffset, targetPapers.length)
+          : targetPapers.length;
+      return Math.max(0, end - start);
+    };
+    const reloadTargets = async (): Promise<void> => {
+      ctx.zoteroGateway.invalidateLibrarySearchCache?.(ctx.libraryID);
+      targetPapers = (await resolveTargetPapers(input, ctx)).sort(
+        compareTargetPaperDateAddedDesc,
+      );
+      pages = getPagedActionPages(targetPapers, options);
+      pagedTargetCount = countTargetWindow();
+      existingTags = await fetchExistingLibraryTags(ctx);
+    };
+    await reloadTargets();
 
     ctx.onProgress({
       type: "step_done",
-      step: "Resolving target papers",
-      summary: `${targetPapers.length} paper${targetPapers.length === 1 ? "" : "s"} targeted`,
+      step: "Resolving target items",
+      summary: `${pagedTargetCount} item${pagedTargetCount === 1 ? "" : "s"} targeted`,
     });
 
-    if (!targetPapers.length) {
+    if (!pages.length) {
       return {
         ok: true,
         output: { targeted: 0, tagged: 0, skipped: 0 },
       };
     }
 
-    const suggestionsByItemId = new Map<number, string[]>();
-    if (ctx.llm) {
-      ctx.onProgress({
-        type: "step_start",
-        step: "Suggesting tags",
-        index: ++step,
-        total: steps,
-      });
-
-      const existingTags = await fetchExistingLibraryTags(ctx);
-      try {
-        const suggested = await suggestTagsForItems(targetPapers, existingTags, ctx);
-        for (const entry of suggested) {
-          suggestionsByItemId.set(entry.itemId, entry.tags);
-        }
-        ctx.onProgress({
-          type: "step_done",
-          step: "Suggesting tags",
-          summary:
-            `Prepared starter tags for ${suggestionsByItemId.size}/${targetPapers.length} paper` +
-            `${targetPapers.length === 1 ? "" : "s"}`,
-        });
-      } catch (err) {
-        ctx.onProgress({
-          type: "step_done",
-          step: "Suggesting tags",
-          summary:
-            `AI suggestions unavailable (${err instanceof Error ? err.message : "error"}); ` +
-            "opening manual tag review",
-        });
-      }
-    }
-
     ctx.onProgress({
       type: "step_start",
-      step: "Preparing tag review",
-      index: ++step,
-      total: steps,
+      step: "Reviewing tag pages",
+      index: 2,
+      total: 2,
     });
 
-    const assignments = targetPapers.map((paper) => ({
-      itemId: paper.itemId,
-      tags: suggestionsByItemId.get(paper.itemId) ?? [],
-    }));
+    let tagged = 0;
+    let processed = 0;
+    let skipped = 0;
+    let stopped = false;
+    let confirmed = false;
 
-    const mutateResult = await callTool(
-      "apply_tags",
-      {
-        action: "add",
-        assignments,
-      },
-      ctx,
-      "Preparing tag review",
-    );
+    let pageCursor = 0;
+    while (pageCursor < pages.length) {
+      const page = pages[pageCursor];
+      const pageLabel = formatActionPageLabel(page);
+      const pageTargets = page.items;
+      const suggestionsByItemId = new Map<number, string[]>();
 
-    const mutateContent = mutateResult.content as Record<string, unknown>;
-    const resultObj = mutateContent.result as Record<string, unknown> | undefined;
-    const taggedCount = mutateResult.ok && resultObj
-      ? Number(resultObj.updatedCount || 0)
-      : 0;
-    const mutateError =
-      !mutateResult.ok && typeof mutateContent.error === "string"
-        ? mutateContent.error
-        : undefined;
+      if (ctx.llm) {
+        try {
+          const suggested = await suggestTagsForItems(
+            pageTargets,
+            existingTags,
+            tagsPerPaper,
+            input.userQuery,
+            ctx,
+          );
+          for (const entry of suggested) {
+            suggestionsByItemId.set(entry.itemId, entry.tags);
+          }
+        } catch (err) {
+          ctx.onProgress({
+            type: "step_done",
+            step: `${pageLabel}: Suggesting tags`,
+            summary: `AI suggestions unavailable (${err instanceof Error ? err.message : "error"}); using deterministic fallback`,
+          });
+        }
+      }
+
+      const assignments = pageTargets.map((paper) => {
+        const tags =
+          suggestionsByItemId.get(paper.itemId) ||
+          suggestFallbackTags(paper, existingTags, tagsPerPaper);
+        return {
+          itemId: paper.itemId,
+          tags,
+        };
+      });
+
+      if (!assignments.length) {
+        skipped += pageTargets.length;
+        processed += pageTargets.length;
+        ctx.onProgress({
+          type: "step_done",
+          step: `${pageLabel}: Suggesting tags`,
+          summary: "No confident tag suggestions for this page",
+        });
+        pageCursor += 1;
+        continue;
+      }
+
+      ctx.onProgress({
+        type: "step_start",
+        step: `${pageLabel}: Reviewing tag suggestions`,
+        index: page.pageIndex,
+        total: page.totalPages,
+      });
+
+      const mutateResult = await callTool(
+        "apply_tags",
+        {
+          action: "add",
+          id: getPagedOperationId("auto_tag", page, {
+            pageSize: options.pageSize,
+            tagsPerPaper,
+          }),
+          assignments,
+        },
+        ctx,
+        `${pageLabel}: Preparing tag review`,
+      );
+
+      const confirmationActionId = readToolConfirmationActionId(mutateResult);
+      const confirmationData = readToolConfirmationData(mutateResult);
+      const requestedPageSize =
+        confirmationData.pageSize !== undefined
+          ? normalizeActionPageSize(confirmationData.pageSize)
+          : options.pageSize;
+      const requestedTagsPerPaper =
+        confirmationData.tagsPerPaper !== undefined
+          ? normalizeTagsPerPaper(confirmationData.tagsPerPaper)
+          : tagsPerPaper;
+      const refreshPages = async (
+        targetOffset: number,
+        refreshOptions?: { reloadTargets?: boolean },
+      ): Promise<void> => {
+        const pageSizeChanged = requestedPageSize !== options.pageSize;
+        options = pageSizeChanged
+          ? getPagedActionOptionsForStartOffset(
+              { ...options, pageSize: requestedPageSize },
+              targetOffset,
+              windowEndOffset,
+            )
+          : { ...options, pageSize: requestedPageSize };
+        tagsPerPaper = requestedTagsPerPaper;
+        if (refreshOptions?.reloadTargets) {
+          await reloadTargets();
+        } else {
+          pages = getPagedActionPages(targetPapers, options);
+        }
+        pageCursor = getPagedActionPageCursorForOffset(pages, targetOffset);
+      };
+      if (confirmationActionId === "previous") {
+        await refreshPages(
+          Math.max(options.startOffset, page.offset - requestedPageSize),
+        );
+        continue;
+      }
+      if (confirmationActionId === "refresh") {
+        await refreshPages(page.offset, { reloadTargets: true });
+        continue;
+      }
+      if (confirmationActionId === "next") {
+        await refreshPages(page.offset + page.items.length);
+        continue;
+      }
+      if (confirmationActionId === "cancel") {
+        stopped = true;
+        ctx.onProgress({
+          type: "step_done",
+          step: `${pageLabel}: Reviewing tag suggestions`,
+          summary: "Stopped by user",
+        });
+        break;
+      }
+
+      const mutateContent = mutateResult.content as Record<string, unknown>;
+      const resultObj = mutateContent.result as
+        | Record<string, unknown>
+        | undefined;
+      const taggedCount =
+        mutateResult.ok && resultObj ? Number(resultObj.updatedCount || 0) : 0;
+      const mutateError = readToolResultError(mutateResult);
+
+      if (mutateResult.ok) {
+        tagged += taggedCount;
+        processed += pageTargets.length;
+        skipped += Math.max(0, pageTargets.length - taggedCount);
+        ctx.onProgress({
+          type: "step_done",
+          step: `${pageLabel}: Reviewing tag suggestions`,
+          summary: `Tagged ${taggedCount} item${taggedCount === 1 ? "" : "s"}`,
+        });
+        if (confirmationActionId === "confirm") {
+          if (pageCursor >= pages.length - 1) {
+            confirmed = true;
+            break;
+          }
+          await refreshPages(page.offset + page.items.length);
+          continue;
+        }
+        if (requestedPageSize !== options.pageSize) {
+          await refreshPages(page.offset + page.items.length);
+        } else {
+          pageCursor += 1;
+        }
+        continue;
+      }
+
+      stopped = isUserCancelledToolResult(mutateResult);
+      ctx.onProgress({
+        type: "step_done",
+        step: `${pageLabel}: Reviewing tag suggestions`,
+        summary: stopped
+          ? "Stopped by user"
+          : mutateError || "Tag review was denied or failed",
+      });
+
+      if (!stopped) {
+        return { ok: false, error: mutateError || "Tag review failed" };
+      }
+      break;
+    }
 
     ctx.onProgress({
       type: "step_done",
-      step: "Preparing tag review",
-      summary: mutateResult.ok
-        ? `Tagged ${taggedCount} paper${taggedCount === 1 ? "" : "s"}`
-        : mutateError || "Tag review was denied or failed",
+      step: "Reviewing tag pages",
+      summary: stopped
+        ? `Stopped after ${processed} item${processed === 1 ? "" : "s"}; tagged ${tagged}`
+        : confirmed
+          ? `Confirmed ${processed} reviewed item${processed === 1 ? "" : "s"}; tagged ${tagged}`
+          : `Tagged ${tagged} item${tagged === 1 ? "" : "s"} across ${pages.length} page${pages.length === 1 ? "" : "s"}`,
     });
 
-    if (!mutateResult.ok && mutateError) {
-      return { ok: false, error: mutateError };
-    }
-
-    return {
-      ok: true,
-      output: {
-        targeted: targetPapers.length,
-        tagged: taggedCount,
-        skipped: Math.max(0, targetPapers.length - taggedCount),
-      },
+    const output: AutoTagOutput = {
+      targeted: pagedTargetCount,
+      tagged,
+      skipped,
     };
+    if (pages.length > 1 || stopped) {
+      output.processed = processed;
+    }
+    if (stopped) {
+      output.stopped = true;
+    }
+    return { ok: true, output };
   },
 };
 
@@ -227,8 +417,33 @@ async function resolveTargetPapers(
   input: AutoTagInput,
   ctx: ActionExecutionContext,
 ): Promise<TargetPaper[]> {
+  const explicitTarget =
+    input.itemId ||
+    input.itemIds?.length ||
+    input.collectionId ||
+    input.collectionIds?.length ||
+    input.tagNames?.length ||
+    input.tagScopes?.length ||
+    input.scope;
+  const requestContext = ctx.requestContext;
+  const hasSelectedContext = Boolean(
+    requestContext?.activeItemId ||
+    requestContext?.selectedPaperContexts?.length ||
+    requestContext?.fullTextPaperContexts?.length ||
+    requestContext?.selectedCollectionContexts?.length ||
+    requestContext?.selectedTagContexts?.length,
+  );
+  const shouldDefaultWholeLibrary =
+    !explicitTarget &&
+    requestContext?.mode === "library" &&
+    !hasSelectedContext;
+  const scopeInput: PaperScopedActionInput = explicitTarget
+    ? { ...input, limit: undefined }
+    : shouldDefaultWholeLibrary
+      ? { ...input, scope: "all", limit: undefined }
+      : { ...input, limit: undefined };
   const targets = await resolvePaperScopedActionTargets(
-    input,
+    scopeInput,
     ctx,
     autoTagPaperScopeProfile,
   );
@@ -239,11 +454,30 @@ function hydratePaperTargets(
   targets: PaperScopedActionTarget[],
   ctx: ActionExecutionContext,
 ): TargetPaper[] {
+  const collectionById = new Map(
+    typeof ctx.zoteroGateway.listCollectionSummaries === "function"
+      ? ctx.zoteroGateway
+          .listCollectionSummaries(ctx.libraryID)
+          .map((collection) => [collection.collectionId, collection] as const)
+      : [],
+  );
   return targets.map((target) => {
     const metadata = ctx.zoteroGateway.getEditableArticleMetadata(
       ctx.zoteroGateway.getItem(target.itemId),
     );
     const abstract = metadata?.fields.abstractNote || "";
+    const collectionTerms = target.collectionIds
+      .map((collectionId) => collectionById.get(collectionId))
+      .filter(
+        (
+          collection,
+        ): collection is NonNullable<ReturnType<typeof collectionById.get>> =>
+          Boolean(collection),
+      )
+      .flatMap((collection) => [
+        collection.name,
+        collection.path || collection.name,
+      ]);
     return {
       itemId: target.itemId,
       title: target.title,
@@ -251,13 +485,47 @@ function hydratePaperTargets(
       creator: target.firstCreator || "",
       year: target.year || "",
       existingTags: Array.isArray(target.tags) ? target.tags : [],
+      collectionTerms,
+      dateAdded: target.dateAdded,
     };
   });
+}
+
+function compareTargetPaperDateAddedDesc(
+  left: TargetPaper,
+  right: TargetPaper,
+): number {
+  const leftTime = Date.parse(left.dateAdded || "");
+  const rightTime = Date.parse(right.dateAdded || "");
+  if (Number.isFinite(leftTime) && Number.isFinite(rightTime)) {
+    return rightTime - leftTime;
+  }
+  if (Number.isFinite(rightTime)) return 1;
+  if (Number.isFinite(leftTime)) return -1;
+  return right.itemId - left.itemId;
 }
 
 async function fetchExistingLibraryTags(
   ctx: ActionExecutionContext,
 ): Promise<string[]> {
+  if (typeof ctx.zoteroGateway.listLibraryTags === "function") {
+    try {
+      const tags = await ctx.zoteroGateway.listLibraryTags({
+        libraryID: ctx.libraryID,
+      });
+      return Array.from(
+        new Set(
+          tags
+            .filter((tag) => tag.type !== 1)
+            .map((tag) => tag.name.trim())
+            .filter(Boolean),
+        ),
+      );
+    } catch {
+      // Fall back to query_library below for tests and older gateways.
+    }
+  }
+
   const tagResult = await callTool(
     "query_library",
     { entity: "tags", mode: "list" },
@@ -279,71 +547,226 @@ async function fetchExistingLibraryTags(
         (typeof record.tag === "string" && record.tag) ||
         (typeof record.name === "string" && record.name) ||
         "";
-      if (name) tags.add(name);
+      const type = Number(record.type);
+      if (name && type !== 1) tags.add(name);
     }
   }
   return Array.from(tags);
 }
 
+function suggestFallbackTags(
+  item: TargetPaper,
+  existingLibraryTags: string[],
+  maxTags: number,
+): string[] {
+  const existingKeys = new Set(item.existingTags.map(normalizeTagKey));
+  const itemText = [
+    item.title,
+    item.abstract,
+    item.creator,
+    item.year,
+    ...item.collectionTerms,
+  ].join(" ");
+  const itemTokenSet = tokenizeTagText(itemText);
+  const normalizedItemText = normalizeTagText(itemText);
+  const out: string[] = [];
+  const seen = new Set(existingKeys);
+
+  const add = (tag: string): void => {
+    const normalized = normalizeTagForSuggestion(tag);
+    const key = normalizeTagKey(normalized);
+    if (!normalized || seen.has(key) || isGenericTag(normalized)) return;
+    seen.add(key);
+    out.push(normalized);
+  };
+
+  for (const tag of existingLibraryTags) {
+    if (out.length >= maxTags) break;
+    const key = normalizeTagKey(tag);
+    if (!key || existingKeys.has(key)) continue;
+    const tagTokens = tokenizeTagText(tag);
+    const exact = normalizedItemText.includes(normalizeTagText(tag));
+    const tokenMatch =
+      tagTokens.size > 0 &&
+      Array.from(tagTokens).every((token) => itemTokenSet.has(token));
+    if (exact || tokenMatch) add(tag);
+  }
+
+  for (const phrase of extractTopicalPhrases(item.title, item.abstract)) {
+    if (out.length >= maxTags) break;
+    add(phrase);
+  }
+
+  return out.slice(0, maxTags);
+}
+
+const TAG_STOPWORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "abstract",
+  "are",
+  "as",
+  "at",
+  "be",
+  "by",
+  "for",
+  "from",
+  "in",
+  "into",
+  "is",
+  "of",
+  "on",
+  "or",
+  "one",
+  "paper",
+  "research",
+  "science",
+  "study",
+  "studies",
+  "the",
+  "three",
+  "to",
+  "two",
+  "using",
+  "via",
+  "with",
+]);
+
+function normalizeTagText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function normalizeTagKey(value: string): string {
+  return normalizeTagText(value).replace(/\s+/g, " ");
+}
+
+function normalizeTagForSuggestion(value: string): string {
+  return normalizeTagKey(value)
+    .split(/\s+/)
+    .filter((token) => token && !TAG_STOPWORDS.has(token))
+    .slice(0, 3)
+    .join(" ");
+}
+
+function tokenizeTagText(value: string): Set<string> {
+  return new Set(
+    normalizeTagText(value)
+      .split(/\s+/)
+      .filter(
+        (token) =>
+          token.length >= 3 &&
+          !TAG_STOPWORDS.has(token) &&
+          !/^\d+$/.test(token),
+      ),
+  );
+}
+
+function isGenericTag(value: string): boolean {
+  const tokens = value.split(/\s+/).filter(Boolean);
+  return !tokens.length || tokens.every((token) => TAG_STOPWORDS.has(token));
+}
+
+function extractTopicalPhrases(title: string, abstract: string): string[] {
+  const titleTokens = Array.from(tokenizeTagText(title));
+  const phrases: string[] = [];
+  for (let i = 0; i < titleTokens.length - 1; i += 1) {
+    phrases.push(`${titleTokens[i]} ${titleTokens[i + 1]}`);
+  }
+  phrases.push(...titleTokens.filter((token) => token.length >= 5));
+
+  const counts = new Map<string, number>();
+  for (const token of tokenizeTagText(abstract).values()) {
+    counts.set(token, (counts.get(token) || 0) + 1);
+  }
+  const abstractTokens = Array.from(counts.entries())
+    .sort(
+      (left, right) => right[1] - left[1] || left[0].localeCompare(right[0]),
+    )
+    .map(([token]) => token)
+    .filter((token) => token.length >= 5);
+  phrases.push(...abstractTokens);
+
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const phrase of phrases) {
+    const key = normalizeTagKey(phrase);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(key);
+  }
+  return out;
+}
+
 async function suggestTagsForItems(
   items: TargetPaper[],
   existingTags: string[],
+  maxTags: number,
+  userQuery: string | undefined,
   ctx: ActionExecutionContext,
 ): Promise<Array<{ itemId: number; tags: string[] }>> {
   if (!ctx.llm) return [];
-  const results: Array<{ itemId: number; tags: string[] }> = [];
-  for (let i = 0; i < items.length; i += LLM_BATCH_SIZE) {
-    const batch = items.slice(i, i + LLM_BATCH_SIZE);
-    const batchResult = await suggestTagsBatch(batch, existingTags, ctx);
-    results.push(...batchResult);
-  }
-  return results;
+  return collectActionLlmBatchResults(items, LLM_BATCH_SIZE, (batch) =>
+    suggestTagsBatch(
+      batch,
+      existingTags,
+      maxTags,
+      userQuery,
+      ctx,
+    ),
+  );
 }
 
 async function suggestTagsBatch(
   batch: TargetPaper[],
   existingTags: string[],
+  maxTags: number,
+  userQuery: string | undefined,
   ctx: ActionExecutionContext,
 ): Promise<Array<{ itemId: number; tags: string[] }>> {
   if (!ctx.llm) return [];
-  const prompt = buildTagPrompt(batch, existingTags);
-  const raw = await callLLM({
+  const prompt = buildTagPrompt(batch, existingTags, maxTags, userQuery);
+  const raw = await callActionLlm({
+    ctx,
     prompt,
-    model: ctx.llm.model,
-    apiBase: ctx.llm.apiBase,
-    apiKey: ctx.llm.apiKey,
-    authMode: ctx.llm.authMode,
-    providerProtocol: ctx.llm.providerProtocol,
-    temperature: 0,
     maxTokens: 800,
   });
-  return parseTagResponse(raw, batch);
+  return parseTagResponse(raw, batch, maxTags);
 }
 
 function buildTagPrompt(
   batch: TargetPaper[],
   existingTags: string[],
+  maxTags: number,
+  userQuery: string | undefined,
 ): string {
   const vocab = existingTags.length
-    ? `Existing tags in this library (prefer these when they fit):\n${existingTags
-      .slice(0, 80)
-      .map((tag) => `- ${tag}`)
-      .join("\n")}\n\n`
+    ? `Existing manual tags in this library (prefer these when they fit):\n${existingTags
+        .slice(0, 80)
+        .map((tag) => `- ${tag}`)
+        .join("\n")}\n\n`
     : "";
   const itemsBlock = batch
     .map((item) => {
       const abstract = item.abstract
         ? item.abstract.slice(0, 800).replace(/\s+/g, " ").trim()
         : "(no abstract available)";
-      const byline = [item.creator, item.year].filter(Boolean).join(" · ");
+      const byline = [item.creator, item.year].filter(Boolean).join(" - ");
       const existing = item.existingTags.length
         ? item.existingTags.join(", ")
+        : "(none)";
+      const collections = item.collectionTerms.length
+        ? item.collectionTerms.join(", ")
         : "(none)";
       return [
         `itemId: ${item.itemId}`,
         `title: ${item.title}`,
         byline ? `byline: ${byline}` : "",
         `existing tags: ${existing}`,
+        `collections: ${collections}`,
         `abstract: ${abstract}`,
       ]
         .filter(Boolean)
@@ -352,18 +775,21 @@ function buildTagPrompt(
     .join("\n\n---\n\n");
 
   return [
-    "You are tagging scholarly papers for a Zotero library.",
-    `For each paper below, propose up to ${MAX_TAGS_PER_ITEM} short, topical tags to ADD.`,
+    "You are tagging scholarly items for a Zotero library.",
+    `For each item below, propose up to ${maxTags} short, topical tags to ADD.`,
     "Guidelines:",
     "- Prefer short lowercase phrases (1-3 words).",
-    "- Reuse an existing tag from the library vocabulary whenever it fits.",
-    "- Never repeat a tag that already exists on that paper.",
-    "- Only suggest tags that add useful new information beyond the paper's current tags.",
-    "- Do not include generic filler like 'research', 'paper', 'study', or 'science'.",
-    "- If the current tags already cover the paper well, return an empty tags array for it.",
+    "- Reuse an existing manual tag from the library vocabulary whenever it fits.",
+    "- Never repeat a tag that already exists on that item.",
+    "- Only suggest tags that add useful new information beyond the current tags.",
+    "- Do not include generic filler like research, paper, study, or science.",
+    "- If the current tags already cover the item well, return an empty tags array for it.",
     "",
+    userQuery?.trim()
+      ? `Extra user instructions for this auto-tag action:\n${userQuery.trim()}\n`
+      : "",
     vocab,
-    "Papers:",
+    "Items:",
     itemsBlock,
     "",
     "Respond with ONLY a JSON array, no prose, no code fence. Shape:",
@@ -374,8 +800,11 @@ function buildTagPrompt(
 function parseTagResponse(
   raw: string,
   batch: TargetPaper[],
+  maxTags: number,
 ): Array<{ itemId: number; tags: string[] }> {
-  const batchByItemId = new Map(batch.map((item) => [item.itemId, item] as const));
+  const batchByItemId = new Map(
+    batch.map((item) => [item.itemId, item] as const),
+  );
   const jsonText = extractJsonArray(raw);
   if (!jsonText) return [];
   let parsed: unknown;
@@ -392,32 +821,21 @@ function parseTagResponse(
     const itemId = Number(record.itemId);
     const sourceItem = batchByItemId.get(itemId);
     if (!Number.isFinite(itemId) || !sourceItem) continue;
-    const seen = new Set(
-      sourceItem.existingTags.map((tag) => tag.trim().toLowerCase()),
-    );
+    const seen = new Set(sourceItem.existingTags.map(normalizeTagKey));
     const rawTags = Array.isArray(record.tags) ? record.tags : [];
     const tags = rawTags
-      .map((tag) => (typeof tag === "string" ? tag.trim() : ""))
+      .map((tag) =>
+        typeof tag === "string" ? normalizeTagForSuggestion(tag) : "",
+      )
       .filter((tag): tag is string => {
         if (!tag) return false;
-        const key = tag.toLowerCase();
-        if (seen.has(key)) return false;
+        const key = normalizeTagKey(tag);
+        if (seen.has(key) || isGenericTag(tag)) return false;
         seen.add(key);
         return true;
       })
-      .slice(0, MAX_TAGS_PER_ITEM);
+      .slice(0, maxTags);
     if (tags.length) out.push({ itemId, tags });
   }
   return out;
-}
-
-function extractJsonArray(text: string): string | null {
-  const trimmed = text.trim();
-  if (trimmed.startsWith("[")) return trimmed;
-  const start = trimmed.indexOf("[");
-  const end = trimmed.lastIndexOf("]");
-  if (start >= 0 && end > start) {
-    return trimmed.slice(start, end + 1);
-  }
-  return null;
 }

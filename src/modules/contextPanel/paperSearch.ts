@@ -30,6 +30,8 @@ export type PaperSearchSlashToken = {
   caretEnd: number;
 };
 
+export type SkillSearchDollarToken = PaperSearchSlashToken;
+
 export type PaperBrowseCollectionCandidate = {
   collectionId: number;
   name: string;
@@ -769,6 +771,41 @@ export function parsePaperSearchSlashToken(
       };
     }
     slashIndex = safeInput.lastIndexOf("/", slashIndex - 1);
+  }
+  return null;
+}
+
+export function parseSkillSearchDollarToken(
+  input: string,
+  caret: number,
+): SkillSearchDollarToken | null {
+  const safeInput = sanitizeText(typeof input === "string" ? input : "");
+  const normalizedCaret = Number.isFinite(caret)
+    ? Math.max(0, Math.min(safeInput.length, Math.floor(caret)))
+    : safeInput.length;
+
+  let dollarIndex = safeInput.lastIndexOf("$", normalizedCaret - 1);
+  while (dollarIndex >= 0) {
+    if (dollarIndex === 0 || /\s/u.test(safeInput[dollarIndex - 1] || "")) {
+      let tokenEnd = dollarIndex + 1;
+      while (
+        tokenEnd < safeInput.length &&
+        /[A-Za-z0-9_-]/u.test(safeInput[tokenEnd] || "")
+      ) {
+        tokenEnd += 1;
+      }
+      if (normalizedCaret > tokenEnd) {
+        return null;
+      }
+      return {
+        query: sanitizeText(
+          safeInput.slice(dollarIndex + 1, Math.min(normalizedCaret, tokenEnd)),
+        ),
+        slashStart: dollarIndex,
+        caretEnd: normalizedCaret,
+      };
+    }
+    dollarIndex = safeInput.lastIndexOf("$", dollarIndex - 1);
   }
   return null;
 }

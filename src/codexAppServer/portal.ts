@@ -4,17 +4,18 @@ import type {
   CodexGlobalPortalItem,
   CodexPaperPortalItem,
 } from "../modules/contextPanel/types";
+import { isSupportedContextAttachment } from "../modules/contextPanel/contextAttachmentSupport";
 
 export function createCodexGlobalPortalItem(
   libraryID: number,
   conversationKey: number,
 ): any {
-  const normalizedLibraryID = Number.isFinite(libraryID) && libraryID > 0
-    ? Math.floor(libraryID)
-    : 1;
-  const normalizedConversationKey = Number.isFinite(conversationKey) && conversationKey > 0
-    ? Math.floor(conversationKey)
-    : 1;
+  const normalizedLibraryID =
+    Number.isFinite(libraryID) && libraryID > 0 ? Math.floor(libraryID) : 1;
+  const normalizedConversationKey =
+    Number.isFinite(conversationKey) && conversationKey > 0
+      ? Math.floor(conversationKey)
+      : 1;
   const portalItem: CodexGlobalPortalItem = {
     __llmCodexGlobalPortalItem: true,
     __llmCodexConversationKind: "global",
@@ -38,16 +39,18 @@ export function createCodexPaperPortalItem(
   basePaperItem: any,
   conversationKey: number,
 ): any {
-  const basePaperItemID = Number.isFinite(basePaperItem?.id) && basePaperItem.id > 0
-    ? Math.floor(basePaperItem.id)
-    : 0;
+  const basePaperItemID =
+    Number.isFinite(basePaperItem?.id) && basePaperItem.id > 0
+      ? Math.floor(basePaperItem.id)
+      : 0;
   const normalizedLibraryID =
     Number.isFinite(basePaperItem?.libraryID) && basePaperItem.libraryID > 0
       ? Math.floor(basePaperItem.libraryID)
       : 1;
-  const normalizedConversationKey = Number.isFinite(conversationKey) && conversationKey > 0
-    ? Math.floor(conversationKey)
-    : Math.max(1, basePaperItemID);
+  const normalizedConversationKey =
+    Number.isFinite(conversationKey) && conversationKey > 0
+      ? Math.floor(conversationKey)
+      : Math.max(1, basePaperItemID);
   const portalItem: CodexPaperPortalItem = {
     __llmCodexPaperPortalItem: true,
     __llmCodexConversationKind: "paper",
@@ -59,12 +62,17 @@ export function createCodexPaperPortalItem(
     isAttachment: () => false,
     isRegularItem: () => true,
     getAttachments: () => {
-      const resolvedBase = basePaperItemID ? Zotero.Items.get(basePaperItemID) || null : null;
-      if (!resolvedBase?.isRegularItem?.()) return [];
-      return resolvedBase.getAttachments();
+      const resolvedBase = basePaperItemID
+        ? Zotero.Items.get(basePaperItemID) || null
+        : null;
+      if (resolvedBase?.isRegularItem?.()) return resolvedBase.getAttachments();
+      if (isSupportedContextAttachment(resolvedBase)) return [basePaperItemID];
+      return [];
     },
     getField: (field: string) => {
-      const resolvedBase = basePaperItemID ? Zotero.Items.get(basePaperItemID) || null : null;
+      const resolvedBase = basePaperItemID
+        ? Zotero.Items.get(basePaperItemID) || null
+        : null;
       if (resolvedBase) {
         try {
           return String(resolvedBase.getField(field) || "");
@@ -84,8 +92,9 @@ export function isCodexGlobalPortalItem(
 ): item is CodexGlobalPortalItem {
   return Boolean(
     item &&
-      typeof item === "object" &&
-      (item as Partial<CodexGlobalPortalItem>).__llmCodexGlobalPortalItem === true,
+    typeof item === "object" &&
+    (item as Partial<CodexGlobalPortalItem>).__llmCodexGlobalPortalItem ===
+      true,
   );
 }
 
@@ -94,8 +103,8 @@ export function isCodexPaperPortalItem(
 ): item is CodexPaperPortalItem {
   return Boolean(
     item &&
-      typeof item === "object" &&
-      (item as Partial<CodexPaperPortalItem>).__llmCodexPaperPortalItem === true,
+    typeof item === "object" &&
+    (item as Partial<CodexPaperPortalItem>).__llmCodexPaperPortalItem === true,
   );
 }
 
@@ -111,11 +120,10 @@ export function getCodexPaperPortalBaseItemID(item: unknown): number | null {
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : null;
 }
 
-export function resolveCodexPaperPortalBaseItem(
-  item: any,
-): any {
+export function resolveCodexPaperPortalBaseItem(item: any): any {
   const baseItemID = getCodexPaperPortalBaseItemID(item);
   if (!baseItemID) return null;
   const resolved = Zotero.Items.get(baseItemID) || null;
-  return resolved?.isRegularItem?.() ? resolved : null;
+  if (resolved?.isRegularItem?.()) return resolved;
+  return isSupportedContextAttachment(resolved) ? resolved : null;
 }

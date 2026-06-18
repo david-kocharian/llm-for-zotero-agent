@@ -67,6 +67,11 @@ describe("providerPresets", function () {
       detectProviderPreset("https://api.moonshot.ai/v1/chat/completions"),
       "kimi",
     );
+    assert.equal(
+      detectProviderPreset("https://api.xiaomimimo.com/v1/chat/completions"),
+      "mimo",
+    );
+    assert.equal(detectProviderPreset("https://api.xiaomimimo.com/v1"), "mimo");
   });
 
   it("falls back to customized for unknown URLs", function () {
@@ -107,6 +112,10 @@ describe("providerPresets", function () {
       getProviderPreset("kimi").defaultApiBase,
       "https://api.moonshot.ai/v1",
     );
+    assert.equal(
+      getProviderPreset("mimo").defaultApiBase,
+      "https://api.xiaomimimo.com/v1",
+    );
   });
 
   it("stores default protocols per preset", function () {
@@ -143,10 +152,22 @@ describe("providerPresets", function () {
     assert.deepEqual(getProviderPreset("kimi").supportedProtocols, [
       "openai_chat_compat",
     ]);
+    assert.equal(
+      getProviderPreset("mimo").defaultProtocol,
+      "openai_chat_compat",
+    );
+    assert.deepEqual(getProviderPreset("mimo").supportedProtocols, [
+      "openai_chat_compat",
+    ]);
   });
 
   it("offers advanced protocol options beyond preset defaults", function () {
     assert.deepEqual(getProviderPresetProtocolOptions("kimi"), [
+      "openai_chat_compat",
+      "responses_api",
+      "anthropic_messages",
+    ]);
+    assert.deepEqual(getProviderPresetProtocolOptions("mimo"), [
       "openai_chat_compat",
       "responses_api",
       "anthropic_messages",
@@ -177,6 +198,12 @@ describe("providerPresets", function () {
       providerSupportsResponsesEndpoint(
         "https://dashscope.aliyuncs.com/compatible-mode/v1",
       ),
+    );
+  });
+
+  it("does not advertise MiMo as Responses-capable", function () {
+    assert.isFalse(
+      providerSupportsResponsesEndpoint("https://api.xiaomimimo.com/v1"),
     );
   });
 });

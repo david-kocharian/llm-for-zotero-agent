@@ -3,10 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { AgentRuntime } from "../src/agent/runtime";
-import {
-  clearAgentReadLedger,
-  clearAgentResourceLifecycleState,
-} from "../src/agent/context/resourceLifecycle";
+import { clearAgentReadLedger } from "../src/agent/context/resourceContextPlan";
 import { clearAgentCoverageLedger } from "../src/agent/context/coverageLedger";
 import { getAgentRunTrace } from "../src/agent/store/traceStore";
 import { clearAgentTranscriptStore } from "../src/agent/store/transcriptStore";
@@ -22,6 +19,11 @@ import {
   MAX_AGENT_ROUNDS,
   MAX_AGENT_TOOL_CALLS_PER_ROUND,
 } from "../src/agent/model/limits";
+import {
+  BUILTIN_SKILL_FILES,
+  parseSkill,
+  setUserSkills,
+} from "../src/agent/skills";
 import type {
   AgentEvent,
   AgentModelCapabilities,
@@ -135,7 +137,6 @@ class MockAdapter implements AgentModelAdapter {
 
 describe("AgentRuntime", function () {
   beforeEach(function () {
-    clearAgentResourceLifecycleState();
     clearAgentReadLedger();
     clearAgentCoverageLedger();
     clearAgentTranscriptStore();
@@ -174,6 +175,68 @@ describe("AgentRuntime", function () {
         type: "fallback",
       });
     } finally {
+      restoreDb();
+    }
+  });
+
+  it("emits explicitly forced slash skills alongside auto-detected skills", async function () {
+    const restoreDb = installMockDb();
+    setUserSkills(
+      Object.values(BUILTIN_SKILL_FILES).map((raw) => parseSkill(raw)),
+    );
+    try {
+      const runtime = new AgentRuntime({
+        registry: new AgentToolRegistry(),
+        adapterFactory: () =>
+          new MockAdapter(
+            [
+              {
+                kind: "final",
+                text: "Done.",
+                assistantMessage: {
+                  role: "assistant",
+                  content: "Done.",
+                },
+              },
+            ],
+            {
+              streaming: false,
+              toolCalls: true,
+              multimodal: false,
+            },
+          ),
+      });
+      const events: AgentEvent[] = [];
+
+      await runtime.runTurn({
+        request: {
+          conversationKey: 1,
+          mode: "agent",
+          userText: "help me understand this paper",
+          selectedPaperContexts: [
+            { itemId: 10, contextItemId: 11, title: "Paper" },
+          ],
+          forcedSkillIds: ["evidence-based-qa"],
+          model: "gpt-5.4",
+          apiBase: "",
+          apiKey: "test",
+        },
+        onEvent: (event) => {
+          events.push(event);
+        },
+      });
+
+      const statusTexts = events
+        .filter((event): event is Extract<AgentEvent, { type: "status" }> =>
+          event.type === "status",
+        )
+        .map((event) => event.text);
+      assert.includeMembers(statusTexts, [
+        "Skill activated: simple-paper-qa",
+        "Skill activated: evidence-based-qa",
+      ]);
+    } finally {
+      setUserSkills([]);
       restoreDb();
     }
   });
@@ -1680,7 +1743,7 @@ describe("AgentRuntime", function () {
     }
   });
 
-  it("emits resource lifecycle events and advances state only after completed runs", async function () {
+  it("emits current context events and renders context on repeated turns", async function () {
     const restoreDb = installMockDb();
     try {
       const request: AgentRuntimeRequest = {
@@ -1729,18 +1792,18 @@ describe("AgentRuntime", function () {
           firstEvents.push(event);
         },
       });
-      const firstLifecycleEvent = firstEvents.find(
+      const firstContextEvent = firstEvents.find(
         (event) =>
           event.type === "provider_event" &&
-          event.providerType === "agent_resource_lifecycle",
+          event.providerType === "agent_context_envelope",
       );
       assert.deepInclude(
-        firstLifecycleEvent?.type === "provider_event"
-          ? firstLifecycleEvent.payload
+        firstContextEvent?.type === "provider_event"
+          ? firstContextEvent.payload
           : {},
         {
-          lifecycleState: "setup-required",
-          contextInjection: "full",
+          selectedPaperCount: 1,
+          fullTextPaperCount: 0,
         },
       );
 
@@ -1785,21 +1848,26 @@ describe("AgentRuntime", function () {
           secondEvents.push(event);
         },
       });
-      const secondLifecycleEvent = secondEvents.find(
+      const secondContextEvent = secondEvents.find(
         (event) =>
           event.type === "provider_event" &&
-          event.providerType === "agent_resource_lifecycle",
+          event.providerType === "agent_context_envelope",
       );
       assert.deepInclude(
-        secondLifecycleEvent?.type === "provider_event"
-          ? secondLifecycleEvent.payload
+        secondContextEvent?.type === "provider_event"
+          ? secondContextEvent.payload
           : {},
         {
-          lifecycleState: "thin-followup",
-          contextInjection: "thin",
+          selectedPaperCount: 1,
+          fullTextPaperCount: 0,
         },
       );
-      assert.include(secondInitialUserMessage, "same Zotero resources");
+      assert.include(
+        secondInitialUserMessage,
+        "Zotero context for this turn:",
+      );
+      assert.include(secondInitialUserMessage, "Paper 1:");
+      assert.include(secondInitialUserMessage, 'title="Lifecycle Paper"');
 
       const failingRuntime = new AgentRuntime({
         registry: new AgentToolRegistry(),
@@ -1870,18 +1938,18 @@ describe("AgentRuntime", function () {
           retryEvents.push(event);
         },
       });
-      const retryLifecycleEvent = retryEvents.find(
+      const retryContextEvent = retryEvents.find(
         (event) =>
           event.type === "provider_event" &&
-          event.providerType === "agent_resource_lifecycle",
+          event.providerType === "agent_context_envelope",
       );
       assert.deepInclude(
-        retryLifecycleEvent?.type === "provider_event"
-          ? retryLifecycleEvent.payload
+        retryContextEvent?.type === "provider_event"
+          ? retryContextEvent.payload
           : {},
         {
-          lifecycleState: "setup-required",
-          contextInjection: "full",
+          selectedPaperCount: 1,
+          fullTextPaperCount: 0,
         },
       );
     } finally {

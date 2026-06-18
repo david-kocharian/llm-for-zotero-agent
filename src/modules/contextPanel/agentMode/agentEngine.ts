@@ -89,6 +89,7 @@ import type {
   SelectedTextSource,
   TagContextRef,
 } from "../../../shared/types";
+import type { ResolvedContextSource } from "../types";
 import type { UsageStats } from "../../../shared/llm";
 import type { ReasoningConfig as LLMReasoningConfig } from "../../../utils/llmClient";
 import type { ChatMessage } from "../../../utils/llmClient";
@@ -175,6 +176,25 @@ function appendPendingFinalText(
   message.text = message.pendingFinalText || message.text;
 }
 
+export function mergeAgentToolResultQuoteCitations(
+  message: { quoteCitations?: QuoteCitation[] },
+  event: Pick<Extract<AgentEvent, { type: "tool_result" }>, "ok"> & {
+    content?: unknown;
+    artifacts?: unknown;
+  },
+): void {
+  if (!event.ok) return;
+  const toolQuoteCitations = mergeQuoteCitations(
+    extractQuoteCitationsFromToolContent(event.content),
+    extractQuoteCitationsFromToolContent(event.artifacts),
+  );
+  if (!toolQuoteCitations.length) return;
+  message.quoteCitations = mergeQuoteCitations(
+    message.quoteCitations,
+    toolQuoteCitations,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Types for panel helpers (defined inline to avoid importing from chat.ts)
 // ---------------------------------------------------------------------------
@@ -253,7 +273,7 @@ function showInlineConfirmationCard(
     return;
   }
   const wrapper = ownerDoc.createElement("div");
-  wrapper.className = "llm-action-inline-card";
+  wrapper.className = "llm-action-inline-card llm-action-inline-card-review";
   wrapper.dataset.requestId = requestId;
   wrapper.appendChild(renderPendingActionCard(ownerDoc, { requestId, action }));
   chatBox.appendChild(wrapper);
@@ -517,7 +537,7 @@ export type AgentEngineDeps = {
     paperContexts?: PaperContextRef[],
     fullTextPaperContexts?: PaperContextRef[],
     excludePaperKeys?: Set<string>,
-    contextSourceItem?: Zotero.Item | null,
+    contextSource?: ResolvedContextSource | null,
   ) => {
     paperContexts: PaperContextRef[];
     fullTextPaperContexts: PaperContextRef[];
@@ -568,7 +588,7 @@ export async function sendAgentTurn(
   opts: {
     body: Element;
     item: Zotero.Item;
-    contextSourceItem?: Zotero.Item | null;
+    contextSource?: ResolvedContextSource | null;
     question: string;
     images?: string[];
     model?: string;
@@ -609,7 +629,7 @@ export async function sendAgentTurn(
   const {
     body,
     item,
-    contextSourceItem,
+    contextSource,
     question,
     images,
     model,
@@ -711,6 +731,7 @@ export async function sendAgentTurn(
     selectedTagContexts: selectedTagContexts?.length
       ? selectedTagContexts
       : undefined,
+    forcedSkillIds: forcedSkillIds?.length ? forcedSkillIds.slice() : undefined,
   };
   if (modelAttachments !== undefined) {
     userMessage.modelAttachments = modelAttachments;
@@ -727,6 +748,7 @@ export async function sendAgentTurn(
       selectedTextSources: userMessage.selectedTextSources,
       selectedTextPaperContexts: userMessage.selectedTextPaperContexts,
       selectedTextNoteContexts: userMessage.selectedTextNoteContexts,
+      forcedSkillIds: userMessage.forcedSkillIds,
       citationPaperContexts: userMessage.citationPaperContexts,
       selectedCollectionContexts: userMessage.selectedCollectionContexts,
       selectedTagContexts: userMessage.selectedTagContexts,
@@ -819,7 +841,7 @@ export async function sendAgentTurn(
     normalizedPaperContexts,
     normalizedFullTextPaperContexts,
     undefined,
-    contextSourceItem,
+    contextSource,
   );
   userMessage.paperContexts = paperContextsForMessage.length
     ? paperContextsForMessage
@@ -842,6 +864,7 @@ export async function sendAgentTurn(
       selectedTextSources: userMessage.selectedTextSources,
       selectedTextPaperContexts: userMessage.selectedTextPaperContexts,
       selectedTextNoteContexts: userMessage.selectedTextNoteContexts,
+      forcedSkillIds: userMessage.forcedSkillIds,
       paperContexts: userMessage.paperContexts,
       fullTextPaperContexts: userMessage.fullTextPaperContexts,
       citationPaperContexts: userMessage.citationPaperContexts,
@@ -1111,16 +1134,7 @@ export async function sendAgentTurn(
           }
           case "tool_result": {
             if (!event.ok) break;
-            const toolQuoteCitations = mergeQuoteCitations(
-              extractQuoteCitationsFromToolContent(event.content),
-              extractQuoteCitationsFromToolContent(event.artifacts),
-            );
-            if (toolQuoteCitations.length) {
-              assistantMessage.quoteCitations = mergeQuoteCitations(
-                assistantMessage.quoteCitations,
-                toolQuoteCitations,
-              );
-            }
+            mergeAgentToolResultQuoteCitations(assistantMessage, event);
             const toolPaperContexts = deps.normalizePaperContexts([
               ...extractPaperContextCandidatesFromToolContent(event.content),
               ...extractPaperContextCandidatesFromToolContent(event.artifacts),
@@ -1755,16 +1769,7 @@ export async function retryAgentTurn(
           }
           case "tool_result": {
             if (!event.ok) break;
-            const toolQuoteCitations = mergeQuoteCitations(
-              extractQuoteCitationsFromToolContent(event.content),
-              extractQuoteCitationsFromToolContent(event.artifacts),
-            );
-            if (toolQuoteCitations.length) {
-              assistantMessage.quoteCitations = mergeQuoteCitations(
-                assistantMessage.quoteCitations,
-                toolQuoteCitations,
-              );
-            }
+            mergeAgentToolResultQuoteCitations(assistantMessage, event);
             const toolPaperContexts = deps.normalizePaperContexts([
               ...extractPaperContextCandidatesFromToolContent(event.content),
               ...extractPaperContextCandidatesFromToolContent(event.artifacts),

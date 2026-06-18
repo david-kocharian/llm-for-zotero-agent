@@ -36,6 +36,7 @@ import {
 } from "../../claudeCode/runtime";
 import { getCodexProfileSignature } from "../../codexAppServer/constants";
 import { resolveConversationStorageSystem } from "../../shared/conversationStorageRouting";
+import { normalizeForcedSkillIds } from "../../shared/skillIds";
 import {
   getCodexReasoningModePref,
   getCodexRuntimeModelPref,
@@ -113,6 +114,7 @@ import type {
   PaperContextRef,
   PaperContextSendMode,
   ContextAssemblyStrategy,
+  ResolvedContextSource,
 } from "./types";
 import {
   chatHistory,
@@ -137,6 +139,7 @@ import {
   isRequestPending,
   setPendingRequestId,
   setResponseMenuTarget,
+  getResponseActionRunner,
   setPromptMenuTarget,
   inlineEditTarget,
   setInlineEditTarget,
@@ -150,6 +153,8 @@ import {
   setInlineEditSavedDraft,
   selectedRuntimeModeCache,
   pdfTextCache,
+  type ResponseActionKind,
+  type ResponseActionTarget,
 } from "./state";
 import { agentRunTraceCache, agentRunTraceLoadingTasks } from "./agentState";
 import {
@@ -1009,7 +1014,7 @@ function normalizeTagContexts(tagContexts: unknown): TagContextRef[] {
 
 function resolveAutoLoadedPaperContextForItem(
   item: Zotero.Item,
-  contextSourceItem?: Zotero.Item | null,
+  contextSource?: ResolvedContextSource | null,
 ): PaperContextRef | null {
   const activeNoteSession = resolveActiveNoteSession(item);
   if (activeNoteSession?.noteKind === "standalone") {
@@ -1030,8 +1035,21 @@ function resolveAutoLoadedPaperContextForItem(
   if (resolveDisplayConversationKind(item) === "global") {
     return null;
   }
-  const contextSource = resolveContextSourceItem(contextSourceItem || item);
-  return resolvePaperContextRefFromAttachment(contextSource.contextItem);
+  const explicitPaperContext = normalizePaperContexts(
+    contextSource?.paperContext ? [contextSource.paperContext] : [],
+  )[0];
+  if (explicitPaperContext) return explicitPaperContext;
+  const sourceItem = contextSource?.contextItem || null;
+  if (sourceItem?.isAttachment?.()) {
+    const explicitSourceContext =
+      resolvePaperContextRefFromAttachment(sourceItem);
+    if (explicitSourceContext) return explicitSourceContext;
+  }
+  const resolvedContextSource = resolveContextSourceItem(sourceItem || item);
+  return (
+    resolvedContextSource.paperContext ||
+    resolvePaperContextRefFromAttachment(resolvedContextSource.contextItem)
+  );
 }
 
 function resolveLibraryDisplayName(libraryID: number): string | undefined {
@@ -1212,6 +1230,78 @@ export function resolveAssistantResponseMenuContent(
   };
 }
 
+export function buildAssistantResponseActionTarget(params: {
+  item: Zotero.Item;
+  message: Message;
+  pairedUserMessage: Message | null;
+  conversationKey: number;
+  selectedText?: string;
+}): ResponseActionTarget | null {
+  const { item, message, pairedUserMessage, conversationKey, selectedText } =
+    params;
+  const menuContent = resolveAssistantResponseMenuContent(
+    message,
+    selectedText || "",
+  );
+  if (!menuContent) return null;
+  const pairedUser =
+    pairedUserMessage?.role === "user" ? pairedUserMessage : null;
+  return {
+    item,
+    contentText: menuContent.contentText,
+    queryText: pairedUser ? pairedUser.text || "" : "",
+    modelName: message.modelName?.trim() || "unknown",
+    conversationKey,
+    userTimestamp: pairedUser ? Math.floor(pairedUser.timestamp) : 0,
+    assistantTimestamp: Math.floor(message.timestamp),
+    paperContexts: pairedUser
+      ? getMessageCitationPaperContexts(pairedUser)
+      : undefined,
+    quoteCitations: message.quoteCitations,
+    generatedImages: menuContent.generatedImages,
+  };
+}
+
+function buildAssistantResponseDeleteTarget(params: {
+  item: Zotero.Item;
+  message: Message;
+  pairedUserMessage: Message | null;
+  conversationKey: number;
+  contentTarget: ResponseActionTarget | null;
+}): ResponseActionTarget | null {
+  const pairedUser =
+    params.pairedUserMessage?.role === "user" ? params.pairedUserMessage : null;
+  if (!pairedUser) return null;
+  return (
+    params.contentTarget || {
+      item: params.item,
+      contentText: "",
+      queryText: pairedUser.text || "",
+      modelName: params.message.modelName?.trim() || "unknown",
+      conversationKey: params.conversationKey,
+      userTimestamp: Math.floor(pairedUser.timestamp),
+      assistantTimestamp: Math.floor(params.message.timestamp),
+      paperContexts: getMessageCitationPaperContexts(pairedUser),
+      quoteCitations: params.message.quoteCitations,
+      generatedImages: undefined,
+    }
+  );
+}
+
+export function invokeResponseMenuActionButton(params: {
+  body: Element;
+  action: ResponseActionKind;
+  target: ResponseActionTarget | null;
+}): boolean {
+  const { action, body, target } = params;
+  if (!target) return false;
+  const runner = getResponseActionRunner(body);
+  if (!runner) return false;
+  setResponseMenuTarget(target);
+  void runner(action, target);
+  return true;
+}
+
 export function shouldDecorateInterleavedAgentTraceCitations(params: {
   agentTraceEl: Element | null;
   agentUsesInterleavedText: boolean;
@@ -1288,30 +1378,74 @@ function attachAssistantResponseContextMenu(params: {
     // If the user has text selected within this bubble, extract just that
     // portion. Otherwise fall back to the full raw markdown source.
     const selectedText = getSelectedTextWithinBubble(doc, bubble);
-    const menuContent = resolveAssistantResponseMenuContent(
-      message,
-      selectedText,
-    );
-    if (!menuContent) return;
-    setResponseMenuTarget({
+    const menuTarget = buildAssistantResponseActionTarget({
       item,
-      contentText: menuContent.contentText,
-      modelName: message.modelName?.trim() || "unknown",
+      message,
+      pairedUserMessage,
       conversationKey,
-      userTimestamp:
-        pairedUserMessage?.role === "user"
-          ? Math.floor(pairedUserMessage.timestamp)
-          : 0,
-      assistantTimestamp: Math.floor(message.timestamp),
-      paperContexts:
-        pairedUserMessage?.role === "user"
-          ? getMessageCitationPaperContexts(pairedUserMessage)
-          : undefined,
-      quoteCitations: message.quoteCitations,
-      generatedImages: menuContent.generatedImages,
+      selectedText,
     });
+    if (!menuTarget) return;
+    setResponseMenuTarget(menuTarget);
     positionMenuAtPointer(body, responseMenu, me.clientX, me.clientY);
   });
+}
+
+function appendMessageMetaActionButton(params: {
+  body?: Element;
+  doc: Document;
+  actions: HTMLElement;
+  className: string;
+  title: string;
+  responseAction?: ResponseActionKind;
+  responseTarget?: ResponseActionTarget | null;
+  conversationKey?: number;
+  userTimestamp?: number;
+  assistantTimestamp?: number;
+}): HTMLButtonElement {
+  const button = params.doc.createElement("button") as HTMLButtonElement;
+  button.type = "button";
+  button.className = `llm-message-action ${params.className}`;
+  button.title = params.title;
+  button.setAttribute("aria-label", params.title);
+  if (params.responseAction) {
+    button.dataset.responseAction = params.responseAction;
+  }
+  if (params.body && params.responseAction && params.responseTarget) {
+    button.addEventListener("click", (event: Event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (typeof event.stopImmediatePropagation === "function") {
+        event.stopImmediatePropagation();
+      }
+      const invoked = invokeResponseMenuActionButton({
+        body: params.body!,
+        action: params.responseAction!,
+        target: params.responseTarget || null,
+      });
+      if (!invoked) {
+        const status = params.body!.querySelector(
+          "#llm-status",
+        ) as HTMLElement | null;
+        if (status) setStatus(status, "Response action unavailable", "error");
+      }
+    });
+  }
+  if (Number.isFinite(params.conversationKey)) {
+    button.dataset.conversationKey = String(
+      Math.floor(params.conversationKey!),
+    );
+  }
+  if (Number.isFinite(params.userTimestamp)) {
+    button.dataset.userTimestamp = String(Math.floor(params.userTimestamp!));
+  }
+  if (Number.isFinite(params.assistantTimestamp)) {
+    button.dataset.assistantTimestamp = String(
+      Math.floor(params.assistantTimestamp!),
+    );
+  }
+  params.actions.appendChild(button);
+  return button;
 }
 
 function getMessageSelectedTextExpandedIndex(
@@ -1920,6 +2054,7 @@ function toPanelMessage(message: StoredChatMessage): Message {
     (message as Message).selectedTextNoteContexts,
     selectedTexts.length,
   );
+  const forcedSkillIds = normalizeForcedSkillIds(message.forcedSkillIds);
   const paperContexts = normalizePaperContexts(message.paperContexts);
   const fullTextPaperContexts = normalizePaperContexts(
     message.fullTextPaperContexts,
@@ -1950,6 +2085,7 @@ function toPanelMessage(message: StoredChatMessage): Message {
     )
       ? selectedTextNoteContexts
       : undefined,
+    forcedSkillIds: forcedSkillIds.length ? forcedSkillIds : undefined,
     selectedTextExpandedIndex: -1,
     paperContexts: paperContexts.length ? paperContexts : undefined,
     fullTextPaperContexts: fullTextPaperContexts.length
@@ -2141,6 +2277,11 @@ export function detectReasoningProvider(
   if (name.startsWith("kimi")) {
     return "kimi";
   }
+  if (
+    /(^|[/:])mimo-v2(?:\.5)?(?:-(?:pro|omni|flash))?(?:\b|[.-])/.test(name)
+  ) {
+    return "mimo";
+  }
   if (/(^|[/:])(?:qwen(?:\d+)?|qwq|qvq)(?:\b|[.-])/.test(name)) {
     return "qwen";
   }
@@ -2227,6 +2368,18 @@ export function buildAssistantDisplayMarkdownForRender(
   );
 }
 
+export function buildPlainMarkdownClipboardText(
+  markdownText: string,
+  quoteCitations?: QuoteCitation[],
+): string | null {
+  const safeText = replaceQuoteCitationPlaceholdersForMarkdown(
+    sanitizeText(markdownText).trim(),
+    quoteCitations,
+    { unresolved: "omit" },
+  );
+  return safeText || null;
+}
+
 /**
  * Prepare both clipboard forms from markdown. Quote anchors are expanded before
  * rendering so structural citation tokens never leak into copied responses.
@@ -2235,10 +2388,9 @@ export function buildRenderedMarkdownClipboardPayload(
   markdownText: string,
   quoteCitations?: QuoteCitation[],
 ): { plainText: string; renderedHtml: string } | null {
-  const safeText = replaceQuoteCitationPlaceholdersForMarkdown(
-    sanitizeText(markdownText).trim(),
+  const safeText = buildPlainMarkdownClipboardText(
+    markdownText,
     quoteCitations,
-    { unresolved: "omit" },
   );
   if (!safeText) return null;
 
@@ -2484,7 +2636,7 @@ function showNativeMcpActionCard(
     }
     ui.chatBox.querySelector(".llm-action-inline-card")?.remove();
     const wrapper = ownerDoc.createElement("div");
-    wrapper.className = "llm-action-inline-card";
+    wrapper.className = "llm-action-inline-card llm-action-inline-card-review";
     wrapper.dataset.requestId = requestId;
     wrapper.appendChild(
       renderPendingActionCard(ownerDoc, { requestId, action }),
@@ -2956,7 +3108,7 @@ function resolveEffectiveRequestConfig(params: {
 
 function resolveCodexNativeConversationScope(params: {
   item: Zotero.Item;
-  contextSourceItem?: Zotero.Item | null;
+  contextSource?: ResolvedContextSource | null;
   conversationKey: number;
   title?: string;
 }): CodexNativeConversationScope {
@@ -2984,7 +3136,7 @@ function resolveCodexNativeConversationScope(params: {
     kind === "paper"
       ? resolveAutoLoadedPaperContextForItem(
           params.item,
-          params.contextSourceItem,
+          params.contextSource,
         ) || resolvePaperContextRefFromItem(baseItem || params.item)
       : null;
   const paperTitle =
@@ -3034,10 +3186,7 @@ function formatCodexNativeDiagnosticsStatus(
     diagnostics.historyVerified === undefined
       ? ""
       : `, history ${diagnostics.historyVerified ? "verified" : "unverified"}`;
-  const lifecycleLabel = diagnostics.lifecycleState
-    ? `, ${diagnostics.lifecycleState}`
-    : "";
-  return `Codex app-server ${threadShort} (${source}), library ${libraryLabel}, ${mcpLabel}${historyLabel}${lifecycleLabel}`;
+  return `Codex app-server ${threadShort} (${source}), library ${libraryLabel}, ${mcpLabel}${historyLabel}`;
 }
 
 function buildCodexNativeSkillContext(params: {
@@ -3047,6 +3196,7 @@ function buildCodexNativeSkillContext(params: {
   selectedTextPaperContexts?: (PaperContextRef | undefined)[];
   paperContexts?: PaperContextRef[];
   fullTextPaperContexts?: PaperContextRef[];
+  pinnedPaperContexts?: PaperContextRef[];
   selectedCollectionContexts?: CollectionContextRef[];
   selectedTagContexts?: TagContextRef[];
   screenshots?: string[];
@@ -3070,6 +3220,9 @@ function buildCodexNativeSkillContext(params: {
       : undefined,
     fullTextPaperContexts: params.fullTextPaperContexts?.length
       ? params.fullTextPaperContexts
+      : undefined,
+    pinnedPaperContexts: params.pinnedPaperContexts?.length
+      ? params.pinnedPaperContexts
       : undefined,
     selectedCollectionContexts: params.selectedCollectionContexts?.length
       ? params.selectedCollectionContexts
@@ -3131,7 +3284,7 @@ function buildLightCodexNativeMcpContextPlan(params: {
 
 async function buildContextPlanForRequest(params: {
   item: Zotero.Item;
-  contextSourceItem?: Zotero.Item | null;
+  contextSource?: ResolvedContextSource | null;
   question: string;
   images?: string[];
   selectedTextSources?: SelectedTextSource[];
@@ -3150,9 +3303,27 @@ async function buildContextPlanForRequest(params: {
     kind: Parameters<typeof setStatus>[2],
   ) => void;
 }): Promise<ContextPlanForRequest> {
-  const contextSource = resolveContextSourceItem(
-    params.contextSourceItem || params.item,
-  );
+  const explicitPaperContext = normalizePaperContexts(
+    params.contextSource?.paperContext
+      ? [params.contextSource.paperContext]
+      : [],
+  )[0];
+  const explicitContextItem =
+    params.contextSource?.contextItem ||
+    (explicitPaperContext
+      ? Zotero.Items.get(explicitPaperContext.contextItemId) || null
+      : null);
+  const contextSource =
+    params.contextSource ||
+    (explicitPaperContext
+      ? {
+          contextItem: explicitContextItem,
+          paperContext: explicitPaperContext,
+          statusText: explicitPaperContext.attachmentTitle
+            ? `using the selected ${explicitPaperContext.attachmentTitle} as context`
+            : "using the selected attachment as context",
+        }
+      : resolveContextSourceItem(params.item));
   params.setStatusSafely(contextSource.statusText, "sending");
   const rawActiveContextItem = contextSource.contextItem;
   // If the active paper is in PDF mode (sent as file attachment),
@@ -3161,7 +3332,7 @@ async function buildContextPlanForRequest(params: {
     if (!rawActiveContextItem || !params.pdfModePaperKeys?.size) return false;
     const autoLoaded = resolveAutoLoadedPaperContextForItem(
       params.item,
-      params.contextSourceItem,
+      contextSource,
     );
     if (!autoLoaded) return false;
     return params.pdfModePaperKeys.has(
@@ -4261,7 +4432,10 @@ function createCodexNativeActivityTraceController(
     return false;
   };
 
-  const noteSkillActivated = (skillId: string): void => {
+  const noteSkillActivated = (
+    skillId: string,
+    options: { source?: "codex-native-slash" } = {},
+  ): void => {
     const cleanSkillId = sanitizeText(skillId || "").trim();
     if (!cleanSkillId || activatedSkillIds.has(cleanSkillId)) return;
     flushAllProgressCoalescers("event");
@@ -4271,7 +4445,10 @@ function createCodexNativeActivityTraceController(
         type: "tool_call",
         callId: `skill:${cleanSkillId}`,
         name: "Skill",
-        args: { skill: cleanSkillId },
+        args: {
+          skill: cleanSkillId,
+          ...(options.source ? { source: options.source } : {}),
+        },
       }),
     );
     sync();
@@ -4452,6 +4629,20 @@ function createCodexNativeActivityTraceController(
     noteMcpToolActivity,
     noteAgentMessageCompleted,
   };
+}
+
+type CodexNativeActivityTraceController = ReturnType<
+  typeof createCodexNativeActivityTraceController
+>;
+
+function noteExplicitCodexNativeSkillInvocations(
+  trace: CodexNativeActivityTraceController | null,
+  skillIds?: string[],
+): void {
+  if (!trace?.noteSkillActivated || !skillIds?.length) return;
+  for (const skillId of skillIds) {
+    trace.noteSkillActivated(skillId, { source: "codex-native-slash" });
+  }
 }
 
 function applyWebChatAnswerSnapshot(
@@ -4990,7 +5181,7 @@ function normalizeEditablePaperContexts(
 function derivePdfModePaperKeys(
   attachments: ChatAttachment[] | undefined,
   item: Zotero.Item,
-  contextSourceItem?: Zotero.Item | null,
+  contextSource?: ResolvedContextSource | null,
 ): Set<string> {
   const keys = new Set<string>();
   if (!Array.isArray(attachments)) return keys;
@@ -5002,7 +5193,7 @@ function derivePdfModePaperKeys(
     if (!Number.isFinite(contextItemId) || contextItemId <= 0) continue;
     const autoLoaded = resolveAutoLoadedPaperContextForItem(
       item,
-      contextSourceItem,
+      contextSource,
     );
     if (autoLoaded && autoLoaded.contextItemId === contextItemId) {
       keys.add(`${autoLoaded.itemId}:${autoLoaded.contextItemId}`);
@@ -5030,7 +5221,7 @@ function includeAutoLoadedPaperContext(
   paperContexts?: PaperContextRef[],
   fullTextPaperContexts?: PaperContextRef[],
   excludePaperKeys?: Set<string>,
-  contextSourceItem?: Zotero.Item | null,
+  contextSource?: ResolvedContextSource | null,
 ): {
   paperContexts: PaperContextRef[];
   fullTextPaperContexts: PaperContextRef[];
@@ -5050,7 +5241,7 @@ function includeAutoLoadedPaperContext(
   }
   const autoLoadedPaperContext = resolveAutoLoadedPaperContextForItem(
     item,
-    contextSourceItem,
+    contextSource,
   );
   if (!autoLoadedPaperContext) {
     return {
@@ -5081,6 +5272,9 @@ function includeAutoLoadedPaperContext(
         : limitFullTextPaperContexts(normalizedFullTextPaperContexts),
   };
 }
+
+export const includeAutoLoadedPaperContextForTests =
+  includeAutoLoadedPaperContext;
 
 function syncComposeContextForInlineEdit(
   body: Element,
@@ -5187,7 +5381,7 @@ export async function editLatestUserMessageAndRetry(
   const {
     body,
     item,
-    contextSourceItem,
+    contextSource,
     displayQuestion,
     selectedTexts,
     selectedTextSources,
@@ -5295,7 +5489,7 @@ export async function editLatestUserMessageAndRetry(
   const pdfExcludeKeys = derivePdfModePaperKeys(
     attachments,
     item,
-    contextSourceItem,
+    contextSource,
   );
   let {
     paperContexts: paperContextsForMessage,
@@ -5305,7 +5499,7 @@ export async function editLatestUserMessageAndRetry(
     normalizedPaperContexts,
     normalizedFullTextPaperContexts,
     pdfExcludeKeys.size > 0 ? pdfExcludeKeys : undefined,
-    contextSourceItem,
+    contextSource,
   );
   const editRetryCodexNativeMcpLightContext = shouldUseCodexNativeLightContext({
     isCodexNativeTurn:
@@ -5404,12 +5598,16 @@ export async function editLatestUserMessageAndRetry(
         selectedTextSources: retryPair.userMessage.selectedTextSources,
         selectedTextPaperContexts:
           retryPair.userMessage.selectedTextPaperContexts,
+        selectedTextNoteContexts:
+          retryPair.userMessage.selectedTextNoteContexts,
+        forcedSkillIds: retryPair.userMessage.forcedSkillIds,
         screenshotImages: retryPair.userMessage.screenshotImages,
         paperContexts: retryPair.userMessage.paperContexts,
         fullTextPaperContexts: retryPair.userMessage.fullTextPaperContexts,
         citationPaperContexts: retryPair.userMessage.citationPaperContexts,
         selectedCollectionContexts:
           retryPair.userMessage.selectedCollectionContexts,
+        selectedTagContexts: retryPair.userMessage.selectedTagContexts,
         attachments: retryPair.userMessage.attachments,
         modelAttachments: retryPair.userMessage.modelAttachments,
         modelName: retryPair.userMessage.modelName,
@@ -5796,6 +5994,10 @@ export async function retryLatestAssistantResponse(
     const codexActivityTrace = isCodexNativeTurn
       ? createCodexNativeActivityTraceController(assistantMessage, queueRefresh)
       : null;
+    noteExplicitCodexNativeSkillInvocations(
+      codexActivityTrace,
+      retryPair.userMessage.forcedSkillIds,
+    );
     if (getCancelledRequestId(conversationKey) >= thisRequestId) {
       getAbortController(conversationKey)?.abort();
       await finalizeCancelledAssistant();
@@ -5921,12 +6123,14 @@ export async function retryLatestAssistantResponse(
               effectiveRequestConfig.apiBase,
             ),
             skillContext: buildCodexNativeSkillContext({
+              forcedSkillIds: retryPair.userMessage.forcedSkillIds,
               selectedTexts: retryPair.userMessage.selectedTexts,
               selectedTextSources: retryPair.userMessage.selectedTextSources,
               selectedTextPaperContexts:
                 retryPair.userMessage.selectedTextPaperContexts,
               paperContexts: contextPlan.paperContexts,
               fullTextPaperContexts: contextPlan.fullTextPaperContexts,
+              pinnedPaperContexts: retryPair.userMessage.pinnedPaperContexts,
               selectedCollectionContexts,
               selectedTagContexts,
               screenshots: allImages,
@@ -6144,7 +6348,7 @@ export async function retryLatestAssistantResponse(
 export async function editUserTurnAndRetry(opts: {
   body: Element;
   item: Zotero.Item;
-  contextSourceItem?: Zotero.Item | null;
+  contextSource?: ResolvedContextSource | null;
   userTimestamp: number;
   assistantTimestamp: number;
   newText: string;
@@ -6179,7 +6383,7 @@ export async function editUserTurnAndRetry(opts: {
   const {
     body,
     item,
-    contextSourceItem,
+    contextSource,
     userTimestamp,
     assistantTimestamp,
     newText,
@@ -6335,7 +6539,7 @@ export async function editUserTurnAndRetry(opts: {
   const pdfExcludeKeysEdit = derivePdfModePaperKeys(
     attachments,
     item,
-    contextSourceItem,
+    contextSource,
   );
   let {
     paperContexts: paperContextsForMessage,
@@ -6345,7 +6549,7 @@ export async function editUserTurnAndRetry(opts: {
     normalizedPaperContexts,
     normalizedFullTextPaperContexts,
     pdfExcludeKeysEdit.size > 0 ? pdfExcludeKeysEdit : undefined,
-    contextSourceItem,
+    contextSource,
   );
   const attachmentsForMessage = normalizeEditableAttachments(attachments);
   userMsg.selectedText = selectedTextForMessage || undefined;
@@ -6415,6 +6619,8 @@ export async function editUserTurnAndRetry(opts: {
         selectedTexts: userMsg.selectedTexts,
         selectedTextSources: userMsg.selectedTextSources,
         selectedTextPaperContexts: userMsg.selectedTextPaperContexts,
+        selectedTextNoteContexts: userMsg.selectedTextNoteContexts,
+        forcedSkillIds: userMsg.forcedSkillIds,
         screenshotImages: userMsg.screenshotImages,
         paperContexts: userMsg.paperContexts,
         fullTextPaperContexts: userMsg.fullTextPaperContexts,
@@ -7041,7 +7247,7 @@ async function retryLatestAgentResponse(
 async function sendAgentQuestion(opts: {
   body: Element;
   item: Zotero.Item;
-  contextSourceItem?: Zotero.Item | null;
+  contextSource?: ResolvedContextSource | null;
   question: string;
   images?: string[];
   model?: string;
@@ -7107,7 +7313,7 @@ export async function sendQuestion(
   const {
     body,
     item,
-    contextSourceItem,
+    contextSource,
     question,
     images,
     model,
@@ -7152,7 +7358,7 @@ export async function sendQuestion(
     await sendAgentQuestion({
       body,
       item,
-      contextSourceItem: opts.contextSourceItem,
+      contextSource: opts.contextSource,
       question,
       images,
       model,
@@ -7485,7 +7691,7 @@ export async function sendQuestion(
     pdfModePaperKeys && pdfModePaperKeys.size > 0
       ? pdfModePaperKeys
       : undefined,
-    contextSourceItem,
+    contextSource,
   );
   if (shouldUseCodexNativeLightContext({ isCodexNativeTurn })) {
     const [enrichedPaperContexts, enrichedFullTextPaperContexts] =
@@ -7551,6 +7757,9 @@ export async function sendQuestion(
     selectedTagContexts: selectedTagContextsForMessage.length
       ? selectedTagContextsForMessage
       : undefined,
+    forcedSkillIds: opts.forcedSkillIds?.length
+      ? opts.forcedSkillIds.slice()
+      : undefined,
     paperContextsExpanded: false,
     screenshotImages: screenshotImagesForMessage.length
       ? screenshotImagesForMessage
@@ -7583,6 +7792,8 @@ export async function sendQuestion(
         selectedTexts: userMessage.selectedTexts,
         selectedTextSources: userMessage.selectedTextSources,
         selectedTextPaperContexts: userMessage.selectedTextPaperContexts,
+        selectedTextNoteContexts: userMessage.selectedTextNoteContexts,
+        forcedSkillIds: userMessage.forcedSkillIds,
         paperContexts: userMessage.paperContexts,
         fullTextPaperContexts: userMessage.fullTextPaperContexts,
         citationPaperContexts: userMessage.citationPaperContexts,
@@ -7818,7 +8029,7 @@ export async function sendQuestion(
         })
       : await buildContextPlanForRequest({
           item,
-          contextSourceItem,
+          contextSource,
           question,
           images,
           selectedTextSources: selectedTextSourcesForMessage,
@@ -7884,6 +8095,10 @@ export async function sendQuestion(
     const codexActivityTrace = isCodexNativeTurn
       ? createCodexNativeActivityTraceController(assistantMessage, queueRefresh)
       : null;
+    noteExplicitCodexNativeSkillInvocations(
+      codexActivityTrace,
+      opts.forcedSkillIds,
+    );
     responseStreamCoalescer = createBlockStreamCoalescer({
       onBlock: (chunk) => {
         assistantMessage.text += chunk;
@@ -7996,7 +8211,7 @@ export async function sendQuestion(
             scope: await enrichCodexNativeConversationScopeWithMineruCache(
               resolveCodexNativeConversationScope({
                 item,
-                contextSourceItem,
+                contextSource,
                 conversationKey,
                 title: shownQuestion,
               }),
@@ -8015,6 +8230,7 @@ export async function sendQuestion(
               selectedTextPaperContexts: selectedTextPaperContextsForMessage,
               paperContexts: contextPlan.paperContexts,
               fullTextPaperContexts: contextPlan.fullTextPaperContexts,
+              pinnedPaperContexts: userMessage.pinnedPaperContexts,
               selectedCollectionContexts: selectedCollectionContextsForMessage,
               selectedTagContexts: selectedTagContextsForMessage,
               screenshots: allSendImages,
@@ -9611,22 +9827,107 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
     time.className = "llm-message-time";
     time.textContent = formatTime(msg.timestamp);
     meta.appendChild(time);
-    if (
-      !isUser &&
-      index === latestAssistantIndex &&
-      !msg.streaming &&
-      msg.text.trim() &&
-      !msg.compactMarker &&
-      msg.runMode !== "agent" &&
-      renderProviderProtocol !== "web_sync" // [webchat] no retry in webchat mode
-    ) {
-      const retryBtn = doc.createElement("button") as HTMLButtonElement;
-      retryBtn.type = "button";
-      retryBtn.className = "llm-retry-latest";
-      retryBtn.textContent = "↻";
-      retryBtn.title = "Retry response with another model";
-      retryBtn.setAttribute("aria-label", "Retry latest response");
-      meta.appendChild(retryBtn);
+    if (!isUser && !msg.compactMarker) {
+      const pairedUserForActions =
+        index > 0 && history[index - 1]?.role === "user"
+          ? history[index - 1]
+          : null;
+      const actionContent = resolveAssistantResponseMenuContent(msg);
+      const actionConversationKey = conversationKey;
+      const actionUserTimestamp =
+        pairedUserForActions?.role === "user"
+          ? Math.floor(pairedUserForActions.timestamp)
+          : 0;
+      const actionAssistantTimestamp = Math.floor(msg.timestamp);
+      const actionResponseTarget = buildAssistantResponseActionTarget({
+        item,
+        message: msg,
+        pairedUserMessage: pairedUserForActions,
+        conversationKey: actionConversationKey,
+      });
+      const actionDeleteTarget = buildAssistantResponseDeleteTarget({
+        item,
+        message: msg,
+        pairedUserMessage: pairedUserForActions,
+        conversationKey: actionConversationKey,
+        contentTarget: actionResponseTarget,
+      });
+      const actions = doc.createElement("div") as HTMLDivElement;
+      actions.className = "llm-message-actions";
+
+      if (
+        index === latestAssistantIndex &&
+        !msg.streaming &&
+        msg.text.trim() &&
+        msg.runMode !== "agent" &&
+        renderProviderProtocol !== "web_sync" // [webchat] no retry in webchat mode
+      ) {
+        appendMessageMetaActionButton({
+          body,
+          doc,
+          actions,
+          className: "llm-message-action-retry llm-retry-latest",
+          title: "Retry response with another model",
+        });
+      }
+
+      if (actionContent && actionUserTimestamp > 0) {
+        appendMessageMetaActionButton({
+          body,
+          doc,
+          actions,
+          className: "llm-message-action-copy",
+          title: "Copy response",
+          responseAction: "copy",
+          responseTarget: actionResponseTarget,
+          conversationKey: actionConversationKey,
+          userTimestamp: actionUserTimestamp,
+          assistantTimestamp: actionAssistantTimestamp,
+        });
+        appendMessageMetaActionButton({
+          body,
+          doc,
+          actions,
+          className: "llm-message-action-note",
+          title: "Save as note",
+          responseAction: "note",
+          responseTarget: actionResponseTarget,
+          conversationKey: actionConversationKey,
+          userTimestamp: actionUserTimestamp,
+          assistantTimestamp: actionAssistantTimestamp,
+        });
+      }
+
+      if (actionUserTimestamp > 0 && !msg.streaming) {
+        appendMessageMetaActionButton({
+          body,
+          doc,
+          actions,
+          className: "llm-message-action-fork",
+          title: "Fork this turn",
+          responseAction: "fork",
+          responseTarget: actionDeleteTarget,
+          conversationKey: actionConversationKey,
+          userTimestamp: actionUserTimestamp,
+          assistantTimestamp: actionAssistantTimestamp,
+        });
+        appendMessageMetaActionButton({
+          body,
+          doc,
+          actions,
+          className: "llm-message-action-delete",
+          title: "Delete this turn",
+          responseAction: "delete",
+          responseTarget: actionDeleteTarget,
+          conversationKey: actionConversationKey,
+          userTimestamp: actionUserTimestamp,
+          assistantTimestamp: actionAssistantTimestamp,
+        });
+      }
+
+      if (actions.childElementCount > 0) {
+        meta.appendChild(actions);
+      }
     }
 
     // [webchat] Collect status row data — rendered after meta, below the timestamp

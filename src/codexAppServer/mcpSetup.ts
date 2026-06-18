@@ -22,6 +22,12 @@ export const REQUIRED_CODEX_ZOTERO_MCP_TOOL_NAMES = [
   "library_read",
   "paper_read",
 ] as const;
+export const REQUIRED_CLAUDE_ZOTERO_MCP_TOOL_NAMES = [
+  "library_search",
+  "library_read",
+  "library_retrieve",
+  "paper_read",
+] as const;
 
 export type CodexNativeMcpSetupStatus = {
   enabled: boolean;
@@ -545,6 +551,45 @@ export function buildCodexZoteroMcpThreadConfig(params: {
       },
     },
   };
+}
+
+export function buildClaudeZoteroMcpServerConfig(params: {
+  profileSignature?: string;
+  scopeToken?: string;
+  required?: boolean;
+}): {
+  serverName: string;
+  mcpServers: Record<string, Record<string, unknown>>;
+  allowedTools: string[];
+} {
+  const serverName = getZoteroMcpServerName(params.profileSignature);
+  const configValue = buildZoteroMcpConfigValue({
+    scopeToken: params.scopeToken,
+    required: params.required,
+  });
+  const serverUrl =
+    typeof configValue.url === "string" && configValue.url.trim()
+      ? configValue.url.trim()
+      : getZoteroMcpServerUrl();
+  return {
+    serverName,
+    mcpServers: {
+      [serverName]: {
+        type: "http",
+        url: serverUrl,
+        headers: getConfigHeaders(configValue),
+      },
+    },
+    allowedTools: buildClaudeZoteroMcpAllowedToolNames(serverName),
+  };
+}
+
+export function buildClaudeZoteroMcpAllowedToolNames(
+  serverName: string,
+): string[] {
+  return getZoteroMcpAllowedToolNames().map(
+    (toolName) => `mcp__${serverName}__${toolName}`,
+  );
 }
 
 export function assertRequiredCodexZoteroMcpToolsReady(

@@ -1,8 +1,6 @@
 import { readAttachmentBytes } from "../../modules/contextPanel/attachmentStorage";
-import {
-  extractTextAttachmentContent,
-  type TextAttachmentSourceMode,
-} from "../../modules/contextPanel/textAttachmentExtraction";
+import { extractTextAttachmentContent } from "../../modules/contextPanel/textAttachmentExtraction";
+import type { TextAttachmentSourceMode } from "../../modules/contextPanel/contextAttachmentTypes";
 import { resolveContextAttachmentSupportFromMetadata } from "../../modules/contextPanel/contextAttachmentSupport";
 import {
   formatAttachmentSourceType,
@@ -170,6 +168,7 @@ export class AttachmentReadService {
       readingGuidance: [
         "Answer primarily from this selected attachment content.",
         "Use parent metadata only for bibliographic or contextual grounding.",
+        "If quoting, copy the attachment text verbatim in its original source language; put any translation outside the blockquote as explanation.",
         "Do not infer attachment loading failed just because the attachment text differs from the parent title.",
       ],
       paperContext,

@@ -48,6 +48,10 @@ import {
   hasConversationSchemaMigration,
 } from "../shared/conversationSchemaMigrations";
 import {
+  parseForcedSkillIdsJson,
+  serializeForcedSkillIds,
+} from "../shared/skillIds";
+import {
   normalizeSelectedTextNoteContexts,
   normalizeSelectedTextPaperContexts,
   normalizeSelectedTextSource,
@@ -80,6 +84,7 @@ export type StoredChatMessage = {
   selectedTextSources?: SelectedTextSource[];
   selectedTextPaperContexts?: (PaperContextRef | undefined)[];
   selectedTextNoteContexts?: (NoteContextRef | undefined)[];
+  forcedSkillIds?: string[];
   paperContexts?: PaperContextRef[];
   fullTextPaperContexts?: PaperContextRef[];
   citationPaperContexts?: PaperContextRef[];
@@ -146,6 +151,7 @@ const CHAT_MESSAGE_SELECT_COLUMNS_SQL = `id,
             selected_text_sources_json AS selectedTextSourcesJson,
             selected_text_paper_contexts_json AS selectedTextPaperContextsJson,
             selected_text_note_contexts_json AS selectedTextNoteContextsJson,
+            forced_skill_ids_json AS forcedSkillIdsJson,
             paper_contexts_json AS paperContextsJson,
             full_text_paper_contexts_json AS fullTextPaperContextsJson,
             citation_paper_contexts_json AS citationPaperContextsJson,
@@ -1096,6 +1102,7 @@ export async function initChatStore(): Promise<void> {
         selected_text_sources_json TEXT,
         selected_text_paper_contexts_json TEXT,
         selected_text_note_contexts_json TEXT,
+        forced_skill_ids_json TEXT,
         paper_contexts_json TEXT,
         full_text_paper_contexts_json TEXT,
         citation_paper_contexts_json TEXT,
@@ -1270,6 +1277,12 @@ export async function initChatStore(): Promise<void> {
     }
     const hasPaperContextsJsonColumn = Boolean(
       columns?.some((column) => column?.name === "paper_contexts_json"),
+    );
+    await ensureColumn(
+      CHAT_MESSAGES_TABLE,
+      messageColumns,
+      "forced_skill_ids_json",
+      "forced_skill_ids_json TEXT",
     );
     if (!hasPaperContextsJsonColumn) {
       await Zotero.DB.queryAsync(
@@ -1526,6 +1539,7 @@ export async function loadConversation(
         selectedTextSourcesJson?: unknown;
         selectedTextPaperContextsJson?: unknown;
         selectedTextNoteContextsJson?: unknown;
+        forcedSkillIdsJson?: unknown;
         paperContextsJson?: unknown;
         fullTextPaperContextsJson?: unknown;
         citationPaperContextsJson?: unknown;
@@ -1762,6 +1776,7 @@ export async function loadConversation(
         imageDataUrl: url,
       }));
     }
+    const forcedSkillIds = parseForcedSkillIdsJson(row.forcedSkillIdsJson);
     messages.push({
       role,
       text: typeof row.text === "string" ? row.text : "",
@@ -1787,6 +1802,8 @@ export async function loadConversation(
       })(),
       selectedTextPaperContexts,
       selectedTextNoteContexts,
+      forcedSkillIds:
+        role === "user" && forcedSkillIds.length ? forcedSkillIds : undefined,
       paperContexts,
       fullTextPaperContexts,
       citationPaperContexts,
@@ -1988,8 +2005,8 @@ export async function appendMessage(
   await Zotero.DB.executeTransaction(async () => {
     await Zotero.DB.queryAsync(
       `INSERT INTO ${CHAT_MESSAGES_TABLE}
-        (conversation_id, conversation_key, role, text, timestamp, run_mode, agent_run_id, selected_text, selected_texts_json, selected_text_sources_json, selected_text_paper_contexts_json, selected_text_note_contexts_json, paper_contexts_json, full_text_paper_contexts_json, citation_paper_contexts_json, quote_citations_json, collection_contexts_json, tag_contexts_json, screenshot_images, attachments_json, model_attachments_json, generated_images_json, model_name, model_entry_id, model_provider_label, webchat_run_state, webchat_completion_reason, reasoning_summary, reasoning_details, context_tokens, context_window)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (conversation_id, conversation_key, role, text, timestamp, run_mode, agent_run_id, selected_text, selected_texts_json, selected_text_sources_json, selected_text_paper_contexts_json, selected_text_note_contexts_json, forced_skill_ids_json, paper_contexts_json, full_text_paper_contexts_json, citation_paper_contexts_json, quote_citations_json, collection_contexts_json, tag_contexts_json, screenshot_images, attachments_json, model_attachments_json, generated_images_json, model_name, model_entry_id, model_provider_label, webchat_run_state, webchat_completion_reason, reasoning_summary, reasoning_details, context_tokens, context_window)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         conversationID,
         normalizedKey,
@@ -2006,6 +2023,9 @@ export async function appendMessage(
           : null,
         selectedTextNoteContexts.some((entry) => Boolean(entry))
           ? JSON.stringify(selectedTextNoteContexts)
+          : null,
+        message.role === "user"
+          ? serializeForcedSkillIds(message.forcedSkillIds)
           : null,
         paperContexts.length ? JSON.stringify(paperContexts) : null,
         fullTextPaperContexts.length
@@ -2056,6 +2076,7 @@ export async function updateLatestUserMessage(
     | "selectedTextSources"
     | "selectedTextPaperContexts"
     | "selectedTextNoteContexts"
+    | "forcedSkillIds"
     | "paperContexts"
     | "fullTextPaperContexts"
     | "citationPaperContexts"
@@ -2131,6 +2152,7 @@ export async function updateLatestUserMessage(
            selected_text_sources_json = ?,
            selected_text_paper_contexts_json = ?,
            selected_text_note_contexts_json = ?,
+           forced_skill_ids_json = ?,
            paper_contexts_json = ?,
            full_text_paper_contexts_json = ?,
            citation_paper_contexts_json = ?,
@@ -2164,6 +2186,7 @@ export async function updateLatestUserMessage(
         selectedTextNoteContexts.some((entry) => Boolean(entry))
           ? JSON.stringify(selectedTextNoteContexts)
           : null,
+        serializeForcedSkillIds(message.forcedSkillIds),
         paperContexts.length ? JSON.stringify(paperContexts) : null,
         fullTextPaperContexts.length
           ? JSON.stringify(fullTextPaperContexts)

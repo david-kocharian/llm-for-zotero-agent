@@ -9,6 +9,7 @@
 import { config } from "../../../package.json";
 import type {
   CollectionContextRef,
+  PaperContentSourceMode,
   PaperContextRef,
   QuoteCitation,
   TagContextRef,
@@ -124,6 +125,9 @@ export type ZoteroMcpActiveScope = {
   title?: string;
   userText?: string;
   paperContext?: PaperContextRef;
+  selectedPaperContexts?: PaperContextRef[];
+  fullTextPaperContexts?: PaperContextRef[];
+  pinnedPaperContexts?: PaperContextRef[];
   selectedCollectionContexts?: CollectionContextRef[];
   selectedTagContexts?: TagContextRef[];
 };
@@ -373,6 +377,25 @@ function normalizeText(value: unknown, maxLength = 240): string | undefined {
   return normalized ? normalized.slice(0, maxLength) : undefined;
 }
 
+function normalizePaperContentSourceMode(
+  value: unknown,
+): PaperContentSourceMode | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  switch (normalized) {
+    case "text":
+    case "mineru":
+    case "pdf":
+    case "markdown":
+    case "html":
+    case "txt":
+    case "docx":
+      return normalized;
+    default:
+      return undefined;
+  }
+}
+
 function normalizePaperContext(
   value: PaperContextRef | undefined,
 ): PaperContextRef | undefined {
@@ -388,8 +411,26 @@ function normalizePaperContext(
     citationKey: normalizeText(value.citationKey),
     firstCreator: normalizeText(value.firstCreator),
     year: normalizeText(value.year, 32),
+    contentSourceMode: normalizePaperContentSourceMode(value.contentSourceMode),
     mineruCacheDir: normalizeText(value.mineruCacheDir, 1024),
   };
+}
+
+function normalizePaperContexts(
+  values: PaperContextRef[] | undefined,
+): PaperContextRef[] | undefined {
+  if (!Array.isArray(values)) return undefined;
+  const out: PaperContextRef[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const normalized = normalizePaperContext(value);
+    if (!normalized) continue;
+    const key = `${normalized.itemId}:${normalized.contextItemId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(normalized);
+  }
+  return out.length ? out : undefined;
 }
 
 function normalizeCollectionContexts(
@@ -481,6 +522,9 @@ function normalizeActiveScope(
     title: normalizeText(scope.title),
     userText: normalizeText(scope.userText, 4000),
     paperContext,
+    selectedPaperContexts: normalizePaperContexts(scope.selectedPaperContexts),
+    fullTextPaperContexts: normalizePaperContexts(scope.fullTextPaperContexts),
+    pinnedPaperContexts: normalizePaperContexts(scope.pinnedPaperContexts),
     selectedCollectionContexts: normalizeCollectionContexts(
       scope.selectedCollectionContexts,
     ),
@@ -1010,6 +1054,20 @@ function createToolContext(
       ).Items?.get?.(itemLookupId) || null
     : null;
   const paperContext = resolveScopePaperContext(scope);
+  const selectedPaperContexts = normalizePaperContexts(
+    scope?.selectedPaperContexts,
+  );
+  const fullTextPaperContexts = normalizePaperContexts(
+    scope?.fullTextPaperContexts,
+  );
+  const pinnedPaperContexts = normalizePaperContexts(
+    scope?.pinnedPaperContexts,
+  );
+  const hasExplicitPaperScope = Boolean(
+    selectedPaperContexts?.length ||
+    fullTextPaperContexts?.length ||
+    pinnedPaperContexts?.length,
+  );
   const activeNoteContext = resolveScopeActiveNoteContext(scope);
   const request: AgentRuntimeRequest = {
     conversationKey: scope?.conversationKey || 0,
@@ -1025,8 +1083,13 @@ function createToolContext(
     libraryID: scopeArgs.libraryID || scope?.libraryID || 0,
     model: "codex-app-server",
     authMode: "codex_app_server",
-    selectedPaperContexts: paperContext ? [paperContext] : undefined,
-    fullTextPaperContexts: paperContext ? [paperContext] : undefined,
+    selectedPaperContexts:
+      selectedPaperContexts ||
+      (!hasExplicitPaperScope && paperContext ? [paperContext] : undefined),
+    fullTextPaperContexts:
+      fullTextPaperContexts ||
+      (!hasExplicitPaperScope && paperContext ? [paperContext] : undefined),
+    pinnedPaperContexts,
     selectedCollectionContexts: scope?.selectedCollectionContexts,
     selectedTagContexts: scope?.selectedTagContexts,
     activeNoteContext,

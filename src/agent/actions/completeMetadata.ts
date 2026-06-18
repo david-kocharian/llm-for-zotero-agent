@@ -1,4 +1,8 @@
-import type { AgentAction, ActionExecutionContext, ActionResult } from "./types";
+import type {
+  AgentAction,
+  ActionExecutionContext,
+  ActionResult,
+} from "./types";
 import type {
   EditableArticleMetadataPatch,
   EditableArticleMetadataField,
@@ -16,6 +20,10 @@ import {
   getMetadataTitle,
   hasMetadataCreators,
 } from "./metadataSnapshot";
+import {
+  isUserCancelledToolResult,
+  readToolResultError,
+} from "./pagedWorkflow";
 
 type CompleteMetadataInput = PaperScopedActionInput;
 
@@ -51,6 +59,11 @@ type UpdateCandidate = {
   patch: EditableArticleMetadataPatch;
 };
 
+type MetadataCapabilityFilter = {
+  isFieldSupported?: (fieldName: EditableArticleMetadataField) => boolean;
+  supportsCreators?: () => boolean;
+};
+
 const completeMetadataPaperScopeProfile: PaperScopedActionProfile = {
   targetMode: "single_or_multi",
   allowedScopes: ["current", "selection", "collection", "tag", "all"],
@@ -74,7 +87,7 @@ export const completeMetadataAction: AgentAction<
   CompleteMetadataOutput
 > = {
   name: "complete_metadata",
-  modes: ["paper", "library"],
+  modes: ["paper"],
   paperScopeProfile: completeMetadataPaperScopeProfile,
   description:
     "Audit targeted papers for missing bibliographic metadata, fetch canonical metadata from external sources, " +
@@ -95,7 +108,8 @@ export const completeMetadataAction: AgentAction<
       scope: {
         type: "string",
         enum: ["all", "collection", "tag"],
-        description: "Which papers to consider when explicit itemIds, collectionIds, or tagNames are not provided.",
+        description:
+          "Which papers to consider when explicit itemIds, collectionIds, or tagNames are not provided.",
       },
       collectionId: {
         type: "number",
@@ -114,7 +128,8 @@ export const completeMetadataAction: AgentAction<
       tagScopes: {
         type: "array",
         items: { type: "string", enum: ["allTagged", "untagged"] },
-        description: "Special tag scopes whose matching papers should be targeted.",
+        description:
+          "Special tag scopes whose matching papers should be targeted.",
       },
       includeAutomaticTags: {
         type: "boolean",
@@ -207,8 +222,11 @@ export const completeMetadataAction: AgentAction<
         continue;
       }
 
-      const doi = getMetadataField(entry.metadata, "DOI")
-        ?.replace(/^https?:\/\/doi\.org\//i, "") || undefined;
+      const doi =
+        getMetadataField(entry.metadata, "DOI")?.replace(
+          /^https?:\/\/doi\.org\//i,
+          "",
+        ) || undefined;
       const title = getMetadataTitle(entry.metadata) || entry.title;
       if (!doi && !title) {
         continue;
@@ -244,11 +262,17 @@ export const completeMetadataAction: AgentAction<
       }
 
       const metaContent = metaResult.content as Record<string, unknown>;
-      const results = Array.isArray(metaContent.results) ? metaContent.results : [];
+      const results = Array.isArray(metaContent.results)
+        ? metaContent.results
+        : [];
       const externalMeta = results[0] as Record<string, unknown> | undefined;
       if (!externalMeta) continue;
 
-      const patch = buildMetadataPatch(entry.metadata, externalMeta.patch);
+      const patch = buildMetadataPatch(
+        entry.metadata,
+        externalMeta.patch,
+        buildMetadataCapabilityFilter(ctx, entry.itemId),
+      );
       const patchedFields = Object.keys(patch);
       if (!patchedFields.length) continue;
 
@@ -279,13 +303,16 @@ export const completeMetadataAction: AgentAction<
           updated: 0,
           skipped: targets.length,
           errors: errorCount,
-          items: targets.map((target) => itemOutputs.get(target.itemId) || {
-            itemId: target.itemId,
-            title: target.title,
-            missingFields: [],
-            patchedFields: [],
-            updated: false,
-          }),
+          items: targets.map(
+            (target) =>
+              itemOutputs.get(target.itemId) || {
+                itemId: target.itemId,
+                title: target.title,
+                missingFields: [],
+                patchedFields: [],
+                updated: false,
+              },
+          ),
         },
       };
     }
@@ -309,12 +336,16 @@ export const completeMetadataAction: AgentAction<
       ctx,
       "Updating metadata",
     );
+    const mutateError = readToolResultError(mutateResult);
+    const stopped = isUserCancelledToolResult(mutateResult);
 
     const mutateContent = mutateResult.content as Record<string, unknown>;
     const updatedCount = mutateResult.ok
       ? Number(
           mutateContent.appliedCount ||
-          (Array.isArray(mutateContent.results) ? mutateContent.results.length : updateCandidates.length),
+            (Array.isArray(mutateContent.results)
+              ? mutateContent.results.length
+              : updateCandidates.length),
         )
       : 0;
 
@@ -335,8 +366,17 @@ export const completeMetadataAction: AgentAction<
       step: "Applying metadata updates",
       summary: mutateResult.ok
         ? `Updated ${updatedCount} paper${updatedCount === 1 ? "" : "s"}`
-        : "Update was denied or failed",
+        : stopped
+          ? "Stopped by user"
+          : mutateError || "Metadata update failed",
     });
+
+    if (!mutateResult.ok && !stopped) {
+      return {
+        ok: false,
+        error: mutateError || "Metadata update failed",
+      };
+    }
 
     return {
       ok: true,
@@ -345,13 +385,16 @@ export const completeMetadataAction: AgentAction<
         updated: updatedCount,
         skipped: Math.max(0, targets.length - updatedCount),
         errors: errorCount,
-        items: targets.map((target) => itemOutputs.get(target.itemId) || {
-          itemId: target.itemId,
-          title: target.title,
-          missingFields: [],
-          patchedFields: [],
-          updated: false,
-        }),
+        items: targets.map(
+          (target) =>
+            itemOutputs.get(target.itemId) || {
+              itemId: target.itemId,
+              title: target.title,
+              missingFields: [],
+              patchedFields: [],
+              updated: false,
+            },
+        ),
       },
     };
   },
@@ -372,7 +415,9 @@ async function readMetadataEntries(
   );
 
   if (!readResult.ok) {
-    throw new Error(`Failed to read targeted papers: ${JSON.stringify(readResult.content)}`);
+    throw new Error(
+      `Failed to read targeted papers: ${JSON.stringify(readResult.content)}`,
+    );
   }
 
   const readContent = readResult.content as Record<string, unknown>;
@@ -384,21 +429,32 @@ async function readMetadataEntries(
       : {};
 
   return targets.map((target) => {
-    const itemEntry = readResults[String(target.itemId)] as Record<string, unknown> | undefined;
+    const itemEntry = readResults[String(target.itemId)] as
+      | Record<string, unknown>
+      | undefined;
     return {
       itemId: target.itemId,
-      title: getMetadataTitle(itemEntry?.metadata) || target.title || `Item ${target.itemId}`,
+      title:
+        getMetadataTitle(itemEntry?.metadata) ||
+        target.title ||
+        `Item ${target.itemId}`,
       metadata: itemEntry?.metadata,
       tags: Array.isArray(itemEntry?.tags) ? itemEntry.tags : [],
-      attachments: Array.isArray(itemEntry?.attachments) ? itemEntry.attachments : [],
+      attachments: Array.isArray(itemEntry?.attachments)
+        ? itemEntry.attachments
+        : [],
     };
   });
 }
 
 function detectMissingFields(entry: MetadataReadEntry): string[] {
   const missingFields: string[] = [];
-  if (!getMetadataField(entry.metadata, "abstractNote")) missingFields.push("abstract");
-  if (!getMetadataField(entry.metadata, "DOI") && !getMetadataField(entry.metadata, "url")) {
+  if (!getMetadataField(entry.metadata, "abstractNote"))
+    missingFields.push("abstract");
+  if (
+    !getMetadataField(entry.metadata, "DOI") &&
+    !getMetadataField(entry.metadata, "url")
+  ) {
     missingFields.push("DOI/URL");
   }
   if (!hasMetadataCreators(entry.metadata)) {
@@ -419,9 +475,38 @@ function detectMissingFields(entry: MetadataReadEntry): string[] {
   return missingFields;
 }
 
+function buildMetadataCapabilityFilter(
+  ctx: ActionExecutionContext,
+  itemId: number,
+): MetadataCapabilityFilter {
+  const gateway = ctx.zoteroGateway as unknown as {
+    getItem?: (itemId?: number) => Zotero.Item | null | undefined;
+    isEditableArticleMetadataFieldSupported?: (
+      item: Zotero.Item | null | undefined,
+      fieldName: EditableArticleMetadataField,
+    ) => boolean;
+    supportsEditableArticleCreators?: (
+      item: Zotero.Item | null | undefined,
+    ) => boolean;
+  };
+  const item =
+    typeof gateway.getItem === "function" ? gateway.getItem(itemId) : null;
+  return {
+    isFieldSupported: (fieldName) =>
+      typeof gateway.isEditableArticleMetadataFieldSupported === "function"
+        ? gateway.isEditableArticleMetadataFieldSupported(item, fieldName)
+        : true,
+    supportsCreators: () =>
+      typeof gateway.supportsEditableArticleCreators === "function"
+        ? gateway.supportsEditableArticleCreators(item)
+        : true,
+  };
+}
+
 function buildMetadataPatch(
   currentMetadata: unknown,
   rawPatch: unknown,
+  capabilities: MetadataCapabilityFilter = {},
 ): EditableArticleMetadataPatch {
   const sourcePatch = rawPatch as EditableArticleMetadataPatch | undefined;
   if (!sourcePatch || Object.keys(sourcePatch).length === 0) {
@@ -430,13 +515,18 @@ function buildMetadataPatch(
 
   const patch: EditableArticleMetadataPatch = {};
   for (const fieldName of EDITABLE_ARTICLE_METADATA_FIELDS) {
+    if (capabilities.isFieldSupported?.(fieldName) === false) continue;
     const currentValue = getMetadataField(currentMetadata, fieldName);
     const newValue = sourcePatch[fieldName as EditableArticleMetadataField];
     if (!currentValue && newValue) {
       patch[fieldName as EditableArticleMetadataField] = newValue;
     }
   }
-  if (!hasMetadataCreators(currentMetadata) && sourcePatch.creators?.length) {
+  if (
+    capabilities.supportsCreators?.() !== false &&
+    !hasMetadataCreators(currentMetadata) &&
+    sourcePatch.creators?.length
+  ) {
     patch.creators = sourcePatch.creators;
   }
   return patch;

@@ -1,29 +1,13 @@
-import {
-  getAllSkills,
-  getSkillContextEligibility,
-  type SkillRoutingRequest,
-} from "../../../../agent/skills";
 import type { AgentSkill } from "../../../../agent/skills/skillLoader";
-import {
-  getAgentApi,
-  initAgentSubsystem,
-} from "../../../../agent";
+import { getAgentApi, initAgentSubsystem } from "../../../../agent";
 import type { ActionRequestContext } from "../../../../agent/actions";
-import type {
-  AgentConfirmationResolution,
-  AgentPendingAction,
-} from "../../../../agent/types";
-import { renderPendingActionCard } from "../../agentTrace/render";
-import { refreshClaudeSlashCommands } from "../../../../claudeCode/runtime";
 import { createElement } from "../../../../utils/domHelpers";
-import { t } from "../../../../utils/i18n";
+import { callLLM } from "../../../../utils/llmClient";
 import type { ModelProviderAuthMode } from "../../../../utils/modelProviders";
 import type { ProviderProtocol } from "../../../../utils/providerProtocol";
 import { getAgentModeEnabled } from "../../prefHelpers";
-import {
-  formatActionLabel,
-  resolveActionCompletionStatusText,
-} from "../../actionStatusText";
+import { formatActionLabel } from "../../actionStatusText";
+import { renderPendingActionCard } from "../../agentTrace/render";
 import { buildPaperKey } from "../../pdfContext";
 import {
   resolvePaperScopedCommandInput,
@@ -31,7 +15,6 @@ import {
   type PaperScopedActionProfile,
   type PaperScopedActionTagCandidate,
 } from "../../paperScopeCommand";
-import { resolveSlashActionChatMode } from "../../slashMenuBehavior";
 import { resolveDisplayConversationKind } from "../../portalScope";
 import {
   selectedCollectionContextCache,
@@ -47,12 +30,44 @@ import {
   setFloatingMenuOpen,
   SLASH_MENU_OPEN_CLASS,
 } from "./menuController";
+import {
+  isPagedLibraryActionForMode,
+  parseCommandParams,
+  resolveNaturalLanguageActionIntent,
+  resolvePagedCollectionScopeInput,
+} from "./actionCommandParams";
+export {
+  isPagedLibraryActionForMode,
+  shouldExecuteAgentActionImmediatelyFromSlash,
+} from "./actionCommandParams";
+import {
+  activateCommandRowState,
+  clearCommandRowState,
+} from "./commandRowState";
+import {
+  createActionCommandLifecycle,
+  type ActionCommandLifecycle,
+} from "./actionCommandLifecycle";
+export {
+  attachActionCompletionEscapeDismissal,
+  getPagedReviewTransitionText,
+  isPagedReviewNavigationResolution,
+  renderActionCompletionCard,
+  renderActionTransitionCard,
+} from "./actionCommandLifecycle";
+import { runAgentActionWithLifecycle } from "./actionExecutionRunner";
+import {
+  renderAgentActionsInSlashMenu as renderAgentActionsSlashSection,
+  renderSkillsInSlashMenu as renderSkillsSlashSection,
+  type ActionCommandSlashMenuContext,
+} from "./actionCommandSlashMenu";
 
 type StatusLevel = "ready" | "warning" | "error";
 type ActionPickerItem = {
   name: string;
   description: string;
   inputSchema: object;
+  paperScopeProfile?: PaperScopedActionProfile;
 };
 type ActionProfile = {
   model?: string;
@@ -60,6 +75,24 @@ type ActionProfile = {
   apiKey?: string;
   authMode?: ModelProviderAuthMode;
   providerProtocol?: ProviderProtocol;
+};
+type ActionMenuTrigger = "/" | "$";
+type ActiveActionToken = {
+  query: string;
+  slashStart: number;
+  caretEnd: number;
+  trigger: ActionMenuTrigger;
+};
+
+type LlmActionScopeChoice = {
+  status: "match" | "ambiguous" | "no_match" | "not_action";
+  actionName?: string;
+  scope?: "collection" | "tag" | "all";
+  collectionId?: number;
+  tagName?: string;
+  tagScope?: "allTagged" | "untagged";
+  confidence?: number;
+  reason?: string;
 };
 
 type ActionCommandControllerDeps = {
@@ -73,11 +106,7 @@ type ActionCommandControllerDeps = {
   actionHitlPanel: HTMLDivElement | null;
   chatBox: HTMLDivElement | null;
   getItem: () => Zotero.Item | null;
-  getActiveActionToken: () => {
-    query: string;
-    slashStart: number;
-    caretEnd: number;
-  } | null;
+  getActiveActionToken: () => ActiveActionToken | null;
   persistDraftInputForCurrentConversation: () => void;
   shouldRenderDynamicSlashMenu: () => boolean;
   shouldRenderSkillSlashMenu: () => boolean;
@@ -86,6 +115,7 @@ type ActionCommandControllerDeps = {
   getCurrentRuntimeMode: () => string;
   setCurrentRuntimeMode: (mode: "chat" | "agent") => void;
   getCurrentLibraryID: () => number;
+  getConversationKey?: () => number | null;
   resolveCurrentPaperBaseItem: () => Zotero.Item | null;
   getAllEffectivePaperContexts: (item: Zotero.Item) => PaperContextRef[];
   getEffectivePdfModePaperContexts: (
@@ -122,7 +152,10 @@ export function createActionCommandController(
   closeActionPicker: () => void;
   moveActionPickerSelection: (delta: number) => void;
   selectActiveActionPickerItem: () => Promise<void>;
-  renderDynamicSlashMenuSections: (query?: string) => void;
+  renderDynamicSlashMenuSections: (
+    query?: string,
+    trigger?: ActionMenuTrigger,
+  ) => void;
   scheduleActionPickerTrigger: () => void;
   closeSlashMenu: () => void;
   openSlashMenuWithSelection: () => void;
@@ -135,6 +168,7 @@ export function createActionCommandController(
   getActiveCommandAction: () => { name: string } | null;
   consumeForcedSkillIds: () => string[] | undefined;
   handleInlineCommand: (actionName: string, params: string) => Promise<void>;
+  handleNaturalLanguageActionIntent: (text: string) => Promise<boolean>;
   consumeActiveActionToken: () => boolean;
 } {
   const {
@@ -158,6 +192,252 @@ export function createActionCommandController(
 
   const setStatus = (message: string, level: StatusLevel) => {
     deps.setStatusMessage?.(message, level);
+  };
+
+  const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+    Boolean(value && typeof value === "object" && !Array.isArray(value));
+
+  const getActionSchemaProperties = (
+    action: Pick<ActionPickerItem, "inputSchema">,
+  ): Record<string, unknown> => {
+    const schema = action.inputSchema;
+    if (!isPlainObject(schema) || !isPlainObject(schema.properties)) return {};
+    return schema.properties;
+  };
+
+  const getActionScopeEnum = (
+    action: Pick<ActionPickerItem, "inputSchema">,
+  ): string[] => {
+    const scope = getActionSchemaProperties(action).scope;
+    if (!isPlainObject(scope) || !Array.isArray(scope.enum)) return [];
+    return scope.enum.filter(
+      (entry): entry is string => typeof entry === "string",
+    );
+  };
+
+  const actionSupportsCollectionScope = (action: ActionPickerItem): boolean =>
+    Boolean(action.paperScopeProfile?.allowedScopes.includes("collection")) ||
+    (Boolean(getActionSchemaProperties(action).collectionId) &&
+      getActionScopeEnum(action).includes("collection"));
+
+  const actionSupportsTagScope = (action: ActionPickerItem): boolean =>
+    Boolean(action.paperScopeProfile?.allowedScopes.includes("tag"));
+
+  const normalizeIntentText = (text: string): string =>
+    text
+      .toLowerCase()
+      .replace(/[_-]+/g, " ")
+      .replace(/[^\p{L}\p{N}/\s]+/gu, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  const stripActionLaunchPrefix = (text: string): string =>
+    text
+      .trim()
+      .replace(
+        /^(?:please\s+)?(?:(?:can|could|would)\s+you\s+)?(?:(?:run|start|launch|use|do|perform|execute)\s+)?/i,
+        "",
+      )
+      .trim();
+
+  const getActionAliases = (actionName: string): string[] => {
+    const aliases = new Set<string>([
+      actionName,
+      actionName.replace(/[_-]+/g, " "),
+    ]);
+    if (actionName === "auto_tag") {
+      aliases.add("auto tag");
+      aliases.add("autotag");
+    }
+    if (actionName === "audit_library") {
+      aliases.add("audit library");
+      aliases.add("audit");
+    }
+    return Array.from(aliases)
+      .map((alias) => normalizeIntentText(alias))
+      .filter(Boolean);
+  };
+
+  const textMentionsAction = (
+    text: string,
+    actions: ActionPickerItem[],
+  ): boolean => {
+    const normalizedTexts = [
+      normalizeIntentText(text),
+      normalizeIntentText(stripActionLaunchPrefix(text)),
+    ].filter(Boolean);
+    if (!normalizedTexts.length) return false;
+    return actions.some((action) =>
+      getActionAliases(action.name).some((alias) =>
+        normalizedTexts.some(
+          (normalized) =>
+            normalized === alias ||
+            normalized.startsWith(`${alias} `) ||
+            normalized.includes(`/${normalizeIntentText(action.name)}`),
+        ),
+      ),
+    );
+  };
+
+  const scoreCollectionCandidate = (
+    text: string,
+    collection: PaperScopedActionCollectionCandidate,
+  ): number => {
+    const tokens = new Set(
+      normalizeIntentText(text)
+        .split(/\s+/)
+        .filter((token) => token.length > 2),
+    );
+    const candidateTokens = normalizeIntentText(
+      `${collection.name} ${collection.path || ""}`,
+    )
+      .split(/\s+/)
+      .filter((token) => token.length > 2);
+    return candidateTokens.reduce(
+      (score, token) => score + (tokens.has(token) ? 1 : 0),
+      0,
+    );
+  };
+
+  const selectCollectionCandidatesForLlm = (
+    text: string,
+    collections: PaperScopedActionCollectionCandidate[],
+    requestContext: ActionRequestContext,
+  ): PaperScopedActionCollectionCandidate[] => {
+    const selectedIds = new Set(
+      (requestContext.selectedCollectionContexts || [])
+        .map((entry) => Number(entry.collectionId))
+        .filter((id) => Number.isFinite(id) && id > 0)
+        .map((id) => Math.floor(id)),
+    );
+    const selected = collections.filter((entry) =>
+      selectedIds.has(Math.floor(entry.collectionId)),
+    );
+    const scored = collections
+      .filter((entry) => !selectedIds.has(Math.floor(entry.collectionId)))
+      .map((entry) => ({ entry, score: scoreCollectionCandidate(text, entry) }))
+      .sort((left, right) => right.score - left.score);
+    const lexicalMatches = scored
+      .filter((entry) => entry.score > 0)
+      .map((entry) => entry.entry);
+    const fallback = scored.map((entry) => entry.entry);
+    const out = [...selected, ...lexicalMatches, ...fallback];
+    const seen = new Set<number>();
+    return out
+      .filter((entry) => {
+        const id = Math.floor(entry.collectionId);
+        if (seen.has(id)) return false;
+        seen.add(id);
+        return true;
+      })
+      .slice(0, 200);
+  };
+
+  const textHasScopeSignalForLlm = (params: {
+    text: string;
+    collectionCandidates: PaperScopedActionCollectionCandidate[];
+    tagCandidates: PaperScopedActionTagCandidate[];
+  }): boolean => {
+    const normalized = normalizeIntentText(params.text);
+    if (!normalized) return false;
+    if (
+      /\b(?:about|all|collection|current|entire|folder|library|scope|selected|selection|tag|whole)\b/u.test(
+        normalized,
+      )
+    ) {
+      return true;
+    }
+    const ignoredTokens = new Set([
+      "action",
+      "audit",
+      "auto",
+      "please",
+      "run",
+      "tag",
+    ]);
+    const signalTokens = new Set(
+      normalized
+        .split(/\s+/)
+        .filter((token) => token.length > 2 && !ignoredTokens.has(token)),
+    );
+    if (!signalTokens.size) return false;
+    const hasSignalToken = (value: string | undefined): boolean =>
+      normalizeIntentText(value || "")
+        .split(/\s+/)
+        .some((token) => token.length > 2 && signalTokens.has(token));
+    if (
+      params.collectionCandidates.some(
+        (entry) => hasSignalToken(entry.name) || hasSignalToken(entry.path),
+      )
+    ) {
+      return true;
+    }
+    return params.tagCandidates.some((entry) => hasSignalToken(entry.name));
+  };
+
+  const extractJsonObject = (text: string): Record<string, unknown> | null => {
+    const trimmed = text.trim();
+    const candidates = [
+      trimmed,
+      trimmed.slice(trimmed.indexOf("{"), trimmed.lastIndexOf("}") + 1),
+    ].filter((entry) => entry.startsWith("{") && entry.endsWith("}"));
+    for (const candidate of candidates) {
+      try {
+        const parsed = JSON.parse(candidate);
+        if (isPlainObject(parsed)) return parsed;
+      } catch {
+        // Try the next candidate.
+      }
+    }
+    return null;
+  };
+
+  const parseLlmActionScopeChoice = (
+    raw: string,
+  ): LlmActionScopeChoice | null => {
+    const parsed = extractJsonObject(raw);
+    if (!parsed) return null;
+    const status = parsed.status;
+    if (
+      status !== "match" &&
+      status !== "ambiguous" &&
+      status !== "no_match" &&
+      status !== "not_action"
+    ) {
+      return null;
+    }
+    const scope =
+      parsed.scope === "collection" ||
+      parsed.scope === "tag" ||
+      parsed.scope === "all"
+        ? parsed.scope
+        : undefined;
+    const tagScope =
+      parsed.tagScope === "allTagged" || parsed.tagScope === "untagged"
+        ? parsed.tagScope
+        : undefined;
+    const collectionId = Number(parsed.collectionId);
+    const confidence = Number(parsed.confidence);
+    return {
+      status,
+      actionName:
+        typeof parsed.actionName === "string"
+          ? parsed.actionName.trim()
+          : undefined,
+      scope,
+      collectionId:
+        Number.isFinite(collectionId) && collectionId > 0
+          ? Math.floor(collectionId)
+          : undefined,
+      tagName:
+        typeof parsed.tagName === "string" && parsed.tagName.trim()
+          ? parsed.tagName.trim()
+          : undefined,
+      tagScope,
+      confidence: Number.isFinite(confidence) ? confidence : undefined,
+      reason:
+        typeof parsed.reason === "string" ? parsed.reason.trim() : undefined,
+    };
   };
 
   const consumeActiveActionToken = (): boolean => {
@@ -184,6 +464,15 @@ export function createActionCommandController(
     slashMenu
       .querySelectorAll("[data-slash-skill-item]")
       .forEach((element: Element) => element.remove());
+  };
+
+  const setBaseSlashItemsVisible = (visible: boolean): void => {
+    if (!slashMenu) return;
+    Array.from(slashMenu.querySelectorAll("[data-slash-base-item]")).forEach(
+      (element) => {
+        (element as HTMLElement).style.display = visible ? "" : "none";
+      },
+    );
   };
 
   const getVisibleSlashItems = (): HTMLButtonElement[] => {
@@ -237,6 +526,7 @@ export function createActionCommandController(
   const closeSlashMenu = () => {
     slashMenuActiveIndex = -1;
     clearAgentSlashItems();
+    setBaseSlashItemsVisible(true);
     if (slashMenu) {
       Array.from(slashMenu.querySelectorAll(".llm-action-picker-item")).forEach(
         (el) => (el as HTMLButtonElement).removeAttribute("aria-selected"),
@@ -326,7 +616,21 @@ export function createActionCommandController(
     renderActionPicker();
   };
 
-  const renderDynamicSlashMenuSections = (query = "") => {
+  const renderDynamicSlashMenuSections = (
+    query = "",
+    trigger: ActionMenuTrigger = "/",
+  ) => {
+    if (trigger === "$") {
+      clearAgentSlashItems();
+      setBaseSlashItemsVisible(false);
+      if (deps.shouldRenderSkillSlashMenu()) {
+        renderSkillsInSlashMenu(query);
+      } else {
+        clearSkillSlashItems();
+      }
+      return;
+    }
+    setBaseSlashItemsVisible(true);
     if (!deps.shouldRenderDynamicSlashMenu()) {
       clearAgentSlashItems();
       clearSkillSlashItems();
@@ -360,7 +664,14 @@ export function createActionCommandController(
       closeSlashMenu();
       return;
     }
-    renderDynamicSlashMenuSections(token.query.toLowerCase().trim());
+    if (token.trigger === "$" && !deps.shouldRenderSkillSlashMenu()) {
+      closeSlashMenu();
+      return;
+    }
+    renderDynamicSlashMenuSections(
+      token.query.toLowerCase().trim(),
+      token.trigger,
+    );
     if (!isFloatingMenuOpen(slashMenu)) {
       deps.closeRetryModelMenu();
       deps.closeModelMenu();
@@ -390,101 +701,13 @@ export function createActionCommandController(
     }
   };
 
-  const closeActionHitlPanel = () => {
-    if (actionHitlPanel) {
-      actionHitlPanel.style.display = "none";
-      actionHitlPanel.innerHTML = "";
-    }
-    chatBox?.querySelector(".llm-action-inline-card")?.remove();
-    syncHasActionCardAttr();
-  };
-
-  const showActionHitlCard = (
-    requestId: string,
-    action: AgentPendingAction,
-  ): Promise<AgentConfirmationResolution> =>
-    new Promise((resolve) => {
-      getAgentApi().registerPendingConfirmation(requestId, (resolution) => {
-        closeActionHitlPanel();
-        resolve(resolution);
-      });
-      const ownerDoc = body.ownerDocument;
-      if (!ownerDoc || !chatBox) return;
-      chatBox.querySelector(".llm-action-inline-card")?.remove();
-      const wrapper = ownerDoc.createElement("div");
-      wrapper.className = "llm-action-inline-card";
-      wrapper.appendChild(
-        renderPendingActionCard(ownerDoc, { requestId, action }),
-      );
-      chatBox.appendChild(wrapper);
-      chatBox.scrollTop = chatBox.scrollHeight;
-      syncHasActionCardAttr();
-    });
-
-  const createActionProgressIndicator = (actionName: string) => {
-    const ownerDoc = body.ownerDocument;
-    let element: HTMLDivElement | null = null;
-    let stepText: HTMLDivElement | null = null;
-    let summaryText: HTMLDivElement | null = null;
-
-    const ensureMounted = () => {
-      if (!ownerDoc || !chatBox) return;
-      if (element && element.isConnected) return;
-      chatBox.querySelector(".llm-action-progress-card")?.remove();
-      const wrapper = ownerDoc.createElement("div");
-      wrapper.className = "llm-action-progress-card";
-      const header = ownerDoc.createElement("div");
-      header.className = "llm-action-progress-header";
-      const title = ownerDoc.createElement("div");
-      title.className = "llm-action-progress-title";
-      title.textContent = `${formatActionLabel(actionName)}`;
-      const typing = ownerDoc.createElement("div");
-      typing.className = "llm-typing llm-action-progress-typing";
-      typing.innerHTML =
-        '<span class="llm-typing-dot"></span><span class="llm-typing-dot"></span><span class="llm-typing-dot"></span>';
-      header.append(title, typing);
-      wrapper.appendChild(header);
-      stepText = ownerDoc.createElement("div");
-      stepText.className = "llm-action-progress-step";
-      stepText.textContent = "Starting...";
-      wrapper.appendChild(stepText);
-      summaryText = ownerDoc.createElement("div");
-      summaryText.className = "llm-action-progress-summary";
-      summaryText.textContent = "";
-      wrapper.appendChild(summaryText);
-      chatBox.appendChild(wrapper);
-      chatBox.scrollTop = chatBox.scrollHeight;
-      element = wrapper;
-      syncHasActionCardAttr();
-    };
-
-    ensureMounted();
-    return {
-      setStep(stepName: string, index: number, total: number) {
-        ensureMounted();
-        if (stepText) stepText.textContent = `${stepName} (${index}/${total})`;
-        if (summaryText) summaryText.textContent = "";
-      },
-      setSummary(summary: string) {
-        ensureMounted();
-        if (summaryText) summaryText.textContent = summary;
-      },
-      hide() {
-        element?.remove();
-        element = null;
-        stepText = null;
-        summaryText = null;
-        syncHasActionCardAttr();
-      },
-      remove() {
-        element?.remove();
-        element = null;
-        stepText = null;
-        summaryText = null;
-        syncHasActionCardAttr();
-      },
-    };
-  };
+  const actionLifecycle: ActionCommandLifecycle = createActionCommandLifecycle({
+    body,
+    actionHitlPanel,
+    chatBox,
+    syncHasActionCardAttr,
+  });
+  const { closeActionHitlPanel } = actionLifecycle;
 
   const getNeedsUserInputFields = (
     _actionName: string,
@@ -565,18 +788,19 @@ export function createActionCommandController(
         }));
     };
 
-  const getPaperScopedTagCandidates =
-    async (): Promise<PaperScopedActionTagCandidate[]> => {
-      const libraryID = deps.getCurrentLibraryID();
-      if (!libraryID) return [];
-      const tags = await getAgentApi().getZoteroGateway().listLibraryTags({
-        libraryID,
-      });
-      return tags.map((entry) => ({
-        name: entry.name,
-        type: entry.type,
-      }));
-    };
+  const getPaperScopedTagCandidates = async (): Promise<
+    PaperScopedActionTagCandidate[]
+  > => {
+    const libraryID = deps.getCurrentLibraryID();
+    if (!libraryID) return [];
+    const tags = await getAgentApi().getZoteroGateway().listLibraryTags({
+      libraryID,
+    });
+    return tags.map((entry) => ({
+      name: entry.name,
+      type: entry.type,
+    }));
+  };
 
   const resolvePaperScopedActionInput = async (
     actionName: string,
@@ -603,6 +827,267 @@ export function createActionCommandController(
       setStatus("Agent system unavailable", "error");
       return null;
     }
+  };
+
+  const resolvePagedLibraryActionInput = (
+    actionName: string,
+    params: string,
+    actionMode: "paper" | "library",
+    baseInput?: Record<string, unknown>,
+  ): Record<string, unknown> | null => {
+    const input = {
+      ...parseCommandParams(actionName, params, actionMode),
+      ...(baseInput || {}),
+    };
+    try {
+      const resolution = resolvePagedCollectionScopeInput({
+        actionName,
+        rawParams: params,
+        baseInput: input,
+        collectionCandidates: getPaperScopedCollectionCandidates(),
+      });
+      if (resolution.kind === "error") {
+        setStatus(
+          resolution.error,
+          actionName === "organize_unfiled" ? "warning" : "error",
+        );
+        return null;
+      }
+      return resolution.input;
+    } catch (error) {
+      deps.logError(`LLM: failed to resolve /${actionName} input`, error);
+      setStatus("Agent system unavailable", "error");
+      return null;
+    }
+  };
+
+  const buildLlmScopeResolverPrompt = (params: {
+    text: string;
+    actions: ActionPickerItem[];
+    collections: PaperScopedActionCollectionCandidate[];
+    tags: PaperScopedActionTagCandidate[];
+    requestContext: ActionRequestContext;
+  }): string => {
+    const selectedCollections =
+      params.requestContext.selectedCollectionContexts || [];
+    const selectedTags = params.requestContext.selectedTagContexts || [];
+    return [
+      "Resolve whether the user wants to launch one Zotero library action and identify the requested scope.",
+      "Return ONLY a JSON object. No prose. No markdown.",
+      "Schema:",
+      '{"status":"match|ambiguous|no_match|not_action","actionName":"<action or empty>","scope":"collection|tag|all","collectionId":123,"tagName":"...","tagScope":"allTagged|untagged","confidence":0.0,"reason":"short"}',
+      "Rules:",
+      "- Only choose actionName from AVAILABLE_ACTIONS.",
+      "- Only choose collectionId from AVAILABLE_COLLECTIONS.",
+      "- Only choose tagName/tagScope from AVAILABLE_TAGS.",
+      "- Use selected scopes for words like this/current/selected.",
+      "- Resolve descriptive collection phrases semantically, e.g. 'the folder about dynamical systems'.",
+      "- Return status ambiguous if multiple listed collections/tags plausibly match.",
+      "- Return status no_match if the action is clear but no listed scope matches.",
+      "- Return status not_action if the user is asking a question about an action instead of asking to run it.",
+      "- Do not choose whole library unless the user explicitly says whole/all/entire library.",
+      "",
+      `USER_TEXT: ${params.text}`,
+      "",
+      "AVAILABLE_ACTIONS:",
+      ...params.actions.map((action) =>
+        JSON.stringify({
+          name: action.name,
+          collectionScope: actionSupportsCollectionScope(action),
+          tagScope: actionSupportsTagScope(action),
+        }),
+      ),
+      "",
+      "SELECTED_COLLECTIONS:",
+      ...(selectedCollections.length
+        ? selectedCollections.map((entry) =>
+            JSON.stringify({
+              collectionId: entry.collectionId,
+              name: entry.name,
+            }),
+          )
+        : ["[]"]),
+      "",
+      "SELECTED_TAGS:",
+      ...(selectedTags.length
+        ? selectedTags.map((entry) =>
+            JSON.stringify({
+              name: entry.name,
+              normalizedName: entry.normalizedName,
+              scope: entry.scope,
+              includeAutomatic: entry.includeAutomatic,
+            }),
+          )
+        : ["[]"]),
+      "",
+      "AVAILABLE_COLLECTIONS:",
+      ...params.collections.map((entry) =>
+        JSON.stringify({
+          collectionId: entry.collectionId,
+          name: entry.name,
+          path: entry.path || entry.name,
+        }),
+      ),
+      "",
+      "AVAILABLE_TAGS:",
+      ...(params.tags.length
+        ? params.tags.slice(0, 200).map((entry) =>
+            JSON.stringify({
+              name: entry.name,
+              type: entry.type,
+            }),
+          )
+        : ["[]"]),
+    ].join("\n");
+  };
+
+  const resolveLlmNaturalLanguageActionIntent = async (params: {
+    text: string;
+    actions: ActionPickerItem[];
+    requestContext: ActionRequestContext & { mode: "paper" | "library" };
+    collectionCandidates: PaperScopedActionCollectionCandidate[];
+    tagCandidates: PaperScopedActionTagCandidate[];
+  }) => {
+    const selectedProfile = deps.getSelectedProfile();
+    if (!selectedProfile?.model) {
+      return {
+        kind: "error" as const,
+        error:
+          "Could not infer the collection from this description because no model is configured. Select a folder chip or use collection <name>.",
+      };
+    }
+    if (
+      selectedProfile.authMode === "webchat" ||
+      selectedProfile.providerProtocol === "web_sync"
+    ) {
+      return {
+        kind: "error" as const,
+        error:
+          "Could not infer the collection from this description in WebChat mode. Select a folder chip or use collection <name>.",
+      };
+    }
+
+    const eligibleActions = params.actions.filter(
+      (action) =>
+        actionSupportsCollectionScope(action) || actionSupportsTagScope(action),
+    );
+    if (
+      !eligibleActions.length ||
+      !textMentionsAction(params.text, eligibleActions) ||
+      !textHasScopeSignalForLlm({
+        text: params.text,
+        collectionCandidates: params.collectionCandidates,
+        tagCandidates: params.tagCandidates,
+      })
+    ) {
+      return { kind: "none" as const };
+    }
+
+    const collections = selectCollectionCandidatesForLlm(
+      params.text,
+      params.collectionCandidates,
+      params.requestContext,
+    );
+    const prompt = buildLlmScopeResolverPrompt({
+      text: params.text,
+      actions: eligibleActions,
+      collections,
+      tags: params.tagCandidates,
+      requestContext: params.requestContext,
+    });
+    let raw: string;
+    try {
+      raw = await callLLM({
+        prompt,
+        model: selectedProfile.model,
+        apiBase: selectedProfile.apiBase || "",
+        apiKey: selectedProfile.apiKey,
+        authMode: selectedProfile.authMode,
+        providerProtocol: selectedProfile.providerProtocol,
+        temperature: 0,
+        maxTokens: 220,
+      });
+    } catch (error) {
+      deps.logError("LLM: failed to infer action scope", error);
+      return {
+        kind: "error" as const,
+        error:
+          "Could not infer the collection from this description. Select a folder chip or use collection <name>.",
+      };
+    }
+
+    const choice = parseLlmActionScopeChoice(raw);
+    if (!choice) {
+      return {
+        kind: "error" as const,
+        error:
+          "Could not parse the inferred action scope. Select a folder chip or use collection <name>.",
+      };
+    }
+    if (choice.status === "not_action") return { kind: "none" as const };
+    const action = eligibleActions.find(
+      (candidate) => candidate.name === choice.actionName,
+    );
+    if (!action) return { kind: "none" as const };
+    if (choice.status === "ambiguous") {
+      return {
+        kind: "error" as const,
+        error:
+          choice.reason ||
+          `The ${action.name} scope is ambiguous. Select a folder chip or name one collection exactly.`,
+      };
+    }
+    if (choice.status === "no_match") {
+      return {
+        kind: "error" as const,
+        error:
+          choice.reason ||
+          `Could not match that description to a ${action.name} scope.`,
+      };
+    }
+    if ((choice.confidence ?? 1) < 0.55) {
+      return {
+        kind: "error" as const,
+        error:
+          "The inferred action scope was too uncertain. Select a folder chip or name one collection exactly.",
+      };
+    }
+
+    let syntheticText = "";
+    if (choice.scope === "collection" && choice.collectionId) {
+      const collection = params.collectionCandidates.find(
+        (entry) => Math.floor(entry.collectionId) === choice.collectionId,
+      );
+      if (!collection) {
+        return {
+          kind: "error" as const,
+          error: `The inferred collection ${choice.collectionId} is not available.`,
+        };
+      }
+      syntheticText = `/${action.name} collection ${collection.path || collection.name}`;
+    } else if (choice.scope === "tag" && (choice.tagName || choice.tagScope)) {
+      syntheticText = `/${action.name} tag ${
+        choice.tagName ||
+        (choice.tagScope === "allTagged" ? "all tagged" : "untagged")
+      }`;
+    } else if (choice.scope === "all") {
+      syntheticText = `/${action.name} whole library`;
+    } else {
+      return {
+        kind: "error" as const,
+        error:
+          "The inferred action did not include a usable scope. Select a folder chip or use collection <name>.",
+      };
+    }
+
+    return resolveNaturalLanguageActionIntent({
+      text: syntheticText,
+      mode: params.requestContext.mode,
+      actions: eligibleActions,
+      requestContext: params.requestContext,
+      collectionCandidates: params.collectionCandidates,
+      tagCandidates: params.tagCandidates,
+    });
   };
 
   const getPaperScopedPromptOptions = (
@@ -713,6 +1198,7 @@ export function createActionCommandController(
   const executeAgentAction = async (
     action: ActionPickerItem,
     parsedInput?: Record<string, unknown>,
+    userQuery?: string,
   ): Promise<void> => {
     inputBox.focus({ preventScroll: true });
     try {
@@ -725,6 +1211,8 @@ export function createActionCommandController(
     const paperScopeProfile = getAgentApi().getPaperScopedActionProfile(
       action.name,
     );
+    const requestContext = buildActionRequestContext();
+    const actionMode = requestContext.mode;
     let input: Record<string, unknown>;
     if (parsedInput) {
       input = parsedInput;
@@ -751,7 +1239,12 @@ export function createActionCommandController(
         );
       }
       input = buildActionInput(action.name, action.inputSchema, extraFields);
-      if (paperScopeProfile) {
+      if (isPagedLibraryActionForMode(action.name, actionMode)) {
+        input = {
+          ...input,
+          ...parseCommandParams(action.name, "", actionMode),
+        };
+      } else if (paperScopeProfile) {
         const resolvedInput = await resolvePaperScopedActionInput(
           action.name,
           "",
@@ -770,13 +1263,30 @@ export function createActionCommandController(
         }
       }
     }
-    setStatus(`Running: ${formatActionLabel(action.name)}...`, "ready");
-    const progressIndicator = createActionProgressIndicator(action.name);
-    let lastProgressSummary = "";
-    try {
-      const agentApi = getAgentApi();
-      const selectedProfile = deps.getSelectedProfile();
-      const actionLlmConfig = selectedProfile?.model
+    const trimmedUserQuery = userQuery?.trim();
+    if (
+      trimmedUserQuery &&
+      isPagedLibraryActionForMode(action.name, actionMode)
+    ) {
+      const resolvedInput = resolvePagedLibraryActionInput(
+        action.name,
+        trimmedUserQuery,
+        actionMode,
+        input,
+      );
+      if (!resolvedInput) return;
+      input = resolvedInput;
+    }
+    if (trimmedUserQuery && input.userQuery === undefined) {
+      input.userQuery = trimmedUserQuery;
+    }
+    const selectedProfile = deps.getSelectedProfile();
+    await runAgentActionWithLifecycle({
+      actionName: action.name,
+      input,
+      requestContext,
+      libraryID: deps.getCurrentLibraryID(),
+      llm: selectedProfile?.model
         ? {
             model: selectedProfile.model,
             apiBase: selectedProfile.apiBase || "",
@@ -784,184 +1294,138 @@ export function createActionCommandController(
             authMode: selectedProfile.authMode,
             providerProtocol: selectedProfile.providerProtocol,
           }
-        : undefined;
-      const result = await agentApi.runAction(action.name, input, {
-        libraryID: deps.getCurrentLibraryID(),
-        requestContext: buildActionRequestContext(),
-        confirmationMode: "native_ui",
-        llm: actionLlmConfig,
-        onProgress: (event) => {
-          if (event.type === "step_start") {
-            progressIndicator.setStep(event.step, event.index, event.total);
-            setStatus(`${event.step} (${event.index}/${event.total})`, "ready");
-          } else if (event.type === "step_done") {
-            if (event.summary) {
-              lastProgressSummary = event.summary;
-              progressIndicator.setSummary(event.summary);
-              setStatus(event.summary, "ready");
-            }
-          } else if (event.type === "confirmation_required") {
-            progressIndicator.hide();
-          }
-        },
-        requestConfirmation: (requestId, pendingAction) =>
-          showActionHitlCard(requestId, pendingAction),
-      });
-      setStatus(
-        result.ok
-          ? resolveActionCompletionStatusText({
-              actionName: action.name,
-              lastProgressSummary,
-            })
-          : `${formatActionLabel(action.name)} failed: ${result.error}`,
-        result.ok ? "ready" : "error",
-      );
-    } catch (error) {
-      deps.logError("LLM: action picker run error", error);
-      setStatus(`Error: ${String(error)}`, "error");
-    } finally {
-      progressIndicator.remove();
-    }
+        : undefined,
+      isPagedLibraryAction: isPagedLibraryActionForMode(
+        action.name,
+        actionMode,
+      ),
+      lifecycle: actionLifecycle,
+      setStatus,
+      logError: deps.logError,
+    });
   };
 
   const clearForcedSkill = (): void => {
     forcedSkillId = null;
     forcedSkillBadge = null;
-    const row = body.querySelector("#llm-command-row");
-    if (row) {
-      row.removeAttribute("data-active");
-      row.classList.remove("llm-command-row--skill");
-    }
-    if (inputBox.dataset.originalPlaceholder !== undefined) {
-      inputBox.placeholder = inputBox.dataset.originalPlaceholder;
-      delete inputBox.dataset.originalPlaceholder;
-    }
+    clearCommandRowState({ body, inputBox });
   };
 
   const clearCommandChip = (): void => {
     activeCommandAction = null;
     activeCommandBadge = null;
-    const row = body.querySelector("#llm-command-row");
-    if (row) {
-      row.removeAttribute("data-active");
-      row.classList.remove("llm-command-row--skill");
-    }
-    if (inputBox.dataset.originalPlaceholder !== undefined) {
-      inputBox.placeholder = inputBox.dataset.originalPlaceholder;
-      delete inputBox.dataset.originalPlaceholder;
-    }
+    clearCommandRowState({ body, inputBox });
   };
 
-  const buildSkillRoutingRequest = (): SkillRoutingRequest => {
-    const currentItem = deps.getItem();
-    const selectedPaperContexts = currentItem
-      ? deps.getAllEffectivePaperContexts(currentItem)
-      : [];
-    const selectedCollectionContexts = currentItem
-      ? selectedCollectionContextCache.get(currentItem.id) || []
-      : [];
-    const selectedTagContexts = currentItem
-      ? selectedTagContextCache.get(currentItem.id) || []
-      : [];
-    return {
-      userText: inputBox.value || "",
-      selectedPaperContexts,
-      selectedCollectionContexts,
-      selectedTagContexts,
-    };
-  };
-
-  const handleSkillSelection = (skill: AgentSkill): void => {
-    const eligibility = getSkillContextEligibility(
-      skill,
-      buildSkillRoutingRequest(),
-    );
-    if (!eligibility.eligible) {
-      setStatus(`/${skill.id}: ${eligibility.reason}`, "warning");
-      return;
-    }
-    clearForcedSkill();
-    clearCommandChip();
-    forcedSkillId = skill.id;
-    if (deps.getCurrentRuntimeMode() !== "agent" && getAgentModeEnabled()) {
-      deps.setCurrentRuntimeMode("agent");
-    }
-    const row = body.querySelector("#llm-command-row");
-    const badgeEl = body.querySelector("#llm-command-row-badge");
-    if (!row || !badgeEl) return;
-    badgeEl.textContent = `/${skill.id}`;
-    row.classList.add("llm-command-row--skill");
-    row.setAttribute("data-active", "");
-    forcedSkillBadge = row as HTMLElement;
-    if (inputBox.dataset.originalPlaceholder === undefined) {
-      inputBox.dataset.originalPlaceholder = inputBox.placeholder;
-    }
-    inputBox.placeholder = "";
-    inputBox.value = "";
-    inputBox.focus({ preventScroll: true });
+  const dispatchComposerInput = (): void => {
     const EventCtor =
       (inputBox.ownerDocument?.defaultView as any)?.Event ?? Event;
     inputBox.dispatchEvent(new EventCtor("input", { bubbles: true }));
+  };
+
+  const clearSubmittedActionDraft = (): void => {
+    inputBox.value = "";
+    dispatchComposerInput();
+    deps.persistDraftInputForCurrentConversation();
+  };
+
+  const handleNaturalLanguageActionIntent = async (
+    text: string,
+  ): Promise<boolean> => {
+    if (deps.isClaudeConversationSystem()) return false;
+    const requestContext = buildActionRequestContext();
+    if (requestContext.mode !== "library") return false;
+    try {
+      await initAgentSubsystem();
+      const actions = getAgentApi()
+        .listActions(requestContext.mode)
+        .map((action) => ({
+          ...action,
+          paperScopeProfile: getAgentApi().getPaperScopedActionProfile(
+            action.name,
+          ),
+        }));
+      const collectionCandidates = getPaperScopedCollectionCandidates();
+      const tagCandidates = await getPaperScopedTagCandidates();
+      const result = resolveNaturalLanguageActionIntent({
+        text,
+        mode: requestContext.mode,
+        actions,
+        requestContext,
+        collectionCandidates,
+        tagCandidates,
+      });
+      const resolvedResult =
+        result.kind === "none"
+          ? await resolveLlmNaturalLanguageActionIntent({
+              text,
+              actions,
+              requestContext,
+              collectionCandidates,
+              tagCandidates,
+            })
+          : result;
+      if (resolvedResult.kind === "none") return false;
+      if (resolvedResult.kind === "error") {
+        setStatus(resolvedResult.error, "error");
+        return true;
+      }
+      const action = actions.find(
+        (candidate) => candidate.name === resolvedResult.actionName,
+      );
+      if (!action) {
+        setStatus(`Unknown action: ${resolvedResult.actionName}`, "error");
+        return true;
+      }
+      closeSlashMenu();
+      clearSubmittedActionDraft();
+      void executeAgentAction(
+        action,
+        resolvedResult.input,
+        resolvedResult.userQuery,
+      );
+      return true;
+    } catch (error) {
+      deps.logError("LLM: failed to resolve natural action intent", error);
+      setStatus("Agent system unavailable", "error");
+      return true;
+    }
+  };
+
+  const handleSkillSelection = (skill: AgentSkill): void => {
+    clearForcedSkill();
+    clearCommandChip();
+    forcedSkillId = skill.id;
+    const isCodexAppServerSkill =
+      deps.getSelectedProfile()?.authMode === "codex_app_server";
+    if (
+      !isCodexAppServerSkill &&
+      deps.getCurrentRuntimeMode() !== "agent" &&
+      getAgentModeEnabled()
+    ) {
+      deps.setCurrentRuntimeMode("agent");
+    }
+    forcedSkillBadge = activateCommandRowState({
+      body,
+      inputBox,
+      label: `/${skill.id}`,
+      kind: "skill",
+      dispatchInput: dispatchComposerInput,
+    });
   };
 
   const insertCommandToken = (action: ActionPickerItem): void => {
     clearForcedSkill();
     clearCommandChip();
     activeCommandAction = action;
-    const row = body.querySelector("#llm-command-row");
-    const badgeEl = body.querySelector("#llm-command-row-badge");
-    if (!row || !badgeEl) return;
-    badgeEl.textContent = `/${action.name}`;
-    row.classList.remove("llm-command-row--skill");
-    row.setAttribute("data-active", "");
-    activeCommandBadge = row as HTMLElement;
-    if (inputBox.dataset.originalPlaceholder === undefined) {
-      inputBox.dataset.originalPlaceholder = inputBox.placeholder;
-    }
-    inputBox.placeholder = "";
-    inputBox.value = "";
-    inputBox.focus({ preventScroll: true });
-    const EventCtor =
-      (inputBox.ownerDocument?.defaultView as any)?.Event ?? Event;
-    inputBox.dispatchEvent(new EventCtor("input", { bubbles: true }));
-  };
-
-  const parseCommandParams = (
-    _actionName: string,
-    params: string,
-  ): Record<string, unknown> => {
-    const input: Record<string, unknown> = {};
-    if (!params) return input;
-    const lower = params.toLowerCase();
-    const firstNMatch = /(?:for\s+)?(?:first|top)\s+(\d+)\s*items?/i.exec(
-      params,
-    );
-    if (firstNMatch) {
-      input.limit = parseInt(firstNMatch[1], 10);
-      return input;
-    }
-    const lastNMatch = /(?:for\s+)?last\s+(\d+)\s*items?/i.exec(params);
-    if (lastNMatch) {
-      input.limit = parseInt(lastNMatch[1], 10);
-      return input;
-    }
-    const collectionMatch = /(?:for\s+)?collection\s+(.+)/i.exec(params);
-    if (collectionMatch) {
-      input.scope = "collection";
-      input.collectionName = collectionMatch[1].trim();
-      return input;
-    }
-    if (
-      lower.includes("whole library") ||
-      lower.includes("for all") ||
-      lower === "all"
-    ) {
-      input.scope = "all";
-      return input;
-    }
-    const bareNumber = /^(\d+)$/.exec(params.trim());
-    if (bareNumber) input.limit = parseInt(bareNumber[1], 10);
-    return input;
+    activeCommandBadge = activateCommandRowState({
+      body,
+      inputBox,
+      label: `/${action.name}`,
+      kind: "command",
+      clearInput: true,
+      dispatchInput: dispatchComposerInput,
+    });
   };
 
   const showScopeConfirmation = (
@@ -993,7 +1457,8 @@ export function createActionCommandController(
       if (!ownerDoc || !chatBox) return;
       chatBox.querySelector(".llm-action-inline-card")?.remove();
       const wrapper = ownerDoc.createElement("div");
-      wrapper.className = "llm-action-inline-card";
+      wrapper.className =
+        "llm-action-inline-card llm-action-inline-card-review";
       wrapper.appendChild(
         renderPendingActionCard(ownerDoc, {
           requestId,
@@ -1042,26 +1507,6 @@ export function createActionCommandController(
       await deps.getDoSend()?.();
       return;
     }
-    if (
-      actionName === "library_statistics" ||
-      actionName === "literature_review"
-    ) {
-      if (deps.getCurrentRuntimeMode() !== "agent" && getAgentModeEnabled()) {
-        deps.setCurrentRuntimeMode("agent");
-      }
-      inputBox.dataset.commandAction = actionName;
-      inputBox.dataset.commandParams = params.trim();
-      inputBox.value =
-        actionName === "library_statistics"
-          ? params.trim()
-            ? `Show my library statistics: ${params.trim()}`
-            : "Show my library statistics and give me a comprehensive overview."
-          : params.trim()
-            ? `Conduct a literature review on: ${params.trim()}`
-            : "I'd like to do a literature review.";
-      await deps.getDoSend()?.();
-      return;
-    }
     let allActions: ActionPickerItem[] = [];
     try {
       await initAgentSubsystem();
@@ -1077,8 +1522,19 @@ export function createActionCommandController(
       setStatus(`Unknown action: ${actionName}`, "error");
       return;
     }
+    const actionMode = buildActionRequestContext().mode;
     const paperScopeProfile =
       getAgentApi().getPaperScopedActionProfile(actionName);
+    if (isPagedLibraryActionForMode(actionName, actionMode)) {
+      const input = resolvePagedLibraryActionInput(
+        actionName,
+        params,
+        actionMode,
+      );
+      if (!input) return;
+      void executeAgentAction(action, input);
+      return;
+    }
     if (paperScopeProfile) {
       const resolvedInput = await resolvePaperScopedActionInput(
         actionName,
@@ -1094,10 +1550,13 @@ export function createActionCommandController(
             )
           : resolvedInput;
       if (!input) return;
-      void executeAgentAction(action, input);
+      void executeAgentAction(action, {
+        ...input,
+        ...(params.trim() ? { userQuery: params.trim() } : {}),
+      });
       return;
     }
-    let input = parseCommandParams(actionName, params);
+    let input = parseCommandParams(actionName, params, actionMode);
     const needsScopeConfirm =
       actionName !== "organize_unfiled" && actionName !== "discover_related";
     if (needsScopeConfirm && !params.trim()) {
@@ -1108,272 +1567,28 @@ export function createActionCommandController(
     void executeAgentAction(action, input);
   };
 
-  const renderSkillsInSlashMenu = (query = "") => {
-    const list = slashMenu?.querySelector(".llm-action-picker-list");
-    if (!list) return;
-    const ownerDoc = body.ownerDocument;
-    if (!ownerDoc) return;
-    clearSkillSlashItems();
-    const allSkills = getAllSkills();
-    if (!allSkills.length) return;
-    const skillRoutingRequest = buildSkillRoutingRequest();
-    const filtered = query
-      ? allSkills.filter(
-          (skill: AgentSkill) =>
-            skill.id.toLowerCase().includes(query) ||
-            skill.description.toLowerCase().includes(query),
-        )
-      : allSkills;
-    if (!filtered.length) return;
-    const baseAnchor =
-      list.querySelector("[data-slash-section='base']") ||
-      list.querySelector("[data-slash-base-item]") ||
-      null;
-    const mkSkillEl = (tag: string, className: string): HTMLElement => {
-      const element = ownerDoc.createElement(tag);
-      element.className = className;
-      element.setAttribute("data-slash-skill-item", "true");
-      return element;
-    };
-    const sectionLabel = mkSkillEl("div", "llm-slash-menu-section");
-    sectionLabel.setAttribute("aria-hidden", "true");
-    sectionLabel.textContent = t("Skills");
-    list.insertBefore(sectionLabel, baseAnchor);
-    filtered.forEach((skill: AgentSkill) => {
-      const eligibility = getSkillContextEligibility(
-        skill,
-        skillRoutingRequest,
-      );
-      const button = mkSkillEl(
-        "button",
-        "llm-action-picker-item",
-      ) as HTMLButtonElement;
-      button.type = "button";
-      button.disabled = !eligibility.eligible;
-      button.setAttribute(
-        "aria-disabled",
-        eligibility.eligible ? "false" : "true",
-      );
-      button.title = eligibility.eligible
-        ? skill.description || skill.id
-        : `${skill.description || skill.id} (${eligibility.reason})`;
-      const titleEl = ownerDoc.createElement("span");
-      titleEl.className = "llm-action-picker-title";
-      titleEl.textContent = skill.id;
-      const descEl = ownerDoc.createElement("span");
-      descEl.className = "llm-action-picker-description";
-      descEl.textContent = eligibility.eligible
-        ? skill.description
-        : eligibility.reason;
-      const badgeEl = ownerDoc.createElement("span");
-      badgeEl.className = "llm-action-picker-badge";
-      badgeEl.textContent = t(
-        skill.source === "system"
-          ? "System"
-          : skill.source === "customized"
-            ? "Customized"
-            : "Personal",
-      );
-      button.append(titleEl, descEl, badgeEl);
-      button.addEventListener("click", (event: Event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        consumeActiveActionToken();
-        closeSlashMenu();
-        handleSkillSelection(skill);
-      });
-      list.insertBefore(button, baseAnchor);
-    });
+  const slashMenuContext: ActionCommandSlashMenuContext = {
+    body,
+    inputBox,
+    slashMenu,
+    getItem: deps.getItem,
+    getSelectedProfile: deps.getSelectedProfile,
+    isClaudeConversationSystem: deps.isClaudeConversationSystem,
+    clearAgentSlashItems,
+    clearSkillSlashItems,
+    consumeActiveActionToken,
+    closeSlashMenu,
+    handleSkillSelection,
+    insertCommandToken,
+    executeAgentAction,
+    buildActionRequestContext,
   };
 
-  const firstSentence = (text: string): string => {
-    const normalized = text.replace(/\s+/g, " ").trim();
-    if (!normalized) return "";
-    const match = /^(.+?[.!?])(?:\s|$)/.exec(normalized);
-    if (match) return match[1];
-    return normalized.length <= 80
-      ? normalized
-      : `${normalized.slice(0, 77).trimEnd()}...`;
-  };
+  const renderSkillsInSlashMenu = (query = ""): void =>
+    renderSkillsSlashSection(slashMenuContext, query);
 
-  type ClaudeSlashMenuItem = {
-    name: string;
-    description: string;
-    argumentHint?: string;
-  };
-
-  const renderAgentActionsInSlashMenu = (query = "") => {
-    clearAgentSlashItems();
-    const ownerDoc = body.ownerDocument;
-    const list = slashMenu?.querySelector(".llm-action-picker-list");
-    if (!ownerDoc || !list) return;
-    const firstBase = list.firstChild;
-    const mkAgentEl = (tag: string, className: string): HTMLElement => {
-      const element = ownerDoc.createElement(tag);
-      element.className = className;
-      element.setAttribute("data-slash-agent-item", "true");
-      return element;
-    };
-    if (deps.isClaudeConversationSystem()) {
-      let commands: ClaudeSlashMenuItem[] = [];
-      try {
-        commands = getAgentApi().listSlashCommands?.() || [];
-      } catch {
-        commands = [];
-      }
-      if (!commands.length) {
-        const loading = mkAgentEl("div", "llm-slash-menu-section");
-        loading.setAttribute("aria-hidden", "true");
-        loading.textContent = t("Loading Claude commands...");
-        list.insertBefore(loading, firstBase);
-        void initAgentSubsystem()
-          .then((coreRuntime) =>
-            refreshClaudeSlashCommands(coreRuntime, false),
-          )
-          .then(() => {
-            renderAgentActionsInSlashMenu(query);
-          })
-          .catch(() => {});
-        const baseLabel = mkAgentEl("div", "llm-slash-menu-section");
-        baseLabel.setAttribute("aria-hidden", "true");
-        baseLabel.textContent = t("Base actions");
-        list.insertBefore(baseLabel, firstBase);
-        return;
-      }
-      const filtered = query
-        ? commands.filter(
-            (command) =>
-              command.name.toLowerCase().includes(query) ||
-              command.description.toLowerCase().includes(query),
-          )
-        : commands;
-      if (filtered.length) {
-        const section = mkAgentEl("div", "llm-slash-menu-section");
-        section.setAttribute("aria-hidden", "true");
-        section.textContent = "Claude Code";
-        list.insertBefore(section, firstBase);
-        filtered.forEach((command) => {
-          const button = mkAgentEl(
-            "button",
-            "llm-action-picker-item",
-          ) as HTMLButtonElement;
-          button.type = "button";
-          button.title = command.description;
-          const titleEl = ownerDoc.createElement("span");
-          titleEl.className = "llm-action-picker-title";
-          titleEl.textContent = `/${command.name}`;
-          button.append(titleEl);
-          button.addEventListener("click", (event: Event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            consumeActiveActionToken();
-            closeSlashMenu();
-            insertCommandToken({
-              name: command.name,
-              description: command.description,
-              inputSchema: { type: "object", properties: {} },
-            });
-          });
-          list.insertBefore(button, firstBase);
-        });
-      }
-      const baseLabel = mkAgentEl("div", "llm-slash-menu-section");
-      baseLabel.setAttribute("aria-hidden", "true");
-      baseLabel.textContent = t("Base actions");
-      list.insertBefore(baseLabel, firstBase);
-      return;
-    }
-    const chatMode = resolveSlashActionChatMode(
-      resolveDisplayConversationKind(deps.getItem()),
-    );
-    let allActions: ActionPickerItem[] = [];
-    try {
-      allActions = getAgentApi().listActions(chatMode);
-    } catch {
-      void initAgentSubsystem()
-        .then(() => {
-          renderAgentActionsInSlashMenu(query);
-        })
-        .catch(() => {});
-      return;
-    }
-    const filtered = query
-      ? allActions.filter(
-          (action) =>
-            action.name.toLowerCase().includes(query) ||
-            action.description.toLowerCase().includes(query),
-        )
-      : allActions;
-    const baseAnchor = list.querySelector("[data-slash-base-item]") || null;
-    const baseLabel = mkAgentEl("div", "llm-slash-menu-section");
-    baseLabel.setAttribute("aria-hidden", "true");
-    baseLabel.setAttribute("data-slash-section", "base");
-    baseLabel.textContent = t("Base actions");
-    list.insertBefore(baseLabel, baseAnchor);
-    const selectedProfile = deps.getSelectedProfile();
-    const compactAction: ActionPickerItem = {
-      name: "compact",
-      description:
-        selectedProfile?.authMode === "codex_app_server"
-          ? "Compact the current Codex context."
-          : "Compact the current agent context.",
-      inputSchema: { type: "object", properties: {} },
-    };
-    if (
-      !query ||
-      compactAction.name.includes(query) ||
-      compactAction.description.toLowerCase().includes(query)
-    ) {
-      const button = mkAgentEl(
-        "button",
-        "llm-action-picker-item",
-      ) as HTMLButtonElement;
-      button.type = "button";
-      button.title = compactAction.description;
-      const titleEl = ownerDoc.createElement("span");
-      titleEl.className = "llm-action-picker-title";
-      titleEl.textContent = "/compact";
-      const descEl = ownerDoc.createElement("span");
-      descEl.className = "llm-action-picker-description";
-      descEl.textContent = compactAction.description;
-      button.append(titleEl, descEl);
-      button.addEventListener("click", (event: Event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        consumeActiveActionToken();
-        closeSlashMenu();
-        insertCommandToken(compactAction);
-      });
-      list.insertBefore(button, baseAnchor);
-    }
-    const agentLabel = mkAgentEl("div", "llm-slash-menu-section");
-    agentLabel.setAttribute("aria-hidden", "true");
-    agentLabel.textContent = t("Agent actions");
-    list.insertBefore(agentLabel, baseLabel);
-    filtered.forEach((action) => {
-      const button = mkAgentEl(
-        "button",
-        "llm-action-picker-item",
-      ) as HTMLButtonElement;
-      button.type = "button";
-      button.title = action.description;
-      const titleEl = ownerDoc.createElement("span");
-      titleEl.className = "llm-action-picker-title";
-      titleEl.textContent = action.name;
-      const descEl = ownerDoc.createElement("span");
-      descEl.className = "llm-action-picker-description";
-      descEl.textContent = firstSentence(action.description);
-      button.append(titleEl, descEl);
-      button.addEventListener("click", (event: Event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        consumeActiveActionToken();
-        closeSlashMenu();
-        insertCommandToken(action);
-      });
-      list.insertBefore(button, baseLabel);
-    });
-  };
+  const renderAgentActionsInSlashMenu = (query = ""): void =>
+    renderAgentActionsSlashSection(slashMenuContext, query);
 
   const selectActionPickerItem = async (index: number): Promise<void> => {
     const action = actionPickerItems[index];
@@ -1417,6 +1632,7 @@ export function createActionCommandController(
       return ids;
     },
     handleInlineCommand,
+    handleNaturalLanguageActionIntent,
     consumeActiveActionToken,
   };
 }

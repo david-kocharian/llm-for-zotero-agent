@@ -17,6 +17,8 @@ import {
   shouldSuppressAssistantResponseContextMenu,
 } from "../src/modules/contextPanel/chat";
 import {
+  attachRenderedCodeBlockControls,
+  attachRenderedCopyButtons,
   extractRenderedMermaidSvg,
   isSafeRenderedMarkdownAttributeForTests,
   isSafeRenderedMarkdownElementForTests,
@@ -63,6 +65,7 @@ class FakeElement {
   public readonly classList = new FakeClassList();
   public readonly dataset: Record<string, string | undefined> = {};
   public readonly children: FakeElement[] = [];
+  public id = "";
   public textContent = "";
   public type = "";
   public title = "";
@@ -99,7 +102,15 @@ class FakeElement {
 
   querySelectorAll(selector: string): FakeElement[] {
     if (selector === ".llm-copyable[data-llm-copy-source]") {
-      return this.copyableChildren;
+      return [
+        ...this.copyableChildren,
+        ...this.findAllByClass("llm-copyable").filter(
+          (element) => element.dataset.llmCopySource !== undefined,
+        ),
+      ];
+    }
+    if (selector === ".llm-codeblock-shell") {
+      return this.findAllByClass("llm-codeblock-shell");
     }
     return [];
   }
@@ -111,6 +122,9 @@ class FakeElement {
           child.classList.contains("llm-render-copy-btn"),
         ) || null
       );
+    }
+    if (selector === ":scope .llm-codeblock-shell") {
+      return this.findByClass("llm-codeblock-shell");
     }
     return null;
   }
@@ -290,6 +304,51 @@ const throwingTemplateDocument = {
   createElementNS: (_namespace: string, tagName: string) =>
     new FakeElement(tagName),
 } as unknown as Document;
+
+function createFakeCodeBlockShell(options?: {
+  lang?: string;
+  previewClass?: string;
+  previewSource?: string;
+  renderedSvg?: string;
+}): {
+  root: FakeElement;
+  shell: FakeElement;
+  header: FakeElement;
+  body: FakeElement;
+} {
+  const root = new FakeElement("div");
+  const shell = new FakeElement("div");
+  shell.className = "llm-codeblock-shell";
+  shell.dataset.codeLang = options?.lang || "text";
+
+  const header = new FakeElement("div");
+  header.className = "llm-codeblock-header";
+
+  const lang = new FakeElement("span");
+  lang.className = "llm-codeblock-lang";
+  lang.textContent = options?.lang || "text";
+  header.appendChild(lang);
+
+  const body = new FakeElement("div");
+  body.className = "llm-codeblock-body";
+
+  shell.appendChild(header);
+  if (options?.previewClass) {
+    const preview = new FakeElement("div");
+    preview.className = options.previewClass;
+    if (options.previewSource) {
+      preview.dataset.llmSvgSource = options.previewSource;
+    }
+    if (options.renderedSvg) {
+      preview.dataset.llmRenderedSvg = options.renderedSvg;
+    }
+    shell.appendChild(preview);
+  }
+  shell.appendChild(body);
+  root.appendChild(shell);
+
+  return { root, shell, header, body };
+}
 
 function collectFakeText(element: FakeElement | null | undefined): string {
   if (!element) return "";
@@ -644,6 +703,174 @@ describe("Mermaid rendering helpers", function () {
   });
 });
 
+describe("rendered Markdown code block source controls", function () {
+  it("collapses safe SVG source by default while keeping the preview shell visible", function () {
+    const { root, shell, header, body } = createFakeCodeBlockShell({
+      lang: "svg",
+      previewClass: "llm-svg-preview",
+      previewSource: '<svg width="10" height="10"></svg>',
+    });
+
+    attachRenderedCodeBlockControls(
+      root as unknown as ParentNode,
+      fakeDocument,
+    );
+
+    const toggle = header.findByClass("llm-codeblock-source-toggle");
+    assert.exists(toggle);
+    assert.equal(shell.dataset.sourceCollapsed, "true");
+    assert.equal(body.attributes["aria-hidden"], "true");
+    assert.equal(toggle?.attributes["aria-expanded"], "false");
+    assert.equal(toggle?.textContent, "Show source");
+    assert.isNotEmpty(body.id);
+
+    toggle?.dispatchFakeEvent("click");
+
+    assert.equal(shell.dataset.sourceCollapsed, "false");
+    assert.equal(body.attributes["aria-hidden"], "false");
+    assert.equal(toggle?.attributes["aria-expanded"], "true");
+    assert.equal(toggle?.textContent, "Hide source");
+  });
+
+  it("adds a PNG figure-copy control for safe SVG previews", function () {
+    const { root, header } = createFakeCodeBlockShell({
+      lang: "svg",
+      previewClass: "llm-svg-preview",
+      previewSource: '<svg width="10" height="10"></svg>',
+    });
+
+    attachRenderedCodeBlockControls(
+      root as unknown as ParentNode,
+      fakeDocument,
+    );
+
+    const figureCopy = header.findByClass("llm-codeblock-figure-copy");
+    assert.exists(figureCopy);
+    assert.isFalse(Boolean(figureCopy?.disabled));
+    assert.equal(figureCopy?.title, "Copy SVG figure as PNG");
+    assert.equal(
+      figureCopy?.attributes["aria-label"],
+      "Copy SVG figure as PNG",
+    );
+  });
+
+  it("collapses Mermaid source by default", function () {
+    const { root, shell, header, body } = createFakeCodeBlockShell({
+      lang: "mermaid",
+      previewClass: "llm-mermaid-preview",
+    });
+
+    attachRenderedCodeBlockControls(
+      root as unknown as ParentNode,
+      fakeDocument,
+    );
+
+    const toggle = header.findByClass("llm-codeblock-source-toggle");
+    assert.equal(shell.dataset.sourceCollapsed, "true");
+    assert.equal(body.attributes["aria-hidden"], "true");
+    assert.equal(toggle?.attributes["aria-expanded"], "false");
+    assert.equal(toggle?.textContent, "Show source");
+  });
+
+  it("adds a disabled PNG figure-copy control for pending Mermaid previews", function () {
+    const { root, header } = createFakeCodeBlockShell({
+      lang: "mermaid",
+      previewClass: "llm-mermaid-preview",
+    });
+
+    attachRenderedCodeBlockControls(
+      root as unknown as ParentNode,
+      fakeDocument,
+    );
+
+    const figureCopy = header.findByClass("llm-codeblock-figure-copy");
+    assert.exists(figureCopy);
+    assert.isTrue(Boolean(figureCopy?.disabled));
+    assert.equal(figureCopy?.title, "Copy Mermaid diagram as PNG (rendering)");
+  });
+
+  it("keeps ordinary code source expanded by default but collapsible", function () {
+    const { root, shell, header, body } = createFakeCodeBlockShell({
+      lang: "ts",
+    });
+
+    attachRenderedCodeBlockControls(
+      root as unknown as ParentNode,
+      fakeDocument,
+    );
+
+    const toggle = header.findByClass("llm-codeblock-source-toggle");
+    assert.equal(shell.dataset.sourceCollapsed, "false");
+    assert.equal(body.attributes["aria-hidden"], "false");
+    assert.equal(toggle?.attributes["aria-expanded"], "true");
+    assert.equal(toggle?.textContent, "Hide source");
+
+    toggle?.dispatchFakeEvent("click");
+
+    assert.equal(shell.dataset.sourceCollapsed, "true");
+    assert.equal(body.attributes["aria-hidden"], "true");
+    assert.equal(toggle?.attributes["aria-expanded"], "false");
+    assert.equal(toggle?.textContent, "Show source");
+  });
+
+  it("treats unsafe SVG without a preview like ordinary expanded code", function () {
+    const { root, shell, header, body } = createFakeCodeBlockShell({
+      lang: "svg",
+    });
+
+    attachRenderedCodeBlockControls(
+      root as unknown as ParentNode,
+      fakeDocument,
+    );
+
+    assert.equal(shell.dataset.sourceCollapsed, "false");
+    assert.equal(body.attributes["aria-hidden"], "false");
+    assert.isNull(header.findByClass("llm-codeblock-figure-copy"));
+  });
+
+  it("keeps copy controls bound to the original fenced source when source is collapsed", function () {
+    const copySource = '```svg\n<svg width="10" height="10"></svg>\n```';
+    const root = new FakeElement("div");
+    const copyable = new FakeElement("div");
+    copyable.className = "llm-copyable llm-copyable-code";
+    copyable.dataset.llmCopySource = copySource;
+
+    const { shell, header } = createFakeCodeBlockShell({
+      lang: "svg",
+      previewClass: "llm-svg-preview",
+      previewSource: '<svg width="10" height="10"></svg>',
+    });
+    copyable.appendChild(shell);
+    root.appendChild(copyable);
+
+    attachRenderedCodeBlockControls(
+      root as unknown as ParentNode,
+      fakeDocument,
+    );
+    attachRenderedCopyButtons(root as unknown as ParentNode, fakeDocument);
+
+    const copyButton = header.findByClass("llm-render-copy-btn");
+    assert.exists(copyButton);
+    assert.equal(copyable.dataset.llmCopySource, copySource);
+    assert.equal(shell.dataset.sourceCollapsed, "true");
+    assert.equal(copyButton?.attributes["aria-label"], "Copy SVG code");
+    const sourceIndex = header.children.findIndex((child) =>
+      child.classList.contains("llm-codeblock-source-toggle"),
+    );
+    const figureIndex = header.children.findIndex((child) =>
+      child.classList.contains("llm-codeblock-figure-copy"),
+    );
+    const copyIndex = header.children.findIndex((child) =>
+      child.classList.contains("llm-render-code-copy-btn"),
+    );
+    assert.isAtLeast(sourceIndex, 0);
+    assert.isAtLeast(figureIndex, 0);
+    assert.isAtLeast(copyIndex, 0);
+    assert.isBelow(sourceIndex, figureIndex);
+    assert.isBelow(figureIndex, copyIndex);
+  });
+});
+
 describe("agentTrace render", function () {
   it("preserves known quote anchors before agent trace DOM decoration", function () {
     const quoteCitation = buildQuoteCitation({
@@ -673,6 +900,29 @@ describe("agentTrace render", function () {
     assert.include(rendered, "Continue.");
     assert.notInclude(rendered, "[[quote:");
     assert.notInclude(rendered, "[quote unavailable]");
+  });
+
+  it("preserves unmatched source-backed blockquotes in agent trace markdown", function () {
+    const rendered = buildAgentTraceMarkdownForRender(
+      "证据：\n\n> 记忆痕迹在巩固过程中具有高度动态性。\n\n(Tomé, 2024)\n\n继续。",
+      {
+        quoteCitations: [
+          {
+            id: "Q_trace",
+            quoteText:
+              "Memory engrams are highly dynamic during consolidation.",
+            citationLabel: "(Tomé, 2024)",
+            contextItemId: 51,
+          },
+        ],
+      },
+    );
+
+    assert.include(rendered, "证据");
+    assert.include(rendered, "继续");
+    assert.include(rendered, "> 记忆痕迹在巩固过程中具有高度动态性。");
+    assert.include(rendered, "(Tomé, 2024)");
+    assert.notInclude(rendered, "[[quote:");
   });
 
   it("uses rendered Markdown HTML for streaming assistant text", function () {
@@ -888,6 +1138,25 @@ describe("agentTrace render", function () {
         `${name}=${value}`,
       );
     }
+  });
+
+  it("allows base64 SVG preview image sources in rendered Markdown", function () {
+    const img = createSanitizerElement("img");
+
+    assert.isTrue(
+      isSafeRenderedMarkdownAttributeForTests(
+        img,
+        "src",
+        "data:image/svg+xml;base64,PHN2Zy8+",
+      ),
+    );
+    assert.isFalse(
+      isSafeRenderedMarkdownAttributeForTests(
+        img,
+        "src",
+        "data:image/svg+xml;charset=utf-8,%3Csvg%2F%3E",
+      ),
+    );
   });
 
   it("preserves whitespace when compacting reasoning deltas", function () {
@@ -2006,6 +2275,169 @@ describe("agentTrace render", function () {
     );
   });
 
+  it("renders paged review controls with refresh in the card header and navigation split across the footer", function () {
+    const action: AgentPendingAction = {
+      toolName: "move_to_collection",
+      mode: "review",
+      title: "Page 2 of 5: Add to collection",
+      description: "Select the destination collection for each paper.",
+      actions: [
+        { id: "previous", label: "Previous page", style: "secondary" },
+        { id: "confirm", label: "Confirm", style: "primary" },
+        { id: "refresh", label: "Refresh", style: "secondary" },
+        { id: "cancel", label: "Cancel", style: "secondary" },
+        { id: "next", label: "Next page", style: "secondary" },
+      ],
+      defaultActionId: "next",
+      cancelActionId: "cancel",
+      fields: [
+        {
+          type: "select",
+          id: "tagsPerPaper",
+          label: "Tags per paper",
+          value: "5",
+          options: [
+            { id: "1", label: "1" },
+            { id: "2", label: "2" },
+            { id: "3", label: "3" },
+            { id: "4", label: "4" },
+            { id: "5", label: "5" },
+            { id: "6", label: "6" },
+          ],
+        },
+        {
+          type: "select",
+          id: "pageSize",
+          label: "Items on this page",
+          value: "20",
+          options: [
+            { id: "10", label: "10" },
+            { id: "20", label: "20" },
+            { id: "50", label: "50" },
+            { id: "100", label: "100" },
+          ],
+        },
+      ],
+    };
+
+    const card = renderPendingActionCard(fakeDocument, {
+      requestId: "paged-review",
+      action,
+    }) as unknown as FakeElement;
+
+    assert.exists(card.findByClass("llm-agent-hitl-refresh-btn"));
+    assert.isNull(card.findByClass("llm-agent-hitl-action-choices"));
+    assert.equal(
+      card.findByClass("llm-agent-hitl-header")?.textContent,
+      "Action required",
+    );
+    const topControls = card.findByClass("llm-agent-hitl-paged-top-controls");
+    assert.equal(
+      (
+        topControls
+          ?.findByClass("llm-agent-hitl-paged-top-field")
+          ?.findAllByTag("select")[0] as
+          | (FakeElement & { value?: string })
+          | undefined
+      )?.value,
+      "5",
+    );
+    assert.equal(
+      topControls
+        ?.findByClass("llm-agent-hitl-paged-top-field")
+        ?.findAllByTag("label")[0]?.textContent,
+      "of tags per paper",
+    );
+
+    const footer = card.findByClass("llm-agent-hitl-paged-actions");
+    const left = footer?.findByClass("llm-agent-hitl-paged-actions-left");
+    const center = footer?.findByClass("llm-agent-hitl-paged-actions-center");
+    const right = footer?.findByClass("llm-agent-hitl-paged-actions-right");
+
+    assert.exists(footer);
+    assert.equal(left?.findAllByTag("button")[0]?.textContent, "Previous page");
+    assert.equal(right?.findAllByTag("button")[0]?.textContent, "Next page");
+    assert.equal(
+      center?.findByClass("llm-agent-hitl-page-indicator")?.textContent,
+      "Page 2 of 5",
+    );
+    assert.equal(
+      center
+        ?.findByClass("llm-agent-hitl-paged-footer-field")
+        ?.findAllByTag("label")[0]?.textContent,
+      "items on this page",
+    );
+    assert.equal(
+      center
+        ?.findByClass("llm-agent-hitl-paged-footer-field")
+        ?.findAllByTag("label")[0]?.title,
+      "Items on this page",
+    );
+    assert.equal(
+      center
+        ?.findByClass("llm-agent-hitl-paged-footer-field")
+        ?.findAllByTag("select")[0]
+        ?.findAllByTag("option")[1]?.textContent,
+      "20",
+    );
+  });
+
+  it("wraps pending review actions in a single filled shell", function () {
+    const action: AgentPendingAction = {
+      toolName: "move_to_collection",
+      mode: "review",
+      title: "Page 1 of 5: Add to collection",
+      description: "Select the destination collection for each paper.",
+      actions: [
+        { id: "confirm", label: "Confirm", style: "primary" },
+        { id: "cancel", label: "Cancel", style: "secondary" },
+        { id: "next", label: "Next page", style: "secondary" },
+      ],
+      defaultActionId: "next",
+      cancelActionId: "cancel",
+      fields: [
+        {
+          type: "select",
+          id: "pageSize",
+          label: "Items on this page",
+          value: "20",
+          options: [{ id: "20", label: "20" }],
+        },
+      ],
+    };
+    const events: AgentRunEventRecord[] = [
+      {
+        runId: "run-1",
+        seq: 1,
+        eventType: "confirmation_required",
+        payload: {
+          type: "confirmation_required",
+          requestId: "pending-review",
+          action,
+        },
+        createdAt: 1,
+      },
+    ];
+
+    const trace = renderAgentTrace({
+      doc: fakeDocument,
+      message: {
+        role: "assistant",
+        text: "",
+        timestamp: 1,
+        runMode: "agent",
+      },
+      events,
+    }) as unknown as FakeElement;
+    const shell = trace.findByClass("llm-agent-pending-action-shell");
+
+    assert.isTrue(
+      trace.classList.contains("llm-agent-activity-with-pending-action"),
+    );
+    assert.exists(shell);
+    assert.exists(shell?.findByClass("llm-agent-hitl-card"));
+  });
+
   it("removes repetitive filler chatter between tool steps", function () {
     const events: AgentRunEventRecord[] = [
       {
@@ -2953,6 +3385,95 @@ describe("agentTrace render", function () {
     assert.include(actionTexts, "Response ready");
   });
 
+  it("summarizes file_io aliases and malformed actions without false write labels", function () {
+    const events: AgentRunEventRecord[] = [
+      {
+        runId: "run-1",
+        seq: 1,
+        eventType: "tool_call",
+        payload: {
+          type: "tool_call",
+          callId: "call-1",
+          name: "file_io",
+          args: {
+            filePath: "/tmp/llm-for-zotero-mineru/51/full.md",
+          },
+        },
+        createdAt: 1,
+      },
+      {
+        runId: "run-1",
+        seq: 2,
+        eventType: "tool_call",
+        payload: {
+          type: "tool_call",
+          callId: "call-2",
+          name: "file_io",
+          args: {
+            mode: "read",
+            path: "/tmp/llm-for-zotero-mineru/51/manifest.json",
+          },
+        },
+        createdAt: 2,
+      },
+      {
+        runId: "run-1",
+        seq: 3,
+        eventType: "tool_call",
+        payload: {
+          type: "tool_call",
+          callId: "call-3",
+          name: "file_io",
+          args: {
+            operation: "read_file",
+            file_path: "/tmp/llm-for-zotero-mineru/51/full.md",
+            offset: 64,
+          },
+        },
+        createdAt: 3,
+      },
+      {
+        runId: "run-1",
+        seq: 4,
+        eventType: "tool_call",
+        payload: {
+          type: "tool_call",
+          callId: "call-4",
+          name: "file_io",
+          args: {
+            action: "frobnicate",
+            filePath: "/tmp/llm-for-zotero-mineru/51/full.md",
+          },
+        },
+        createdAt: 4,
+      },
+    ];
+
+    const { items } = buildAgentTraceDisplayItems(events, null);
+    const rows = items
+      .filter(
+        (item): item is Extract<(typeof items)[number], { type: "action" }> =>
+          item.type === "action",
+      )
+      .map((item) => item.row);
+    const rowTexts = rows.map((row) => row.text);
+    const codeBlocks = rows.map((row) => row.codeBlock);
+
+    assert.include(rowTexts, "Reading full.md");
+    assert.include(rowTexts, "Reading paper structure");
+    assert.include(rowTexts, "Reading paper section");
+    assert.include(rowTexts, "Accessing full.md");
+    assert.notInclude(rowTexts, "Writing full.md");
+    assert.include(
+      codeBlocks,
+      "read /tmp/llm-for-zotero-mineru/51/manifest.json",
+    );
+    assert.include(
+      codeBlocks,
+      "read_file /tmp/llm-for-zotero-mineru/51/full.md",
+    );
+  });
+
   it("shows concrete skill names instead of a generic skill label", function () {
     const events: AgentRunEventRecord[] = [
       {
@@ -2996,5 +3517,33 @@ describe("agentTrace render", function () {
       actionTexts.indexOf("Using Skill: graphwalk"),
       actionTexts.indexOf("Using Skill: write-note"),
     );
+  });
+
+  it("labels explicit Codex native slash skills as invoked", function () {
+    const events: AgentRunEventRecord[] = [
+      {
+        runId: "run-1",
+        seq: 1,
+        eventType: "tool_call",
+        payload: {
+          type: "tool_call",
+          callId: "call-1",
+          name: "Skill",
+          args: { skill: "evidence-based-qa", source: "codex-native-slash" },
+        },
+        createdAt: 1,
+      },
+    ];
+
+    const { items } = buildAgentTraceDisplayItems(events, null);
+    const actionTexts = items
+      .filter(
+        (item): item is Extract<(typeof items)[number], { type: "action" }> =>
+          item.type === "action",
+      )
+      .map((item) => item.row.text);
+
+    assert.include(actionTexts, "Invoked Skill: evidence-based-qa");
+    assert.notInclude(actionTexts, "Using Skill: evidence-based-qa");
   });
 });

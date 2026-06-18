@@ -41,10 +41,9 @@ import { getAllSkills, getMatchedSkillIds } from "./skills";
 import {
   buildAgentResourceContextPlan,
   commitAgentReadActivities,
-  commitAgentResourceContextPlan,
   hydrateAgentEvidenceCache,
   type AgentPendingReadActivity,
-} from "./context/resourceLifecycle";
+} from "./context/resourceContextPlan";
 import {
   commitAgentCoverageActivities,
   hydrateAgentCoverageLedger,
@@ -698,11 +697,16 @@ export class AgentRuntime {
     }
     await emit({
       type: "provider_event",
-      providerType: "agent_resource_lifecycle",
+      providerType: "agent_context_envelope",
       payload: {
-        lifecycleState: resourceContextPlan.lifecycleState,
-        contextInjection: resourceContextPlan.injection,
-        resourceDelta: resourceContextPlan.resourceDeltaCounts,
+        resourceSignature: resourceContextPlan.resourceSignature,
+        selectedPaperCount: request.selectedPaperContexts?.length || 0,
+        fullTextPaperCount: request.fullTextPaperContexts?.length || 0,
+        selectedCollectionCount:
+          request.selectedCollectionContexts?.length || 0,
+        selectedTagCount: request.selectedTagContexts?.length || 0,
+        attachmentCount: request.attachments?.length || 0,
+        screenshotCount: request.screenshots?.length || 0,
       },
     });
     const messages = (await buildAgentInitialMessages(
@@ -790,7 +794,6 @@ export class AgentRuntime {
       }
       await finishAgentRun(runId, status, finalText);
       if (status === "completed") {
-        commitAgentResourceContextPlan(resourceContextPlan);
         await commitAgentReadActivities({
           conversationKey: request.conversationKey,
           activities: pendingReadActivities,

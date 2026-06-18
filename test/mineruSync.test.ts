@@ -17,6 +17,7 @@ import { pdfTextCache } from "../src/modules/contextPanel/state";
 import {
   buildMineruSyncPackageBytes,
   cleanSyncedMineruPackages,
+  cleanupMineruArtifactsForRemovedAttachment,
   ensureMineruCacheDirForAttachment,
   ensureMineruRuntimeCacheForAttachment,
   getMineruAvailabilityForAttachment,
@@ -163,6 +164,10 @@ function setupZotero(items: Map<number, MockItem>, io: MemoryIO): void {
     },
     Items: {
       get: (id: number) => items.get(id) || null,
+      getByLibraryAndKey: (libraryID: number, key: string) =>
+        [...items.values()].find(
+          (item) => item.libraryID === libraryID && item.key === key,
+        ) || null,
       getAll: async (libraryID: number) =>
         [...items.values()].filter((item) => item.libraryID === libraryID),
     },
@@ -434,6 +439,187 @@ describe("mineruSync", function () {
     assert.equal(cleaned.failed, 0);
     assert.isTrue(packageItem?.deleted);
     assert.isFalse(pdf.deleted === true);
+  });
+
+  it("cleans only the removed PDF cache and matching same-parent sync package", async function () {
+    const io = setupMemoryIO();
+    const items = new Map<number, MockItem>();
+    const parent = createParent();
+    const oldPdf = createAttachment({
+      id: 501,
+      key: "OLDPDFKEY",
+      parentID: parent.id,
+      contentType: "application/pdf",
+      filename: "preprint.pdf",
+    });
+    const journalPdf = createAttachment({
+      id: 502,
+      key: "JOURNALPDFKEY",
+      parentID: parent.id,
+      contentType: "application/pdf",
+      filename: "journal.pdf",
+    });
+    const otherPdf = createAttachment({
+      id: 503,
+      key: "OTHERPDFKEY",
+      parentID: parent.id,
+      contentType: "application/pdf",
+      filename: "other.pdf",
+    });
+    parent.attachmentIDs!.push(oldPdf.id, journalPdf.id, otherPdf.id);
+    items.set(parent.id, parent);
+    items.set(oldPdf.id, oldPdf);
+    items.set(journalPdf.id, journalPdf);
+    items.set(otherPdf.id, otherPdf);
+    setupZotero(items, io);
+    setMineruSyncEnabled(true);
+
+    await writeSampleCache(oldPdf.id);
+    await writeMineruSourceProvenanceForAttachment(
+      oldPdf as unknown as Zotero.Item,
+    );
+    const oldPackageBytes = await buildMineruSyncPackageBytes(
+      oldPdf as unknown as Zotero.Item,
+    );
+    assert.exists(oldPackageBytes);
+    const oldPackage = attachPackage({
+      io,
+      items,
+      parent,
+      id: 504,
+      key: "PKGOLDPDF",
+      sourceKey: "OLDPDFKEY",
+      bytes: oldPackageBytes!,
+    });
+
+    await writeSampleCache(otherPdf.id);
+    await writeMineruSourceProvenanceForAttachment(
+      otherPdf as unknown as Zotero.Item,
+    );
+    const otherPackageBytes = await buildMineruSyncPackageBytes(
+      otherPdf as unknown as Zotero.Item,
+    );
+    assert.exists(otherPackageBytes);
+    const otherPackage = attachPackage({
+      io,
+      items,
+      parent,
+      id: 505,
+      key: "PKGOTHERPDF",
+      sourceKey: "OTHERPDFKEY",
+      bytes: otherPackageBytes!,
+    });
+
+    (Zotero.Items as unknown as { getAll: () => Promise<never> }).getAll =
+      async () => {
+        throw new Error("cleanup must not scan the whole library");
+      };
+    pdfTextCache.set(oldPdf.id, {
+      title: "stale",
+      chunks: ["stale"],
+      chunkMeta: [],
+      chunkStats: [],
+      docFreq: {},
+      avgChunkLength: 1,
+      fullLength: 5,
+      sourceType: "mineru",
+    });
+    oldPdf.deleted = true;
+
+    const result = await cleanupMineruArtifactsForRemovedAttachment(oldPdf.id);
+
+    assert.isTrue(result.localCacheDeleted);
+    assert.equal(result.removedSyncPackages, 1);
+    assert.equal(result.failed, 0);
+    assert.isFalse(await hasCachedMineruMd(oldPdf.id));
+    assert.isFalse(pdfTextCache.has(oldPdf.id));
+    assert.isTrue(oldPackage.deleted);
+    assert.isFalse(otherPackage.deleted === true);
+    assert.isFalse(journalPdf.deleted === true);
+  });
+
+  it("uses local source provenance to clean a removed PDF whose item is already unavailable", async function () {
+    const io = setupMemoryIO();
+    const items = new Map<number, MockItem>();
+    const parent = createParent();
+    const pdf = createAttachment({
+      id: 506,
+      key: "MISSINGPDFKEY",
+      parentID: parent.id,
+      contentType: "application/pdf",
+      filename: "missing.pdf",
+    });
+    parent.attachmentIDs!.push(pdf.id);
+    items.set(parent.id, parent);
+    items.set(pdf.id, pdf);
+    setupZotero(items, io);
+    setMineruSyncEnabled(true);
+
+    await writeSampleCache(pdf.id);
+    await writeMineruSourceProvenanceForAttachment(
+      pdf as unknown as Zotero.Item,
+    );
+    const packageBytes = await buildMineruSyncPackageBytes(
+      pdf as unknown as Zotero.Item,
+    );
+    assert.exists(packageBytes);
+    const packageItem = attachPackage({
+      io,
+      items,
+      parent,
+      id: 507,
+      key: "PKGMISSINGPDF",
+      sourceKey: "MISSINGPDFKEY",
+      bytes: packageBytes!,
+    });
+    items.delete(pdf.id);
+    parent.attachmentIDs = [packageItem.id];
+
+    const result = await cleanupMineruArtifactsForRemovedAttachment(pdf.id);
+
+    assert.isTrue(result.localCacheDeleted);
+    assert.equal(result.removedSyncPackages, 1);
+    assert.equal(result.failed, 0);
+    assert.isFalse(await hasCachedMineruMd(pdf.id));
+    assert.isTrue(packageItem.deleted);
+  });
+
+  it("removes a local cache without provenance but skips synced package deletion", async function () {
+    const io = setupMemoryIO();
+    const items = new Map<number, MockItem>();
+    const parent = createParent();
+    const packageItem = attachPackage({
+      io,
+      items,
+      parent,
+      id: 508,
+      key: "PKGUNRELATED",
+      sourceKey: "UNRELATEDKEY",
+      bytes: zipSync({
+        [MINERU_SYNC_METADATA_FILE]: bytes(
+          JSON.stringify({
+            kind: "llm-for-zotero/mineru-cache",
+            version: 1,
+            createdAt: "2026-01-01T00:00:00.000Z",
+            addonName: "llm-for-zotero",
+            addonVersion: "0.0.0",
+            sourceAttachmentKey: "UNRELATEDKEY",
+          }),
+        ),
+        "full.md": bytes("# unrelated"),
+      }),
+    });
+    items.set(parent.id, parent);
+    setupZotero(items, io);
+    await writeSampleCache(509);
+
+    const result = await cleanupMineruArtifactsForRemovedAttachment(509);
+
+    assert.isTrue(result.localCacheDeleted);
+    assert.equal(result.removedSyncPackages, 0);
+    assert.equal(result.failed, 0);
+    assert.isFalse(await hasCachedMineruMd(509));
+    assert.isFalse(packageItem.deleted === true);
   });
 
   it("publishes and restores MinerU packages for parentless raw PDFs", async function () {

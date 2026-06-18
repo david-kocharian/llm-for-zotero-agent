@@ -276,7 +276,9 @@ function buildCreateCollectionUndo(
   };
 }
 
-function directTagAssignments(operation: ApplyTagsOperation): BatchTagAssignment[] {
+function directTagAssignments(
+  operation: ApplyTagsOperation,
+): BatchTagAssignment[] {
   if (operation.assignments?.length) return operation.assignments;
   if (!operation.itemIds?.length || !operation.tags?.length) return [];
   return operation.itemIds.map((itemId) => ({
@@ -290,9 +292,8 @@ function directMoveAssignments(
 ): BatchMoveAssignment[] {
   if (operation.assignments?.length) {
     return operation.assignments
-      .filter(
-        (assignment): assignment is BatchMoveAssignment =>
-          Boolean(assignment.targetCollectionId),
+      .filter((assignment): assignment is BatchMoveAssignment =>
+        Boolean(assignment.targetCollectionId),
       )
       .map((assignment) => ({
         itemId: assignment.itemId,
@@ -304,6 +305,33 @@ function directMoveAssignments(
     itemId,
     targetCollectionId: operation.targetCollectionId as number,
   }));
+}
+
+function normalizeLibraryID(value: unknown): number {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0 ? Math.floor(numeric) : 0;
+}
+
+function assertItemInActiveLibrary(
+  item: Zotero.Item | null | undefined,
+  context: AgentToolContext,
+  operationLabel: string,
+): void {
+  const requestLibraryID = normalizeLibraryID(context.request.libraryID);
+  const itemLibraryID = normalizeLibraryID(item?.libraryID);
+  if (
+    !requestLibraryID ||
+    !itemLibraryID ||
+    requestLibraryID === itemLibraryID
+  ) {
+    return;
+  }
+  const itemId = Number((item as { id?: unknown } | null | undefined)?.id);
+  const itemLabel =
+    Number.isFinite(itemId) && itemId > 0 ? `item ${itemId}` : "item";
+  throw new Error(
+    `Refusing ${operationLabel} for ${itemLabel} in library ${itemLibraryID}; active library is ${requestLibraryID}.`,
+  );
 }
 
 export class LibraryMutationService {
@@ -324,6 +352,7 @@ export class LibraryMutationService {
           itemId: operation.itemId,
           paperContext: operation.paperContext,
         });
+        assertItemInActiveLibrary(targetItem, context, "metadata update");
         const previousSnapshot =
           this.zoteroGateway.getEditableArticleMetadata(targetItem);
         const result = await this.zoteroGateway.updateArticleMetadata({
@@ -359,7 +388,8 @@ export class LibraryMutationService {
             this.zoteroGateway,
             result.items
               .filter(
-                (item) => item.status === "updated" && item.addedTags.length > 0,
+                (item) =>
+                  item.status === "updated" && item.addedTags.length > 0,
               )
               .map((item) => ({
                 itemId: item.itemId,
@@ -417,7 +447,9 @@ export class LibraryMutationService {
           undo: buildCollectionAddUndo(
             this.zoteroGateway,
             result.items
-              .filter((item) => item.status === "moved" && item.targetCollectionId)
+              .filter(
+                (item) => item.status === "moved" && item.targetCollectionId,
+              )
               .map((item) => ({
                 itemId: item.itemId,
                 collectionId: item.targetCollectionId as number,
@@ -426,7 +458,8 @@ export class LibraryMutationService {
         };
       }
       case "remove_from_collection": {
-        const removedItems: Array<{ itemId: number; collectionId: number }> = [];
+        const removedItems: Array<{ itemId: number; collectionId: number }> =
+          [];
         for (const itemId of operation.itemIds) {
           await this.zoteroGateway.removeItemFromCollection({
             itemId,
@@ -457,7 +490,9 @@ export class LibraryMutationService {
           libraryID: operation.libraryID,
         });
         if (!libraryID) {
-          throw new Error("No active library available for collection creation");
+          throw new Error(
+            "No active library available for collection creation",
+          );
         }
         const collection = await this.zoteroGateway.createCollection({
           name: operation.name,
@@ -655,7 +690,9 @@ export class LibraryMutationService {
                       .filter((i) => i.status === "imported" && i.itemId)
                       .map((i) => i.itemId!);
                     if (importedIds.length) {
-                      await this.zoteroGateway.trashItems({ itemIds: importedIds });
+                      await this.zoteroGateway.trashItems({
+                        itemIds: importedIds,
+                      });
                     }
                   },
                 }

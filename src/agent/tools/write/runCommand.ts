@@ -234,16 +234,24 @@ async function executeCommand(params: {
   }
 }
 
-/** Patterns that indicate a command only reads data (safe to auto-approve). */
-const READ_ONLY_COMMANDS =
-  /^\s*(?:cat|head|tail|less|more|ls|dir|find|file|wc|du|stat|which|where|type|pwd|echo|printf|grep|rg|awk|sed\s+-n|sort|uniq|diff|strings|xxd|hexdump|md5|shasum|sha256sum|tesseract|swift|node\s+-e|python3?\s+[-\/])/i;
-
-/** Patterns that indicate a command mutates state (always require confirmation). */
+/** Patterns that indicate a command has destructive or privileged risk. */
 const DESTRUCTIVE_COMMANDS =
-  /(?:^|\||\;|&&)\s*(?:rm\s|rmdir\s|mv\s|cp\s|chmod\s|chown\s|sudo\s|pip\s+install|npm\s+install|brew\s+install|git\s+(?:push|reset|checkout|clean|rebase)|mkfs|dd\s)/i;
+  /(?:^|\||\;|&&)\s*(?:(?:rm|rmdir|mv|rename|chmod|chown|sudo|mkfs|dd)\b|(?:npm|pnpm|yarn)\s+(?:install|add|remove|uninstall|update|upgrade)\b|(?:pip|pip3)\s+install\b|python3?\s+-m\s+pip\s+install\b|uv\s+pip\s+install\b|brew\s+(?:install|upgrade|update|uninstall)\b|(?:apt|apt-get|dnf|yum|pacman|conda|mamba)\s+(?:install|remove|update|upgrade)\b|cargo\s+install\b|gem\s+install\b|git\s+(?:push|reset|checkout|switch|clean|rebase|filter-branch|rm|branch\s+-D|tag\s+-d)\b|date\s+(?:-s|--set)\b|timedatectl\b|systemsetup\s+-set(?:date|time|timezone)\b)/i;
 
-/** Redirect to file (overwrite or append) — but not heredoc `<<`. */
-const REDIRECT_PATTERN = /(?:^|[^<])\s*>{1,2}\s*[^\s&]/;
+/** Downloading code and handing it directly to a shell should never auto-run. */
+const NETWORK_TO_SHELL_PATTERN =
+  /(?:(?:curl|wget)\b[\s\S]*\|\s*(?:sh|bash|zsh)\b|(?:sh|bash|zsh)\b[\s\S]*<\s*\(\s*(?:curl|wget)\b|(?:sh|bash|zsh)\b[\s\S]*(?:\$\(\s*(?:curl|wget)\b|`\s*(?:curl|wget)\b))/i;
+
+/** macOS/system automation commands can mutate external app or OS state. */
+const SYSTEM_AUTOMATION_PATTERN =
+  /(?:^|\||\;|&&)\s*(?:(?:osascript|launchctl)\b|defaults\s+(?:write|delete|import|rename)\b)/i;
+
+/** Append redirects are always an overwrite/append risk. */
+const APPEND_REDIRECT_PATTERN =
+  /(?:^|[^<])(?:\d*>>|&>>)\s*(?:"[^"]+"|'[^']+'|[^\s;&|]+)/;
+
+const OVERWRITE_REDIRECT_TARGET_PATTERN =
+  /(?:^|[^<])(?:\d?>|&>)\s*(?:"([^"]+)"|'([^']+)'|([^\s;&|]+))/;
 
 async function pathExists(path: string): Promise<boolean | null> {
   const IOUtils = (globalThis as any).IOUtils;
@@ -296,14 +304,29 @@ function hasGlobPattern(value: string): boolean {
   return /[*?\[\]{}]/.test(value);
 }
 
-function parseRedirectTarget(command: string): ReversibleCommandWrite | null {
-  const match = command.match(
-    /^\s*((?:echo|printf|cat)\b[\s\S]*?)\s*(?:>{1,2})\s*(?:"([^"]+)"|'([^']+)'|([^\s;&|]+))\s*$/i,
+function isAbsolutePath(value: string): boolean {
+  return (
+    value.startsWith("/") ||
+    /^[A-Za-z]:[\\/]/.test(value) ||
+    value.startsWith("\\\\")
   );
+}
+
+function resolveCommandPath(path: string, cwd: string | undefined): string {
+  if (!cwd || isAbsolutePath(path) || path.startsWith("~")) return path;
+  return `${cwd.replace(/[\\/]+$/g, "")}/${path}`;
+}
+
+function isNullRedirectTarget(path: string): boolean {
+  const normalized = path.replace(/\\/g, "/").toLowerCase();
+  return normalized === "/dev/null" || normalized === "nul";
+}
+
+function parseRedirectTarget(command: string): ReversibleCommandWrite | null {
+  const match = command.match(OVERWRITE_REDIRECT_TARGET_PATTERN);
   if (!match) return null;
-  const producer = match[1] || "";
-  const path = (match[2] || match[3] || match[4] || "").trim();
-  if (!path || hasGlobPattern(path) || /[;&|<>]/.test(producer)) return null;
+  const path = (match[1] || match[2] || match[3] || "").trim();
+  if (!path || isNullRedirectTarget(path) || hasGlobPattern(path)) return null;
   return {
     kind: "file",
     path,
@@ -355,27 +378,45 @@ function isDestructiveCommand(command: string): boolean {
   return DESTRUCTIVE_COMMANDS.test(command.trim());
 }
 
-function isReadOnlyDateCommand(command: string): boolean {
-  const trimmed = command.trim();
-  return /^date(?:\s+(?:-u|--utc|\+\S+|"\+[^"]*"|'\+[^']*'))*\s*$/i.test(
-    trimmed,
-  );
+function isNetworkToShellCommand(command: string): boolean {
+  return NETWORK_TO_SHELL_PATTERN.test(command.trim());
 }
 
-function isReadOnlyCommand(command: string): boolean {
-  const trimmed = command.trim();
-  // Destructive commands always need confirmation
-  if (isDestructiveCommand(trimmed)) return false;
-  // Date reads are common for note templates; setting system time is not.
-  if (isReadOnlyDateCommand(trimmed)) return true;
-  // File redirects are writes
-  if (REDIRECT_PATTERN.test(trimmed)) return false;
-  // Known read-only commands are safe
-  if (READ_ONLY_COMMANDS.test(trimmed)) return true;
-  // Piped commands starting with a read-only command
-  const firstCommand = trimmed.split(/\s*[|;]\s*/)[0];
-  if (READ_ONLY_COMMANDS.test(firstCommand)) return true;
-  return false;
+function isSystemAutomationCommand(command: string): boolean {
+  return SYSTEM_AUTOMATION_PATTERN.test(command.trim());
+}
+
+async function getRunCommandConfirmationReason(
+  input: Pick<RunCommandInput, "command" | "cwd">,
+): Promise<string | null> {
+  const command = input.command.trim();
+  if (isNetworkToShellCommand(command)) {
+    return "Command downloads code and passes it directly to a shell";
+  }
+  if (isSystemAutomationCommand(command)) {
+    return "Command may automate apps or modify operating system state";
+  }
+  if (isDestructiveCommand(command)) {
+    return "Command may delete, move, install, change permissions, mutate git history/remotes, or modify system state";
+  }
+  if (APPEND_REDIRECT_PATTERN.test(command)) {
+    return "Command appends to a file and needs confirmation";
+  }
+  const redirectWrite = parseRedirectTarget(command);
+  if (redirectWrite) {
+    const targetPath = resolveCommandPath(redirectWrite.path, input.cwd);
+    const exists = await pathExists(targetPath);
+    if (exists === false) return null;
+    return "Command may overwrite a redirect target and needs confirmation";
+  }
+  const reversibleWrite = parseReversibleCommandWrite(command);
+  if (reversibleWrite) {
+    const targetPath = resolveCommandPath(reversibleWrite.path, input.cwd);
+    const exists = await pathExists(targetPath);
+    if (exists === false) return null;
+    return "Command may overwrite or mutate an existing path and needs confirmation";
+  }
+  return null;
 }
 
 export function createRunCommandTool(): AgentToolDefinition<
@@ -479,17 +520,7 @@ export function createRunCommandTool(): AgentToolDefinition<
     },
 
     async shouldRequireConfirmation(input, _context) {
-      const reversibleWrite = parseReversibleCommandWrite(input.command);
-      if (reversibleWrite) {
-        const exists = await pathExists(reversibleWrite.path);
-        if (exists === false) return false;
-        return true;
-      }
-      // Destructive commands always need confirmation.
-      if (isDestructiveCommand(input.command)) return true;
-      // Auto-approve read-only commands (analysis, inspection, listing)
-      if (isReadOnlyCommand(input.command)) return false;
-      return true;
+      return Boolean(await getRunCommandConfirmationReason(input));
     },
 
     createPendingAction(input) {
@@ -528,30 +559,14 @@ export function createRunCommandTool(): AgentToolDefinition<
     async execute(input, context) {
       const reversibleWrite = parseReversibleCommandWrite(input.command);
       const existedBeforeWrite = reversibleWrite
-        ? await pathExists(reversibleWrite.path)
+        ? await pathExists(resolveCommandPath(reversibleWrite.path, input.cwd))
         : null;
-      if (
-        reversibleWrite &&
-        existedBeforeWrite !== false &&
-        !input.allowUnsafe
-      ) {
+      const confirmationReason = await getRunCommandConfirmationReason(input);
+      if (confirmationReason && !input.allowUnsafe) {
         return {
           exitCode: -1,
           stdout: "",
-          stderr: "Refusing to overwrite an existing path without confirmation",
-          command: input.command,
-        };
-      }
-      if (
-        !reversibleWrite &&
-        !isReadOnlyCommand(input.command) &&
-        !input.allowUnsafe
-      ) {
-        return {
-          exitCode: -1,
-          stdout: "",
-          stderr:
-            "Refusing to run a mutating shell command without confirmation",
+          stderr: confirmationReason,
           command: input.command,
         };
       }
@@ -570,7 +585,9 @@ export function createRunCommandTool(): AgentToolDefinition<
           toolName: "run_command",
           description: reversibleWrite.description,
           revert: async () => {
-            await removePathIfExists(reversibleWrite.path);
+            await removePathIfExists(
+              resolveCommandPath(reversibleWrite.path, input.cwd),
+            );
           },
         });
       }

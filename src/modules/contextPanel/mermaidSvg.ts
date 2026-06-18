@@ -134,8 +134,7 @@ function getUnsafeAttributeReason(svg: string): string | null {
     return "event handler attributes are not allowed";
   }
 
-  const urlAttrPattern =
-    /\b(href|src|xlink:href)\s*=\s*(["'])([\s\S]*?)\2/gi;
+  const urlAttrPattern = /\b(href|src|xlink:href)\s*=\s*(["'])([\s\S]*?)\2/gi;
   let attrMatch: RegExpExecArray | null;
   while ((attrMatch = urlAttrPattern.exec(svg)) !== null) {
     const value = attrMatch[3].trim();
@@ -235,10 +234,11 @@ export function sanitizeRenderedMermaidSvg(
   return result.ok ? result.svg : null;
 }
 
-export function createInlineMermaidSvgElement(
+export function createInlineSvgElement(
   doc: Document,
   svgMarkup: string,
   className: string,
+  ariaLabel: string,
 ): SVGSVGElement | null {
   const container = doc.createElementNS(HTML_NS, "div") as HTMLDivElement;
   container.innerHTML = svgMarkup.trim();
@@ -246,6 +246,14 @@ export function createInlineMermaidSvgElement(
   if (!svg || svg.localName.toLowerCase() !== "svg") return null;
   svg.classList.add(className);
   svg.setAttribute("role", "img");
-  svg.setAttribute("aria-label", "Mermaid diagram");
+  svg.setAttribute("aria-label", ariaLabel);
   return svg as unknown as SVGSVGElement;
+}
+
+export function createInlineMermaidSvgElement(
+  doc: Document,
+  svgMarkup: string,
+  className: string,
+): SVGSVGElement | null {
+  return createInlineSvgElement(doc, svgMarkup, className, "Mermaid diagram");
 }

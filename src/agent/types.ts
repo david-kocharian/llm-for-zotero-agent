@@ -49,6 +49,7 @@ export type AgentPendingActionButton = {
   id: string;
   label: string;
   style?: "primary" | "secondary" | "danger";
+  approved?: boolean;
   executionMode?: "immediate" | "edit";
   submitLabel?: string;
   backLabel?: string;

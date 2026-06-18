@@ -1,10 +1,29 @@
-import type { AgentAction, ActionExecutionContext, ActionResult } from "./types";
+import type {
+  AgentAction,
+  ActionExecutionContext,
+  ActionResult,
+} from "./types";
 import type {
   EditableArticleMetadataPatch,
   EditableArticleMetadataField,
+  LibraryItemTarget,
 } from "../services/zoteroGateway";
 import { EDITABLE_ARTICLE_METADATA_FIELDS } from "../services/zoteroGateway";
 import { callTool } from "./executor";
+import {
+  formatActionPageLabel,
+  getPagedActionOptionsForStartOffset,
+  getPagedActionOptions,
+  getPagedActionPageCursorForOffset,
+  getPagedActionPages,
+  getPagedOperationId,
+  isUserCancelledToolResult,
+  normalizeActionPageSize,
+  readToolConfirmationActionId,
+  readToolConfirmationData,
+  readToolResultError,
+  type PagedActionInput,
+} from "./pagedWorkflow";
 import {
   getMetadataField,
   getMetadataTitle,
@@ -13,11 +32,10 @@ import {
 
 type AuditScope = "all" | "collection";
 
-type AuditLibraryInput = {
+type AuditLibraryInput = PagedActionInput & {
   scope?: AuditScope;
   collectionId?: number;
-  /** Max number of items to process. */
-  limit?: number;
+  userQuery?: string;
   /** If true, saves an audit report note to the library. */
   saveNote?: boolean;
 };
@@ -28,24 +46,47 @@ export type AuditIssue = {
   missingFields: string[];
 };
 
+type AuditRecord = {
+  itemId: number;
+  itemType?: string;
+  title: string;
+  firstCreator?: string;
+  year?: string;
+  metadata: unknown;
+  tags: string[];
+  attachments: Array<{ contentType?: string }>;
+};
+
 type AuditLibraryOutput = {
   total: number;
   itemsWithIssues: number;
   issues: AuditIssue[];
   metadataFixed: number;
+  fixable?: number;
+  skipped?: number;
+  remaining?: number;
+  stopped?: boolean;
   noteId?: number;
 };
 
+type UpdateCandidate = {
+  itemId: number;
+  patch: EditableArticleMetadataPatch;
+};
+
 /**
- * Combined audit + sync action: scans the library for incomplete metadata,
- * fetches canonical metadata for items with issues, and applies fixes.
+ * Whole-library audit + metadata repair. The audit scans fresh bibliographic
+ * parent items, then pages through metadata repair review cards. External
+ * canonical metadata is resolved DOI-first through literature_search metadata.
  */
-export const auditLibraryAction: AgentAction<AuditLibraryInput, AuditLibraryOutput> = {
+export const auditLibraryAction: AgentAction<
+  AuditLibraryInput,
+  AuditLibraryOutput
+> = {
   name: "audit_library",
   modes: ["library"],
   description:
-    "Scan the library for items with incomplete metadata, then fetch and fill missing fields " +
-    "(abstract, DOI, tags) from external sources after user review.",
+    "Scan the active library for bibliographic metadata issues, then fetch canonical metadata and page through review cards for supported fixes.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -61,11 +102,22 @@ export const auditLibraryAction: AgentAction<AuditLibraryInput, AuditLibraryOutp
       },
       limit: {
         type: "number",
-        description: "Max number of items to process.",
+        description: "Optional total cap across all pages. Default: no limit.",
+      },
+      pageSize: {
+        type: "number",
+        description:
+          "Items to show per review page. Default: 20; maximum: 100.",
+      },
+      startOffset: {
+        type: "number",
+        description:
+          "Internal resume offset for paged workflows. Defaults to 0.",
       },
       saveNote: {
         type: "boolean",
-        description: "If true, saves the audit report as a Zotero note. Default: false.",
+        description:
+          "If true, saves the audit report as a Zotero note. Default: false.",
       },
     },
   },
@@ -74,69 +126,59 @@ export const auditLibraryAction: AgentAction<AuditLibraryInput, AuditLibraryOutp
     input: AuditLibraryInput,
     ctx: ActionExecutionContext,
   ): Promise<ActionResult<AuditLibraryOutput>> {
-    const STEPS = 4 + (input.saveNote ? 1 : 0);
-    let step = 0;
+    let options = getPagedActionOptions(input);
+    const windowEndOffset =
+      options.limit !== undefined
+        ? options.startOffset + options.limit
+        : undefined;
+    const totalSteps = 3 + (input.saveNote ? 1 : 0);
 
-    // Step 1: query items
-    ctx.onProgress({ type: "step_start", step: "Querying library items", index: ++step, total: STEPS });
-    const queryArgs: Record<string, unknown> = {
-      entity: "items",
-      mode: "list",
-      include: ["metadata", "tags", "attachments"],
-    };
-    if (input.scope === "collection" && input.collectionId) {
-      (queryArgs as { filters?: unknown }).filters = { collectionId: input.collectionId };
-    }
-    if (input.limit) queryArgs.limit = input.limit;
-
-    const queryResult = await callTool("query_library", queryArgs, ctx, "Querying library items");
-    if (!queryResult.ok) {
-      return { ok: false, error: `Failed to query library: ${JSON.stringify(queryResult.content)}` };
-    }
-
-    const content = queryResult.content as Record<string, unknown>;
-    const items = Array.isArray(content.results) ? content.results : [];
     ctx.onProgress({
-      type: "step_done",
-      step: "Querying library items",
-      summary: `Found ${items.length} item${items.length === 1 ? "" : "s"}`,
+      type: "step_start",
+      step: "Scanning library items",
+      index: 1,
+      total: totalSteps,
     });
 
-    // Step 2: analyze metadata gaps
-    ctx.onProgress({ type: "step_start", step: "Analyzing metadata", index: ++step, total: STEPS });
-    const issues: AuditIssue[] = [];
-
-    for (const item of items) {
-      if (!item || typeof item !== "object") continue;
-      const record = item as Record<string, unknown>;
-      const itemId = typeof record.itemId === "number" ? record.itemId : null;
-      if (!itemId) continue;
-
-      const meta = record.metadata;
-      const title = getMetadataTitle(meta) || record.title || `Item ${itemId}`;
-      const missingFields: string[] = [];
-
-      if (!getMetadataField(meta, "abstractNote")) missingFields.push("abstract");
-      if (!getMetadataField(meta, "DOI") && !getMetadataField(meta, "url")) {
-        missingFields.push("DOI/URL");
-      }
-
-      const tags = Array.isArray(record.tags) ? record.tags : [];
-      if (tags.length === 0) missingFields.push("tags");
-
-      const attachments = Array.isArray(record.attachments) ? record.attachments : [];
-      const hasPdf = attachments.some(
-        (att: unknown) =>
-          att &&
-          typeof att === "object" &&
-          (att as Record<string, unknown>).contentType === "application/pdf",
+    let auditableRecords: AuditRecord[] = [];
+    let issues: AuditIssue[] = [];
+    let issuePages = getPagedActionPages<AuditIssue>([], options);
+    let recordByItemId = new Map<number, AuditRecord>();
+    const reloadAuditPages = async (): Promise<void> => {
+      ctx.zoteroGateway.invalidateLibrarySearchCache?.(ctx.libraryID);
+      auditableRecords = await loadFreshAuditRecords(input, ctx);
+      issues = auditableRecords
+        .map((record) => analyzeAuditRecord(record))
+        .filter((issue): issue is AuditIssue => Boolean(issue));
+      issuePages = getPagedActionPages(issues, options);
+      recordByItemId = new Map(
+        auditableRecords.map((record) => [record.itemId, record] as const),
       );
-      if (!hasPdf) missingFields.push("PDF");
-
-      if (missingFields.length > 0) {
-        issues.push({ itemId, title: String(title), missingFields });
-      }
+    };
+    try {
+      await reloadAuditPages();
+    } catch (error) {
+      return {
+        ok: false,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to scan library items",
+      };
     }
+
+    ctx.onProgress({
+      type: "step_done",
+      step: "Scanning library items",
+      summary: `Found ${auditableRecords.length} bibliographic item${auditableRecords.length === 1 ? "" : "s"}`,
+    });
+
+    ctx.onProgress({
+      type: "step_start",
+      step: "Analyzing metadata",
+      index: 2,
+      total: totalSteps,
+    });
 
     ctx.onProgress({
       type: "step_done",
@@ -144,101 +186,55 @@ export const auditLibraryAction: AgentAction<AuditLibraryInput, AuditLibraryOutp
       summary: `${issues.length} item${issues.length === 1 ? "" : "s"} with issues`,
     });
 
-    // Step 3: fetch canonical metadata for items with fixable issues
+    let metadataFixed = 0;
+    let fixable = 0;
+    let skipped = 0;
+    let stopped = false;
+    let confirmed = false;
+
     ctx.onProgress({
       type: "step_start",
-      step: "Fetching canonical metadata",
-      index: ++step,
-      total: STEPS,
+      step: "Reviewing metadata fixes",
+      index: 3,
+      total: totalSteps,
     });
 
-    // Build candidates from items that have issues and have a DOI or title
-    type UpdateCandidate = {
-      itemId: number;
-      patch: EditableArticleMetadataPatch;
-    };
-    const updateCandidates: UpdateCandidate[] = [];
-    const MAX_METADATA_FETCHES = 20;
-    let fetchCount = 0;
-
-    for (const issue of issues) {
-      if (fetchCount >= MAX_METADATA_FETCHES) break;
-      const record = items.find((i) => {
-        if (!i || typeof i !== "object") return false;
-        return (i as Record<string, unknown>).itemId === issue.itemId;
-      }) as Record<string, unknown> | undefined;
-      if (!record) continue;
-
-      const meta = record.metadata;
-      const doi = getMetadataField(meta, "DOI")?.replace(/^https?:\/\/doi\.org\//i, "") || undefined;
-      const title = getMetadataTitle(meta) || undefined;
-      if (!doi && !title) continue;
-
-      const label = doi ? `DOI: ${doi}` : `title: ${(title || "").slice(0, 50)}`;
+    if (!issuePages.length) {
       ctx.onProgress({
-        type: "status",
-        message: `Fetching metadata for ${label}`,
+        type: "step_done",
+        step: "Reviewing metadata fixes",
+        summary: "No metadata issues found",
       });
-
-      const searchArgs: Record<string, unknown> = {
-        mode: "metadata",
-        libraryID: ctx.libraryID,
-      };
-      if (doi) searchArgs.doi = doi;
-      else if (title) searchArgs.title = title;
-
-      const metaResult = await callTool(
-        "search_literature_online",
-        searchArgs,
-        ctx,
-        `Fetching metadata for ${label}`,
-      );
-      fetchCount++;
-      if (!metaResult.ok) continue;
-
-      const metaContent = metaResult.content as Record<string, unknown>;
-      const results = Array.isArray(metaContent.results) ? metaContent.results : [];
-      const externalMeta = results[0] as Record<string, unknown> | undefined;
-      if (!externalMeta) continue;
-
-      const sourcePatch = externalMeta.patch as EditableArticleMetadataPatch | undefined;
-      if (!sourcePatch || Object.keys(sourcePatch).length === 0) continue;
-
-      // Only fill in fields that are currently empty
-      const patch: EditableArticleMetadataPatch = {};
-      for (const fieldName of EDITABLE_ARTICLE_METADATA_FIELDS) {
-        const currentValue = getMetadataField(meta, fieldName);
-        const newValue = sourcePatch[fieldName as EditableArticleMetadataField];
-        if (!currentValue && newValue) {
-          patch[fieldName as EditableArticleMetadataField] = newValue;
-        }
-      }
-      if (!hasMetadataCreators(meta) && sourcePatch.creators?.length) {
-        patch.creators = sourcePatch.creators;
-      }
-
-      if (Object.keys(patch).length > 0) {
-        updateCandidates.push({ itemId: issue.itemId, patch });
-      }
     }
 
-    ctx.onProgress({
-      type: "step_done",
-      step: "Fetching canonical metadata",
-      summary: `${updateCandidates.length} item${updateCandidates.length === 1 ? "" : "s"} can be fixed`,
-    });
+    let pageCursor = 0;
+    while (pageCursor < issuePages.length) {
+      const page = issuePages[pageCursor];
+      const pageLabel = formatActionPageLabel(page);
+      const updateCandidates: UpdateCandidate[] = [];
+      let pageUnfixable = 0;
 
-    // Step 4: apply updates with HITL review
-    let metadataFixed = 0;
-    if (updateCandidates.length > 0) {
-      ctx.onProgress({
-        type: "step_start",
-        step: "Applying metadata updates",
-        index: ++step,
-        total: STEPS,
-      });
+      for (const issue of page.items) {
+        const record = recordByItemId.get(issue.itemId);
+        if (!record) continue;
+        const patch = await fetchCanonicalPatchForRecord(record, ctx);
+        if (!patch || Object.keys(patch).length === 0) {
+          pageUnfixable += 1;
+          continue;
+        }
+        updateCandidates.push({ itemId: issue.itemId, patch });
+      }
+
+      if (!updateCandidates.length) {
+        skipped += page.items.length;
+        pageCursor += 1;
+        continue;
+      }
 
       const operations = updateCandidates.map(({ itemId, patch }) => ({
+        id: `${getPagedOperationId("audit_library", page, {
+          pageSize: options.pageSize,
+        })}:item:${itemId}`,
         type: "update_metadata" as const,
         itemId,
         metadata: patch,
@@ -248,49 +244,149 @@ export const auditLibraryAction: AgentAction<AuditLibraryInput, AuditLibraryOutp
         "update_metadata",
         { operations },
         ctx,
-        "Updating metadata",
+        `${pageLabel}: Updating metadata`,
       );
 
-      const mutateContent = mutateResult.content as Record<string, unknown>;
-      metadataFixed = mutateResult.ok
-        ? Number(mutateContent.appliedCount || (Array.isArray(mutateContent.results) ? mutateContent.results.length : updateCandidates.length))
-        : 0;
+      const confirmationActionId = readToolConfirmationActionId(mutateResult);
+      const confirmationData = readToolConfirmationData(mutateResult);
+      const requestedPageSize =
+        confirmationData.pageSize !== undefined
+          ? normalizeActionPageSize(confirmationData.pageSize)
+          : options.pageSize;
+      const refreshPages = async (
+        targetOffset: number,
+        refreshOptions?: { reloadTargets?: boolean },
+      ): Promise<void> => {
+        const pageSizeChanged = requestedPageSize !== options.pageSize;
+        options = pageSizeChanged
+          ? getPagedActionOptionsForStartOffset(
+              { ...options, pageSize: requestedPageSize },
+              targetOffset,
+              windowEndOffset,
+            )
+          : { ...options, pageSize: requestedPageSize };
+        if (refreshOptions?.reloadTargets) {
+          await reloadAuditPages();
+        } else {
+          issuePages = getPagedActionPages(issues, options);
+        }
+        pageCursor = getPagedActionPageCursorForOffset(
+          issuePages,
+          targetOffset,
+        );
+      };
+      if (confirmationActionId === "previous") {
+        await refreshPages(
+          Math.max(options.startOffset, page.offset - requestedPageSize),
+        );
+        continue;
+      }
+      if (confirmationActionId === "refresh") {
+        await refreshPages(page.offset, { reloadTargets: true });
+        continue;
+      }
+      if (confirmationActionId === "next") {
+        await refreshPages(page.offset + page.items.length);
+        continue;
+      }
+      if (confirmationActionId === "cancel") {
+        stopped = true;
+        ctx.onProgress({
+          type: "step_done",
+          step: `${pageLabel}: Reviewing metadata fixes`,
+          summary: "Stopped by user",
+        });
+        break;
+      }
 
+      const mutateContent = mutateResult.content as Record<string, unknown>;
+      const pageFixed = mutateResult.ok
+        ? Number(
+            mutateContent.appliedCount ||
+              (Array.isArray(mutateContent.results)
+                ? mutateContent.results.length
+                : updateCandidates.length),
+          )
+        : 0;
+      const mutateError = readToolResultError(mutateResult);
+
+      if (mutateResult.ok) {
+        fixable += updateCandidates.length;
+        metadataFixed += pageFixed;
+        skipped +=
+          pageUnfixable + Math.max(0, updateCandidates.length - pageFixed);
+        ctx.onProgress({
+          type: "step_done",
+          step: `${pageLabel}: Reviewing metadata fixes`,
+          summary: `Fixed metadata for ${pageFixed} item${pageFixed === 1 ? "" : "s"}`,
+        });
+        if (confirmationActionId === "confirm") {
+          if (pageCursor >= issuePages.length - 1) {
+            confirmed = true;
+            break;
+          }
+          await refreshPages(page.offset + page.items.length);
+          continue;
+        }
+        if (requestedPageSize !== options.pageSize) {
+          await refreshPages(page.offset + page.items.length);
+        } else {
+          pageCursor += 1;
+        }
+        continue;
+      }
+
+      stopped = isUserCancelledToolResult(mutateResult);
       ctx.onProgress({
         type: "step_done",
-        step: "Applying metadata updates",
-        summary: mutateResult.ok
-          ? `Fixed ${metadataFixed} item${metadataFixed === 1 ? "" : "s"}`
-          : "Update was denied or failed",
+        step: `${pageLabel}: Reviewing metadata fixes`,
+        summary: stopped
+          ? "Stopped by user"
+          : `Metadata update failed: ${mutateError || "unknown error"}`,
       });
-    } else {
-      ctx.onProgress({
-        type: "step_start",
-        step: "Applying metadata updates",
-        index: ++step,
-        total: STEPS,
-      });
+
+      if (!stopped) {
+        return {
+          ok: false,
+          error: `Metadata update failed: ${mutateError || "unknown error"}`,
+        };
+      }
+      break;
+    }
+
+    if (issuePages.length) {
       ctx.onProgress({
         type: "step_done",
-        step: "Applying metadata updates",
-        summary: "No fixable items found",
+        step: "Reviewing metadata fixes",
+        summary: stopped
+          ? `Stopped after fixing ${metadataFixed} item${metadataFixed === 1 ? "" : "s"}`
+          : confirmed
+            ? `Confirmed ${metadataFixed} metadata fix${metadataFixed === 1 ? "" : "es"}`
+            : `Fixed ${metadataFixed} item${metadataFixed === 1 ? "" : "s"}; ${Math.max(0, issues.length - metadataFixed)} remaining`,
       });
     }
 
-    // Optional: save audit note
     let noteId: number | undefined;
     if (input.saveNote) {
-      ctx.onProgress({ type: "step_start", step: "Saving audit note", index: ++step, total: STEPS });
+      ctx.onProgress({
+        type: "step_start",
+        step: "Saving audit note",
+        index: 4,
+        total: totalSteps,
+      });
       const reportLines = [
-        `## Library Audit Report`,
-        ``,
-        `Total items scanned: ${items.length}`,
+        "## Library Audit Report",
+        "",
+        `Total bibliographic items scanned: ${auditableRecords.length}`,
         `Items with issues: ${issues.length}`,
+        `Metadata fixable: ${fixable}`,
         `Metadata fixed: ${metadataFixed}`,
-        ``,
-        `### Issues`,
-        ...issues.map((issue) =>
-          `- **${issue.title}** (ID: ${issue.itemId}): missing ${issue.missingFields.join(", ")}`,
+        `Skipped or unsupported: ${skipped}`,
+        "",
+        "### Issues",
+        ...issues.map(
+          (issue) =>
+            `- **${issue.title}** (ID: ${issue.itemId}): missing ${issue.missingFields.join(", ")}`,
         ),
       ];
 
@@ -307,8 +403,11 @@ export const auditLibraryAction: AgentAction<AuditLibraryInput, AuditLibraryOutp
 
       if (saveResult.ok) {
         const saveContent = saveResult.content as Record<string, unknown>;
-        const resultObj = saveContent.result as Record<string, unknown> | undefined;
-        noteId = typeof resultObj?.noteId === "number" ? resultObj.noteId : undefined;
+        const resultObj = saveContent.result as
+          | Record<string, unknown>
+          | undefined;
+        noteId =
+          typeof resultObj?.noteId === "number" ? resultObj.noteId : undefined;
       }
       ctx.onProgress({ type: "step_done", step: "Saving audit note" });
     }
@@ -316,12 +415,313 @@ export const auditLibraryAction: AgentAction<AuditLibraryInput, AuditLibraryOutp
     return {
       ok: true,
       output: {
-        total: items.length,
+        total: auditableRecords.length,
         itemsWithIssues: issues.length,
         issues,
         metadataFixed,
+        fixable,
+        skipped,
+        remaining: Math.max(0, issues.length - metadataFixed),
+        stopped: stopped || undefined,
         noteId,
       },
     };
   },
 };
+
+async function loadFreshAuditRecords(
+  input: AuditLibraryInput,
+  ctx: ActionExecutionContext,
+): Promise<AuditRecord[]> {
+  if (typeof ctx.zoteroGateway.listBibliographicItemTargets === "function") {
+    const result =
+      input.scope === "collection" &&
+      input.collectionId &&
+      typeof ctx.zoteroGateway.listCollectionItemTargets === "function"
+        ? await ctx.zoteroGateway.listCollectionItemTargets({
+            libraryID: ctx.libraryID,
+            collectionId: input.collectionId,
+          })
+        : await ctx.zoteroGateway.listBibliographicItemTargets({
+            libraryID: ctx.libraryID,
+          });
+    return result.items
+      .filter((target) => !isNonBibliographicTarget(target))
+      .map((target) => auditRecordFromTarget(target, ctx));
+  }
+
+  const queryArgs: Record<string, unknown> = {
+    entity: "items",
+    mode: "list",
+    include: ["metadata", "tags", "attachments"],
+  };
+  if (input.scope === "collection" && input.collectionId) {
+    queryArgs.filters = { collectionId: input.collectionId };
+  }
+
+  const queryResult = await callTool(
+    "query_library",
+    queryArgs,
+    ctx,
+    "Scanning library items",
+  );
+  if (!queryResult.ok) {
+    throw new Error(
+      `Failed to query library: ${JSON.stringify(queryResult.content)}`,
+    );
+  }
+
+  const content = queryResult.content as Record<string, unknown>;
+  const items = Array.isArray(content.results) ? content.results : [];
+  return items.filter(isAuditableBibliographicRecord).map(recordFromQueryItem);
+}
+
+function auditRecordFromTarget(
+  target: LibraryItemTarget,
+  ctx: ActionExecutionContext,
+): AuditRecord {
+  const item = ctx.zoteroGateway.getItem?.(target.itemId);
+  const snapshot = ctx.zoteroGateway.getEditableArticleMetadata?.(item);
+  return {
+    itemId: target.itemId,
+    itemType: target.itemType,
+    title: target.title || snapshot?.title || `Item ${target.itemId}`,
+    firstCreator: target.firstCreator,
+    year: target.year,
+    metadata: snapshot
+      ? { fields: snapshot.fields, creators: snapshot.creators }
+      : { fields: { title: target.title }, creators: [] },
+    tags: Array.isArray(target.tags) ? target.tags : [],
+    attachments: target.attachments || [],
+  };
+}
+
+function recordFromQueryItem(entry: unknown): AuditRecord {
+  const record = entry as Record<string, unknown>;
+  const itemId = Number(record.itemId);
+  const metadata = record.metadata;
+  return {
+    itemId,
+    itemType: typeof record.itemType === "string" ? record.itemType : undefined,
+    title:
+      String(getMetadataTitle(metadata) || record.title || "").trim() ||
+      `Item ${itemId}`,
+    firstCreator:
+      typeof record.firstCreator === "string" ? record.firstCreator : undefined,
+    year: typeof record.year === "string" ? record.year : undefined,
+    metadata,
+    tags: Array.isArray(record.tags)
+      ? record.tags.filter((tag): tag is string => typeof tag === "string")
+      : [],
+    attachments: Array.isArray(record.attachments)
+      ? record.attachments
+          .filter((attachment) => attachment && typeof attachment === "object")
+          .map((attachment) => attachment as { contentType?: string })
+      : [],
+  };
+}
+
+function analyzeAuditRecord(record: AuditRecord): AuditIssue | null {
+  const meta = record.metadata;
+  const missingFields: string[] = [];
+  const title = getMetadataTitle(meta) || record.title;
+
+  if (!title || /^item\s+\d+$/i.test(title)) missingFields.push("title");
+  if (!hasMetadataCreators(meta)) missingFields.push("creators");
+  if (!extractYear(getMetadataField(meta, "date") || record.year || "")) {
+    missingFields.push("date/year");
+  }
+  if (!getMetadataField(meta, "abstractNote")) {
+    missingFields.push("abstract");
+  }
+  if (!getMetadataField(meta, "DOI") && !getMetadataField(meta, "url")) {
+    missingFields.push("DOI/URL");
+  }
+  if (
+    !getMetadataField(meta, "publicationTitle") &&
+    !getMetadataField(meta, "proceedingsTitle")
+  ) {
+    missingFields.push("publication venue");
+  }
+  if (record.tags.length === 0) missingFields.push("tags");
+  if (
+    !record.attachments.some((att) => att.contentType === "application/pdf")
+  ) {
+    missingFields.push("PDF");
+  }
+
+  return missingFields.length
+    ? {
+        itemId: record.itemId,
+        title: title || `Item ${record.itemId}`,
+        missingFields,
+      }
+    : null;
+}
+
+async function fetchCanonicalPatchForRecord(
+  record: AuditRecord,
+  ctx: ActionExecutionContext,
+): Promise<EditableArticleMetadataPatch | null> {
+  const meta = record.metadata;
+  const doi = normalizeDoi(getMetadataField(meta, "DOI"));
+  const title = getMetadataTitle(meta) || record.title;
+  if (!doi && (!title || /^item\s+\d+$/i.test(title))) return null;
+
+  const label = doi ? `DOI: ${doi}` : `title: ${title.slice(0, 50)}`;
+  ctx.onProgress({
+    type: "status",
+    message: `Fetching metadata for ${label}`,
+  });
+
+  const searchArgs: Record<string, unknown> = {
+    mode: "metadata",
+    libraryID: ctx.libraryID,
+  };
+  if (doi) {
+    searchArgs.doi = doi;
+  } else {
+    searchArgs.title = title;
+    if (record.firstCreator) searchArgs.author = record.firstCreator;
+  }
+
+  const metaResult = await callTool(
+    "search_literature_online",
+    searchArgs,
+    ctx,
+    `Fetching metadata for ${label}`,
+  );
+  if (!metaResult.ok) return null;
+
+  const metaContent = metaResult.content as Record<string, unknown>;
+  const results = Array.isArray(metaContent.results) ? metaContent.results : [];
+  const externalMeta = results[0] as Record<string, unknown> | undefined;
+  const sourcePatch = externalMeta?.patch as
+    | EditableArticleMetadataPatch
+    | undefined;
+  if (!sourcePatch || Object.keys(sourcePatch).length === 0) return null;
+  return buildSupportedPatch(record, sourcePatch, ctx);
+}
+
+function buildSupportedPatch(
+  record: AuditRecord,
+  sourcePatch: EditableArticleMetadataPatch,
+  ctx: ActionExecutionContext,
+): EditableArticleMetadataPatch | null {
+  const patch: EditableArticleMetadataPatch = {};
+  for (const fieldName of EDITABLE_ARTICLE_METADATA_FIELDS) {
+    const newValue = sourcePatch[fieldName as EditableArticleMetadataField];
+    if (!newValue) continue;
+    if (!shouldFillField(record, fieldName)) continue;
+    if (!isMetadataFieldSupported(ctx, record.itemId, fieldName)) continue;
+    patch[fieldName as EditableArticleMetadataField] = newValue;
+  }
+  if (
+    !hasMetadataCreators(record.metadata) &&
+    sourcePatch.creators?.length &&
+    areMetadataCreatorsSupported(ctx, record.itemId)
+  ) {
+    patch.creators = sourcePatch.creators;
+  }
+  return Object.keys(patch).length ? patch : null;
+}
+
+function shouldFillField(
+  record: AuditRecord,
+  fieldName: EditableArticleMetadataField,
+): boolean {
+  const currentValue = getMetadataField(record.metadata, fieldName);
+  if (!currentValue) return true;
+  if (fieldName === "title" && /^item\s+\d+$/i.test(currentValue)) {
+    return true;
+  }
+  if (fieldName === "date" && !extractYear(currentValue)) {
+    return true;
+  }
+  if (fieldName === "DOI" && !normalizeDoi(currentValue)) {
+    return true;
+  }
+  return false;
+}
+
+function normalizeDoi(value: string | undefined): string | undefined {
+  const normalized = (value || "")
+    .trim()
+    .replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "");
+  if (!normalized || !/^10\.\S+\/\S+$/i.test(normalized)) return undefined;
+  return normalized;
+}
+
+function extractYear(value: string): string | undefined {
+  return value.match(/\b(18|19|20)\d{2}\b/)?.[0];
+}
+
+function isNonBibliographicTarget(target: LibraryItemTarget): boolean {
+  if (target.noteKind) return true;
+  const itemType = (target.itemType || "").toLowerCase();
+  return (
+    itemType === "note" ||
+    itemType === "attachment" ||
+    itemType === "annotation"
+  );
+}
+
+function isAuditableBibliographicRecord(entry: unknown): boolean {
+  if (!entry || typeof entry !== "object") return false;
+  const record = entry as Record<string, unknown>;
+  if (typeof record.itemId !== "number") return false;
+  if (record.noteKind) return false;
+  const itemType =
+    typeof record.itemType === "string" ? record.itemType.toLowerCase() : "";
+  if (
+    itemType === "note" ||
+    itemType === "attachment" ||
+    itemType === "annotation"
+  ) {
+    return false;
+  }
+  return Boolean(record.metadata && typeof record.metadata === "object");
+}
+
+function isMetadataFieldSupported(
+  ctx: ActionExecutionContext,
+  itemId: number,
+  fieldName: EditableArticleMetadataField,
+): boolean {
+  const gateway = ctx.zoteroGateway as {
+    getItem?: (itemId: number) => Zotero.Item | null | undefined;
+    isEditableArticleMetadataFieldSupported?: (
+      item: Zotero.Item | null | undefined,
+      fieldName: EditableArticleMetadataField,
+    ) => boolean;
+  };
+  if (
+    typeof gateway.getItem !== "function" ||
+    typeof gateway.isEditableArticleMetadataFieldSupported !== "function"
+  ) {
+    return true;
+  }
+  return gateway.isEditableArticleMetadataFieldSupported(
+    gateway.getItem(itemId),
+    fieldName,
+  );
+}
+
+function areMetadataCreatorsSupported(
+  ctx: ActionExecutionContext,
+  itemId: number,
+): boolean {
+  const gateway = ctx.zoteroGateway as {
+    getItem?: (itemId: number) => Zotero.Item | null | undefined;
+    supportsEditableArticleCreators?: (
+      item: Zotero.Item | null | undefined,
+    ) => boolean;
+  };
+  if (
+    typeof gateway.getItem !== "function" ||
+    typeof gateway.supportsEditableArticleCreators !== "function"
+  ) {
+    return true;
+  }
+  return gateway.supportsEditableArticleCreators(gateway.getItem(itemId));
+}

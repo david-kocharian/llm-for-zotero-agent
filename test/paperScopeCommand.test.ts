@@ -58,6 +58,48 @@ describe("paper-scoped command resolution", function () {
     });
   });
 
+  it("defaults single-target paper actions to itemId and preserves bare numeric limits", function () {
+    const singleProfile: PaperScopedActionProfile = {
+      targetMode: "single",
+      allowedScopes: ["current"],
+      defaultEmptyInput: "current",
+      paperRequirement: "bibliographic",
+      supportsLimit: true,
+    };
+
+    assert.deepEqual(
+      resolvePaperScopedCommandInput(
+        "",
+        {
+          mode: "paper",
+          activeItemId: 101,
+        },
+        singleProfile,
+        collectionCandidates,
+      ),
+      {
+        kind: "input",
+        input: { itemId: 101 },
+      },
+    );
+
+    assert.deepEqual(
+      resolvePaperScopedCommandInput(
+        "30",
+        {
+          mode: "paper",
+          activeItemId: 101,
+        },
+        singleProfile,
+        collectionCandidates,
+      ),
+      {
+        kind: "input",
+        input: { itemId: 101, limit: 30 },
+      },
+    );
+  });
+
   it("defaults to the selected chat-context papers in library chat", function () {
     const result = resolvePaperScopedCommandInput(
       "",
@@ -199,7 +241,8 @@ describe("paper-scoped command resolution", function () {
       ),
       {
         kind: "error",
-        error: "No supported paper or collection context is selected in this chat.",
+        error:
+          "No supported paper or collection context is selected in this chat.",
       },
     );
 
@@ -333,7 +376,8 @@ describe("paper-scoped command resolution", function () {
       ),
       {
         kind: "error",
-        error: 'Collection "reading" is ambiguous: Projects / Reading, Archive / Reading.',
+        error:
+          'Collection "reading" is ambiguous: Projects / Reading, Archive / Reading.',
       },
     );
 
@@ -356,6 +400,9 @@ describe("paper-scoped command resolution", function () {
 
     assert.exists(registry.getPaperScopedActionProfile("auto_tag"));
     assert.exists(registry.getPaperScopedActionProfile("complete_metadata"));
-    assert.isUndefined(registry.getPaperScopedActionProfile("organize_unfiled"));
+    assert.exists(registry.getPaperScopedActionProfile("discover_related"));
+    assert.isUndefined(
+      registry.getPaperScopedActionProfile("organize_unfiled"),
+    );
   });
 });

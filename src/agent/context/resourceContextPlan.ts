@@ -1,7 +1,6 @@
 import type {
   AgentAttachmentResource,
   AgentAttachmentResourceSummary,
-  AgentModelMessage,
   AgentRuntimeRequest,
 } from "../types";
 import type { PaperContextRef, TagContextRef } from "../../shared/types";
@@ -10,10 +9,7 @@ import {
   formatPaperCitationLabel,
   formatPaperSourceLabel,
 } from "../../modules/contextPanel/paperAttribution";
-import {
-  resolvePromptCacheCapability,
-  type ContextCachePlan,
-} from "../../contextCache/manager";
+import type { ContextCachePlan } from "../../contextCache/manager";
 import {
   buildAgentEvidenceContextBlock,
   clearAgentEvidenceCache,
@@ -24,14 +20,6 @@ import {
 } from "./cacheManagement";
 
 export { hydrateAgentEvidenceCache };
-
-export type AgentResourceLifecycleState =
-  | "setup-required"
-  | "resources-changed"
-  | "resources-delta"
-  | "thin-followup";
-
-export type AgentContextInjection = "full" | "delta" | "thin";
 
 export type AgentResourceGroup =
   | "selectedPapers"
@@ -62,40 +50,16 @@ export type AgentResourceDelta = {
   unchanged: number;
 };
 
-export type AgentResourceDeltaCounts = {
-  added: number;
-  removed: number;
-  changed: number;
-};
-
 export type AgentResourceContextPlan = {
   conversationKey: number;
-  lifecycleState: AgentResourceLifecycleState;
-  injection: AgentContextInjection;
   contextCache?: ContextCachePlan;
   resourceSignature: string;
   stableContextBlock: string;
   resourceSnapshot: AgentResourceSnapshot;
-  resourceDelta?: AgentResourceDelta;
-  resourceDeltaCounts?: AgentResourceDeltaCounts;
   priorReadBlock?: string;
 };
 
-export type AgentResourceLifecycleEntry = {
-  resourceSignature: string;
-  resourceSnapshot: AgentResourceSnapshot;
-  lastCompletedAt: number;
-};
-
 export type AgentPendingReadActivity = AgentCacheEvidenceActivity;
-
-const RESOURCE_DELTA_MAX_LINES = 12;
-const DELTA_ELIGIBLE_GROUPS = new Set<AgentResourceGroup>([
-  "selectedPapers",
-  "collections",
-]);
-
-const resourceLifecycleState = new Map<string, AgentResourceLifecycleEntry>();
 
 function normalizeText(value: unknown, maxLength = 160): string {
   if (typeof value !== "string") return "";
@@ -116,10 +80,6 @@ function normalizeRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
-}
-
-function lifecycleKey(conversationKey: number): string {
-  return `${normalizePositiveInt(conversationKey) || 0}`;
 }
 
 function stableJson(value: unknown): string {
@@ -585,110 +545,12 @@ export function diffAgentResourceSnapshots(params: {
   };
 }
 
-function getAgentResourceDeltaCounts(
-  delta: AgentResourceDelta | undefined,
-): AgentResourceDeltaCounts | undefined {
-  if (!delta) return undefined;
-  return {
-    added: delta.added.length,
-    removed: delta.removed.length,
-    changed: delta.changed.length,
-  };
-}
-
-function isDeltaEligible(delta: AgentResourceDelta): boolean {
-  const changedRecords = [...delta.added, ...delta.removed, ...delta.changed];
-  return changedRecords.every((record) =>
-    DELTA_ELIGIBLE_GROUPS.has(record.group),
-  );
-}
-
-export function resolveAgentResourceLifecycleState(params: {
-  lifecycleEntry?: AgentResourceLifecycleEntry;
-  resourceSignature: string;
-  resourceSnapshot: AgentResourceSnapshot;
-  forcedSkillIds?: string[];
-}): AgentResourceLifecycleState {
-  if (Array.isArray(params.forcedSkillIds) && params.forcedSkillIds.length) {
-    return "resources-changed";
-  }
-  if (!params.lifecycleEntry) return "setup-required";
-  if (params.lifecycleEntry.resourceSignature === params.resourceSignature) {
-    return "thin-followup";
-  }
-  if (
-    stableJson(params.lifecycleEntry.resourceSnapshot.baseScope) !==
-    stableJson(params.resourceSnapshot.baseScope)
-  ) {
-    return "resources-changed";
-  }
-  const delta = diffAgentResourceSnapshots({
-    previous: params.lifecycleEntry.resourceSnapshot,
-    current: params.resourceSnapshot,
-  });
-  return isDeltaEligible(delta) ? "resources-delta" : "resources-changed";
-}
-
-function requestHasContentfulResource(params: {
-  request: AgentRuntimeRequest;
-  lifecycleState: AgentResourceLifecycleState;
-}): boolean {
-  const { request, lifecycleState } = params;
-  const capability = resolvePromptCacheCapability({
-    model: request.model || "",
-    apiBase: request.apiBase,
-    authMode: request.authMode,
-    protocol: request.providerProtocol,
-  });
-  const fullTextOnlyFollowup =
-    lifecycleState === "thin-followup" &&
-    capability.stablePrefix &&
-    capability.kind !== "none" &&
-    Boolean(request.fullTextPaperContexts?.length) &&
-    !request.activeNoteContext &&
-    !request.selectedTexts?.length &&
-    !request.screenshots?.length &&
-    !request.attachments?.length;
-  if (fullTextOnlyFollowup) return false;
-  return Boolean(
-    request.activeNoteContext ||
-    request.selectedTexts?.length ||
-    request.fullTextPaperContexts?.length ||
-    request.screenshots?.length ||
-    request.attachments?.length,
-  );
-}
-
-export function resolveAgentContextInjection(params: {
-  request: AgentRuntimeRequest;
-  lifecycleState: AgentResourceLifecycleState;
-}): AgentContextInjection {
-  if (requestHasContentfulResource(params)) return "full";
-  if (params.lifecycleState === "thin-followup") return "thin";
-  if (params.lifecycleState === "resources-delta") return "delta";
-  return "full";
-}
-
 export function buildAgentResourceContextPlan(
   request: AgentRuntimeRequest,
 ): AgentResourceContextPlan {
   const conversationKey = normalizePositiveInt(request.conversationKey) || 0;
   const snapshot = buildAgentResourceSnapshot(request);
   const signature = buildAgentResourceSignatureFromSnapshot(snapshot);
-  const entry = resourceLifecycleState.get(lifecycleKey(conversationKey));
-  const lifecycleState = resolveAgentResourceLifecycleState({
-    lifecycleEntry: entry,
-    resourceSignature: signature,
-    resourceSnapshot: snapshot,
-    forcedSkillIds: request.forcedSkillIds,
-  });
-  const delta =
-    entry && lifecycleState === "resources-delta"
-      ? diffAgentResourceSnapshots({
-          previous: entry.resourceSnapshot,
-          current: snapshot,
-        })
-      : undefined;
   const priorReadBlock = buildAgentEvidenceContextBlock({
     conversationKey,
     request,
@@ -701,37 +563,12 @@ export function buildAgentResourceContextPlan(
   });
   return {
     conversationKey,
-    lifecycleState,
-    injection: resolveAgentContextInjection({ request, lifecycleState }),
     contextCache,
     resourceSignature: signature,
     stableContextBlock,
     resourceSnapshot: snapshot,
-    resourceDelta: delta,
-    resourceDeltaCounts: getAgentResourceDeltaCounts(delta),
     priorReadBlock,
   };
-}
-
-export function commitAgentResourceContextPlan(
-  plan: AgentResourceContextPlan,
-): void {
-  if (!plan.conversationKey) return;
-  resourceLifecycleState.set(lifecycleKey(plan.conversationKey), {
-    resourceSignature: plan.resourceSignature,
-    resourceSnapshot: plan.resourceSnapshot,
-    lastCompletedAt: Date.now(),
-  });
-}
-
-export function clearAgentResourceLifecycleState(
-  conversationKey?: number,
-): void {
-  if (conversationKey === undefined) {
-    resourceLifecycleState.clear();
-    return;
-  }
-  resourceLifecycleState.delete(lifecycleKey(conversationKey));
 }
 
 function buildScopeIdentityLines(request: AgentRuntimeRequest): string[] {
@@ -779,6 +616,7 @@ export function buildAgentStableResourceContextBlock(
     lines.push(
       "Citation/source label rule: for direct quotes and substantive paper-grounded claims, use the exact sourceLabel shown for the relevant paper.",
       "If quote anchors like [[quote:Q_x7a2]] are provided, use the anchor token for direct quotes instead of manually copying the quote or citation label.",
+      "Direct quote text must be copied verbatim in the original source language; never translate quote text to match the user's language. Put any translation outside the blockquote as explanation.",
       "If no quote anchor is provided for a direct quote, keep the source label attached to the quote: put it on the next non-empty line after the blockquote, before any commentary.",
       "Do not write [[source=...]], section=..., or chunk=... metadata in the final answer; those fields are internal context only.",
     );
@@ -851,85 +689,6 @@ export function buildAgentStableResourceContextBlock(
   }
 
   return lines.filter(Boolean).join("\n");
-}
-
-function appendBoundedDeltaSection(params: {
-  lines: string[];
-  title: string;
-  records: AgentResourceRecord[];
-  remainingLines: number;
-}): number {
-  if (!params.records.length || params.remainingLines <= 0) {
-    return params.remainingLines;
-  }
-  params.lines.push(params.title);
-  const visible = params.records.slice(0, params.remainingLines);
-  params.lines.push(...visible.map((record) => record.line));
-  const hidden = params.records.length - visible.length;
-  if (hidden > 0) params.lines.push(`- ${hidden} more not listed`);
-  return params.remainingLines - visible.length;
-}
-
-function buildAgentResourceDeltaBlock(delta: AgentResourceDelta): string {
-  const counts = getAgentResourceDeltaCounts(delta);
-  if (!counts) return "";
-  const lines = [
-    "Zotero resource update for this continued agent turn:",
-    `Summary: added=${counts.added}, removed=${counts.removed}, changed=${counts.changed}, stillAvailable=${delta.unchanged}`,
-    "Only inspect added or changed resources when the user request needs evidence, exact quotes/pages/figures, comparisons, or Zotero note/library changes.",
-    "This is a resource inventory update, not a request to eagerly read every resource.",
-  ];
-  let remainingLines = RESOURCE_DELTA_MAX_LINES;
-  remainingLines = appendBoundedDeltaSection({
-    lines,
-    title: "Added resources:",
-    records: delta.added,
-    remainingLines,
-  });
-  remainingLines = appendBoundedDeltaSection({
-    lines,
-    title: "Changed resources:",
-    records: delta.changed,
-    remainingLines,
-  });
-  appendBoundedDeltaSection({
-    lines,
-    title: "Removed resources:",
-    records: delta.removed,
-    remainingLines,
-  });
-  return lines.join("\n");
-}
-
-export function renderAgentResourceContextPlan(
-  plan: AgentResourceContextPlan,
-  request: AgentRuntimeRequest,
-  options: {
-    coverageBlock?: string;
-    memoryBlock?: string;
-    turnGuidanceBlock?: string;
-  } = {},
-): AgentModelMessage {
-  const lines: string[] = [];
-  if (plan.priorReadBlock) lines.push(plan.priorReadBlock);
-  if (options.coverageBlock) lines.push(options.coverageBlock);
-  if (options.memoryBlock) lines.push(options.memoryBlock);
-  if (options.turnGuidanceBlock) lines.push(options.turnGuidanceBlock);
-  if (plan.injection === "thin") {
-    lines.push(
-      "This is a continued agent turn with the same Zotero resources as the previous completed agent turn.",
-      "Do not assume unread paper text is already known. Use tools only when this user request needs fresh evidence, exact quotes/pages/figures, comparisons, or Zotero note/library changes.",
-    );
-  } else if (plan.injection === "delta" && plan.resourceDelta) {
-    lines.push(buildAgentResourceDeltaBlock(plan.resourceDelta));
-  }
-  const contextText = lines.filter(Boolean).join("\n");
-  return {
-    role: "user",
-    content: `${contextText ? `${contextText}\n\n` : ""}User request:\n${
-      request.userText
-    }`,
-  };
 }
 
 export function commitAgentReadActivities(params: {

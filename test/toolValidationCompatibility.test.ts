@@ -198,9 +198,200 @@ describe("tool validation compatibility", function () {
       await tool.shouldRequireConfirmation?.(modeAlias.value, baseContext),
     );
 
+    const createAlias = tool.validate({
+      action: "create",
+      file_path: "/tmp/create-alias.py",
+      text: "print('saved')",
+    });
+    assert.isTrue(createAlias.ok);
+    if (!createAlias.ok) return;
+    assert.equal(createAlias.value.action, "write");
+    assert.equal(createAlias.value.filePath, "/tmp/create-alias.py");
+    assert.equal(createAlias.value.content, "print('saved')");
+
+    const opAlias = tool.validate({
+      op: "save_file",
+      filepath: "/tmp/save-alias.py",
+      contents: "print('saved from op')",
+    });
+    assert.isTrue(opAlias.ok);
+    if (!opAlias.ok) return;
+    assert.equal(opAlias.value.action, "write");
+    assert.equal(opAlias.value.filePath, "/tmp/save-alias.py");
+    assert.equal(opAlias.value.content, "print('saved from op')");
+
+    const operationAlias = tool.validate({
+      operation: "read_file",
+      file_path: "/tmp/read-alias.md",
+    });
+    assert.isTrue(operationAlias.ok);
+    if (!operationAlias.ok) return;
+    assert.equal(operationAlias.value.action, "read");
+    assert.equal(operationAlias.value.filePath, "/tmp/read-alias.md");
+
+    const camelCaseWriteAlias = tool.validate({
+      action: "writeFile",
+      filePath: "/tmp/camel-write.md",
+      content: "saved from camelCase",
+    });
+    assert.isTrue(camelCaseWriteAlias.ok);
+    if (!camelCaseWriteAlias.ok) return;
+    assert.equal(camelCaseWriteAlias.value.action, "write");
+    assert.equal(camelCaseWriteAlias.value.filePath, "/tmp/camel-write.md");
+    assert.equal(camelCaseWriteAlias.value.content, "saved from camelCase");
+
+    const quotedReadAlias = tool.validate({
+      action: "'read'",
+      filePath: "/tmp/quoted-read.md",
+    });
+    assert.isTrue(quotedReadAlias.ok);
+    if (!quotedReadAlias.ok) return;
+    assert.equal(quotedReadAlias.value.action, "read");
+    assert.equal(quotedReadAlias.value.filePath, "/tmp/quoted-read.md");
+
+    const localizedSaveAlias = tool.validate({
+      action: "保存",
+      filePath: "/tmp/localized-save.md",
+      content: "saved from localized action",
+    });
+    assert.isTrue(localizedSaveAlias.ok);
+    if (!localizedSaveAlias.ok) return;
+    assert.equal(localizedSaveAlias.value.action, "write");
+    assert.equal(localizedSaveAlias.value.filePath, "/tmp/localized-save.md");
+    assert.equal(
+      localizedSaveAlias.value.content,
+      "saved from localized action",
+    );
+
+    const localizedWriteAlias = tool.validate({
+      action: "写入",
+      filePath: "/tmp/localized-write.md",
+      content: "written from localized action",
+    });
+    assert.isTrue(localizedWriteAlias.ok);
+    if (!localizedWriteAlias.ok) return;
+    assert.equal(localizedWriteAlias.value.action, "write");
+    assert.equal(localizedWriteAlias.value.filePath, "/tmp/localized-write.md");
+    assert.equal(
+      localizedWriteAlias.value.content,
+      "written from localized action",
+    );
+
+    const hyphenatedOperationAlias = tool.validate({
+      operation: "save-to-file",
+      path: "/tmp/hyphen-save.md",
+      text: "saved from hyphenated operation",
+    });
+    assert.isTrue(hyphenatedOperationAlias.ok);
+    if (!hyphenatedOperationAlias.ok) return;
+    assert.equal(hyphenatedOperationAlias.value.action, "write");
+    assert.equal(hyphenatedOperationAlias.value.filePath, "/tmp/hyphen-save.md");
+    assert.equal(
+      hyphenatedOperationAlias.value.content,
+      "saved from hyphenated operation",
+    );
+
+    const actionlessMineruFullMd = tool.validate({
+      filePath: "/tmp/llm-for-zotero-mineru/51/full.md",
+      offset: 128,
+      length: 4096,
+    });
+    assert.isTrue(actionlessMineruFullMd.ok);
+    if (!actionlessMineruFullMd.ok) return;
+    assert.equal(actionlessMineruFullMd.value.action, "read");
+    assert.equal(
+      actionlessMineruFullMd.value.filePath,
+      "/tmp/llm-for-zotero-mineru/51/full.md",
+    );
+    assert.isFalse(
+      await tool.shouldRequireConfirmation?.(
+        actionlessMineruFullMd.value,
+        baseContext,
+      ),
+    );
+
+    const actionlessMineruManifest = tool.validate({
+      path: "/tmp/llm-for-zotero-mineru/51/manifest.json",
+    });
+    assert.isTrue(actionlessMineruManifest.ok);
+    if (!actionlessMineruManifest.ok) return;
+    assert.equal(actionlessMineruManifest.value.action, "read");
+    assert.equal(
+      actionlessMineruManifest.value.filePath,
+      "/tmp/llm-for-zotero-mineru/51/manifest.json",
+    );
+
+    const accessAlias = tool.validate({
+      action: "access",
+      filePath: "/tmp/arbitrary-read.md",
+    });
+    assert.isTrue(accessAlias.ok);
+    if (!accessAlias.ok) return;
+    assert.equal(accessAlias.value.action, "read");
+
+    const inspectAlias = tool.validate({
+      operation: "inspect",
+      file_path: "/tmp/inspect-read.md",
+    });
+    assert.isTrue(inspectAlias.ok);
+    if (!inspectAlias.ok) return;
+    assert.equal(inspectAlias.value.action, "read");
+    assert.equal(inspectAlias.value.filePath, "/tmp/inspect-read.md");
+
     const missingAction = tool.validate({
       filePath: "/tmp/no-action.md",
     });
     assert.isFalse(missingAction.ok);
+
+    const actionlessWriteLike = tool.validate({
+      filePath: "/tmp/llm-for-zotero-mineru/51/full.md",
+      content: "unsafe",
+    });
+    assert.isFalse(actionlessWriteLike.ok);
+    if (!actionlessWriteLike.ok) {
+      assert.include(actionlessWriteLike.error, "action must be");
+    }
+
+    const contentlessReadAliasWithContent = tool.validate({
+      action: "access",
+      filePath: "/tmp/not-a-read.md",
+      content: "unsafe",
+    });
+    assert.isFalse(contentlessReadAliasWithContent.ok);
+    if (!contentlessReadAliasWithContent.ok) {
+      assert.include(contentlessReadAliasWithContent.error, "action must be");
+    }
+
+    for (const action of ["append", "edit", "update", "delete", "execute"]) {
+      const unsupported = tool.validate({
+        action,
+        filePath: "/tmp/llm-for-zotero-mineru/51/full.md",
+        content: "unsafe",
+      });
+      assert.isFalse(unsupported.ok);
+      if (!unsupported.ok) {
+        assert.include(unsupported.error, "action must be");
+      }
+    }
+
+    const unsupportedActionWinsPrecedence = tool.validate({
+      action: "append",
+      op: "save_file",
+      filePath: "/tmp/append.md",
+      content: "unsafe",
+    });
+    assert.isFalse(unsupportedActionWinsPrecedence.ok);
+    if (!unsupportedActionWinsPrecedence.ok) {
+      assert.include(unsupportedActionWinsPrecedence.error, "action must be");
+    }
+
+    const missingWriteContent = tool.validate({
+      action: "writeFile",
+      filePath: "/tmp/missing-content.md",
+    });
+    assert.isFalse(missingWriteContent.ok);
+    if (!missingWriteContent.ok) {
+      assert.include(missingWriteContent.error, "content is required");
+    }
   });
 });

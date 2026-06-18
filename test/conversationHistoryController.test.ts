@@ -268,6 +268,58 @@ describe("conversationHistoryController", function () {
     );
   });
 
+  it("keeps top-level supported attachment paper history active", function () {
+    const attachment = {
+      id: 99,
+      parentID: undefined,
+      attachmentContentType: "application/pdf",
+      attachmentFilename: "standalone.pdf",
+      isRegularItem: () => false,
+      isAttachment: () => true,
+      isNote: () => false,
+      getField: (field: string) => (field === "title" ? "Standalone PDF" : ""),
+    };
+
+    assert.equal(
+      resolveHistoryEntrySourceState(
+        { kind: "paper", paperItemID: 99 },
+        (id) => (id === 99 ? attachment : null),
+      ),
+      "active",
+    );
+    assert.deepEqual(
+      resolveHistoryEntryPaperDisplayMetadata({ paperItemID: 99 }, (id) =>
+        id === 99 ? attachment : null,
+      ),
+      {
+        itemID: 99,
+        title: "Standalone PDF",
+        firstCreator: "",
+        year: "",
+      },
+    );
+  });
+
+  it("marks unsupported top-level attachment paper history orphan", function () {
+    const attachment = {
+      id: 99,
+      parentID: undefined,
+      attachmentContentType: "application/zip",
+      attachmentFilename: "archive.zip",
+      isRegularItem: () => false,
+      isAttachment: () => true,
+      isNote: () => false,
+    };
+
+    assert.equal(
+      resolveHistoryEntrySourceState(
+        { kind: "paper", paperItemID: 99 },
+        (id) => (id === 99 ? attachment : null),
+      ),
+      "orphan",
+    );
+  });
+
   it("marks child-item paper history orphan when the parent item is missing", function () {
     const attachment = {
       id: 99,

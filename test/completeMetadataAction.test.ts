@@ -46,19 +46,23 @@ function makeBibliographicTarget(
   title: string,
   collectionIds: number[] = [],
   withPdf = false,
+  libraryID = 1,
 ) {
   return {
     itemId,
+    libraryID,
     itemType: "journalArticle",
     title,
     firstCreator: "Alice Example",
     year: "2024",
     attachments: withPdf
-      ? [{
-          contextItemId: itemId + 1000,
-          title: `${title} PDF`,
-          contentType: "application/pdf",
-        }]
+      ? [
+          {
+            contextItemId: itemId + 1000,
+            title: `${title} PDF`,
+            contentType: "application/pdf",
+          },
+        ]
       : [],
     tags: [],
     collectionIds,
@@ -96,7 +100,11 @@ describe("completeMetadata action", function () {
                   date: "",
                 },
                 creators: [
-                  { creatorType: "author", name: "Existing Author", fieldMode: 1 },
+                  {
+                    creatorType: "author",
+                    name: "Existing Author",
+                    fieldMode: 1,
+                  },
                 ],
               },
               tags: [],
@@ -125,7 +133,11 @@ describe("completeMetadata action", function () {
                 publicationTitle: "Remote Journal",
                 date: "2024",
                 creators: [
-                  { creatorType: "author", name: "Remote Author", fieldMode: 1 },
+                  {
+                    creatorType: "author",
+                    name: "Remote Author",
+                    fieldMode: 1,
+                  },
                 ],
               },
             },
@@ -156,7 +168,9 @@ describe("completeMetadata action", function () {
     const { ctx } = createActionContext(registry, {
       zoteroGateway: {
         getBibliographicItemTargetsByItemIds: (itemIds: number[]) =>
-          itemIds.includes(101) ? [makeBibliographicTarget(101, "Existing Paper")] : [],
+          itemIds.includes(101)
+            ? [makeBibliographicTarget(101, "Existing Paper")]
+            : [],
       } as never,
     });
 
@@ -164,7 +178,8 @@ describe("completeMetadata action", function () {
 
     assert.isTrue(result.ok);
     if (!result.ok) return;
-    const operations = (updateArgs?.operations as Array<Record<string, unknown>>) || [];
+    const operations =
+      (updateArgs?.operations as Array<Record<string, unknown>>) || [];
     const metadata = (operations[0]?.metadata as Record<string, unknown>) || {};
     assert.equal(operations.length, 1);
     assert.equal(operations[0].itemId, 101);
@@ -258,7 +273,9 @@ describe("completeMetadata action", function () {
     const { ctx } = createActionContext(registry, {
       zoteroGateway: {
         getBibliographicItemTargetsByItemIds: (itemIds: number[]) =>
-          itemIds.includes(77) ? [makeBibliographicTarget(77, "Current Paper")] : [],
+          itemIds.includes(77)
+            ? [makeBibliographicTarget(77, "Current Paper")]
+            : [],
         getItem: (itemId: number) => ({ id: itemId }),
       } as never,
       requestContext: {
@@ -274,8 +291,12 @@ describe("completeMetadata action", function () {
 
     assert.isTrue(result.ok);
     if (!result.ok) return;
-    const operations = (updateArgs?.operations as Array<Record<string, unknown>>) || [];
-    assert.deepEqual(operations.map((entry) => entry.itemId), [77]);
+    const operations =
+      (updateArgs?.operations as Array<Record<string, unknown>>) || [];
+    assert.deepEqual(
+      operations.map((entry) => entry.itemId),
+      [77],
+    );
     assert.equal(result.output.targeted, 1);
     assert.equal(result.output.updated, 1);
   });
@@ -330,11 +351,14 @@ describe("completeMetadata action", function () {
         },
         (args) => ok(args as Record<string, unknown>),
         async (input) => ({
-          results: [{
-            patch: {
-              abstractNote: input.doi === "10.1000/p1" ? "Abstract one" : "Abstract two",
+          results: [
+            {
+              patch: {
+                abstractNote:
+                  input.doi === "10.1000/p1" ? "Abstract one" : "Abstract two",
+              },
             },
-          }],
+          ],
         }),
       ),
     );
@@ -364,7 +388,10 @@ describe("completeMetadata action", function () {
           itemIds
             .filter((itemId) => itemId === 1 || itemId === 2)
             .map((itemId) =>
-              makeBibliographicTarget(itemId, itemId === 1 ? "Paper One" : "Paper Two"),
+              makeBibliographicTarget(
+                itemId,
+                itemId === 1 ? "Paper One" : "Paper Two",
+              ),
             ),
         listBibliographicItemTargets: async () => ({
           items: [
@@ -388,8 +415,12 @@ describe("completeMetadata action", function () {
 
     assert.isTrue(result.ok);
     if (!result.ok) return;
-    const operations = (updateArgs?.operations as Array<Record<string, unknown>>) || [];
-    assert.deepEqual(operations.map((entry) => entry.itemId), [1, 2]);
+    const operations =
+      (updateArgs?.operations as Array<Record<string, unknown>>) || [];
+    assert.deepEqual(
+      operations.map((entry) => entry.itemId),
+      [1, 2],
+    );
     assert.equal(result.output.targeted, 2);
     assert.equal(result.output.updated, 2);
   });
@@ -470,15 +501,22 @@ describe("completeMetadata action", function () {
       } as never,
     });
 
-    const result = await completeMetadataAction.execute({
-      collectionIds: [55],
-      limit: 1,
-    }, ctx);
+    const result = await completeMetadataAction.execute(
+      {
+        collectionIds: [55],
+        limit: 1,
+      },
+      ctx,
+    );
 
     assert.isTrue(result.ok);
     if (!result.ok) return;
-    const operations = (updateArgs?.operations as Array<Record<string, unknown>>) || [];
-    assert.deepEqual(operations.map((entry) => entry.itemId), [31]);
+    const operations =
+      (updateArgs?.operations as Array<Record<string, unknown>>) || [];
+    assert.deepEqual(
+      operations.map((entry) => entry.itemId),
+      [31],
+    );
     assert.equal(result.output.targeted, 1);
     assert.equal(result.output.updated, 1);
   });
@@ -549,22 +587,326 @@ describe("completeMetadata action", function () {
     const { ctx } = createActionContext(registry, {
       zoteroGateway: {
         listBibliographicItemTargets: async () => ({
-          items: [
-            makeBibliographicTarget(7, "Newest Paper"),
-          ],
+          items: [makeBibliographicTarget(7, "Newest Paper")],
           totalCount: 1,
         }),
       } as never,
     });
 
-    const result = await completeMetadataAction.execute({ scope: "all", limit: 1 }, ctx);
+    const result = await completeMetadataAction.execute(
+      { scope: "all", limit: 1 },
+      ctx,
+    );
 
     assert.isTrue(result.ok);
     if (!result.ok) return;
-    const operations = (updateArgs?.operations as Array<Record<string, unknown>>) || [];
-    assert.deepEqual(operations.map((entry) => entry.itemId), [7]);
+    const operations =
+      (updateArgs?.operations as Array<Record<string, unknown>>) || [];
+    assert.deepEqual(
+      operations.map((entry) => entry.itemId),
+      [7],
+    );
     assert.equal(result.output.targeted, 1);
     assert.equal(result.output.updated, 1);
+  });
+
+  it("keeps explicit item targets inside the active library", async function () {
+    const registry = new AgentToolRegistry();
+    let updateArgs: Record<string, unknown> | null = null;
+
+    registry.register(
+      createStubTool(
+        {
+          name: "read_library",
+          description: "read",
+          inputSchema: { type: "object" },
+          mutability: "read",
+          requiresConfirmation: false,
+        },
+        (args) => ok(args as Record<string, unknown>),
+        async () => ({
+          results: {
+            "7": {
+              metadata: {
+                title: "Active Library Paper",
+                fields: { DOI: "10.1000/active", abstractNote: "" },
+                creators: [],
+              },
+              tags: [],
+              attachments: [],
+            },
+          },
+        }),
+      ),
+    );
+
+    registry.register(
+      createStubTool(
+        {
+          name: "search_literature_online",
+          description: "search",
+          inputSchema: { type: "object" },
+          mutability: "read",
+          requiresConfirmation: false,
+        },
+        (args) => ok(args as Record<string, unknown>),
+        async () => ({
+          results: [{ patch: { abstractNote: "Active abstract" } }],
+        }),
+      ),
+    );
+
+    registry.register(
+      createStubTool(
+        {
+          name: "update_metadata",
+          description: "update",
+          inputSchema: { type: "object" },
+          mutability: "write",
+          requiresConfirmation: false,
+        },
+        (args) => ok(args as Record<string, unknown>),
+        async (input) => {
+          updateArgs = input;
+          return { results: [{ itemId: 7 }] };
+        },
+      ),
+    );
+
+    const { ctx } = createActionContext(registry, {
+      zoteroGateway: {
+        getBibliographicItemTargetsByItemIds: (itemIds: number[]) =>
+          itemIds
+            .filter((itemId) => itemId === 7 || itemId === 8)
+            .map((itemId) =>
+              itemId === 7
+                ? makeBibliographicTarget(
+                    7,
+                    "Active Library Paper",
+                    [],
+                    false,
+                    1,
+                  )
+                : makeBibliographicTarget(
+                    8,
+                    "Other Library Paper",
+                    [],
+                    false,
+                    2,
+                  ),
+            ),
+      } as never,
+    });
+
+    const result = await completeMetadataAction.execute(
+      { itemIds: [7, 8] },
+      ctx,
+    );
+
+    assert.isTrue(result.ok);
+    if (!result.ok) return;
+    const operations =
+      (updateArgs?.operations as Array<Record<string, unknown>>) || [];
+    assert.deepEqual(
+      operations.map((entry) => entry.itemId),
+      [7],
+    );
+    assert.equal(result.output.targeted, 1);
+  });
+
+  it("does not propose metadata fields unsupported by the item type", async function () {
+    const registry = new AgentToolRegistry();
+    let updateArgs: Record<string, unknown> | null = null;
+
+    registry.register(
+      createStubTool(
+        {
+          name: "read_library",
+          description: "read",
+          inputSchema: { type: "object" },
+          mutability: "read",
+          requiresConfirmation: false,
+        },
+        (args) => ok(args as Record<string, unknown>),
+        async () => ({
+          results: {
+            "401": {
+              metadata: {
+                title: "Book-like Item",
+                fields: {
+                  DOI: "",
+                  abstractNote: "",
+                  publicationTitle: "",
+                  date: "",
+                },
+                creators: [],
+              },
+              tags: [],
+              attachments: [],
+            },
+          },
+        }),
+      ),
+    );
+
+    registry.register(
+      createStubTool(
+        {
+          name: "search_literature_online",
+          description: "search",
+          inputSchema: { type: "object" },
+          mutability: "read",
+          requiresConfirmation: false,
+        },
+        (args) => ok(args as Record<string, unknown>),
+        async () => ({
+          results: [
+            {
+              patch: {
+                abstractNote: "Remote abstract",
+                publicationTitle: "Journal-only value",
+                date: "2023",
+                creators: [
+                  {
+                    creatorType: "author",
+                    name: "Remote Author",
+                    fieldMode: 1,
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+      ),
+    );
+
+    registry.register(
+      createStubTool(
+        {
+          name: "update_metadata",
+          description: "update",
+          inputSchema: { type: "object" },
+          mutability: "write",
+          requiresConfirmation: false,
+        },
+        (args) => ok(args as Record<string, unknown>),
+        async (input) => {
+          updateArgs = input;
+          return { results: [{ itemId: 401 }] };
+        },
+      ),
+    );
+
+    const { ctx } = createActionContext(registry, {
+      zoteroGateway: {
+        getBibliographicItemTargetsByItemIds: (itemIds: number[]) =>
+          itemIds.includes(401)
+            ? [makeBibliographicTarget(401, "Book-like Item")]
+            : [],
+        getItem: (itemId: number) => ({ id: itemId, libraryID: 1 }),
+        isEditableArticleMetadataFieldSupported: (
+          _item: unknown,
+          fieldName: string,
+        ) => fieldName !== "publicationTitle",
+        supportsEditableArticleCreators: () => false,
+      } as never,
+    });
+
+    const result = await completeMetadataAction.execute({ itemId: 401 }, ctx);
+
+    assert.isTrue(result.ok);
+    if (!result.ok) return;
+    const operations =
+      (updateArgs?.operations as Array<Record<string, unknown>>) || [];
+    const metadata = (operations[0]?.metadata as Record<string, unknown>) || {};
+    assert.equal(metadata.abstractNote, "Remote abstract");
+    assert.equal(metadata.date, "2023");
+    assert.notProperty(metadata, "publicationTitle");
+    assert.notProperty(metadata, "creators");
+  });
+
+  it("surfaces metadata write failures instead of completing with a generic denial", async function () {
+    const registry = new AgentToolRegistry();
+
+    registry.register(
+      createStubTool(
+        {
+          name: "read_library",
+          description: "read",
+          inputSchema: { type: "object" },
+          mutability: "read",
+          requiresConfirmation: false,
+        },
+        (args) => ok(args as Record<string, unknown>),
+        async () => ({
+          results: {
+            "501": {
+              metadata: {
+                title: "Failing Item",
+                fields: { DOI: "", abstractNote: "" },
+                creators: [],
+              },
+              tags: [],
+              attachments: [],
+            },
+          },
+        }),
+      ),
+    );
+
+    registry.register(
+      createStubTool(
+        {
+          name: "search_literature_online",
+          description: "search",
+          inputSchema: { type: "object" },
+          mutability: "read",
+          requiresConfirmation: false,
+        },
+        (args) => ok(args as Record<string, unknown>),
+        async () => ({
+          results: [{ patch: { abstractNote: "Remote abstract" } }],
+        }),
+      ),
+    );
+
+    registry.register(
+      createStubTool(
+        {
+          name: "update_metadata",
+          description: "update",
+          inputSchema: { type: "object" },
+          mutability: "write",
+          requiresConfirmation: false,
+        },
+        (args) => ok(args as Record<string, unknown>),
+        async () => {
+          throw new Error(
+            "Unsupported metadata fields for book: publicationTitle",
+          );
+        },
+      ),
+    );
+
+    const { ctx, progress } = createActionContext(registry, {
+      zoteroGateway: {
+        getBibliographicItemTargetsByItemIds: (itemIds: number[]) =>
+          itemIds.includes(501)
+            ? [makeBibliographicTarget(501, "Failing Item")]
+            : [],
+      } as never,
+    });
+
+    const result = await completeMetadataAction.execute({ itemId: 501 }, ctx);
+
+    assert.isFalse(result.ok);
+    if (result.ok) return;
+    assert.include(result.error, "Unsupported metadata fields for book");
+    assert.deepInclude(progress, {
+      type: "step_done",
+      step: "Applying metadata updates",
+      summary: "Unsupported metadata fields for book: publicationTitle",
+    });
   });
 
   it("returns a no-op success when no target paper can be improved", async function () {
@@ -593,7 +935,11 @@ describe("completeMetadata action", function () {
                   date: "2024",
                 },
                 creators: [
-                  { creatorType: "author", name: "Existing Author", fieldMode: 1 },
+                  {
+                    creatorType: "author",
+                    name: "Existing Author",
+                    fieldMode: 1,
+                  },
                 ],
               },
               tags: [{ tag: "done" }],
@@ -640,7 +986,9 @@ describe("completeMetadata action", function () {
     const { ctx } = createActionContext(registry, {
       zoteroGateway: {
         getBibliographicItemTargetsByItemIds: (itemIds: number[]) =>
-          itemIds.includes(301) ? [makeBibliographicTarget(301, "Complete Paper", [], true)] : [],
+          itemIds.includes(301)
+            ? [makeBibliographicTarget(301, "Complete Paper", [], true)]
+            : [],
       } as never,
     });
 

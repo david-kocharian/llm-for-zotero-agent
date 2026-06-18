@@ -1,5 +1,8 @@
 import { assert } from "chai";
-import { parsePaperSearchSlashToken } from "../src/modules/contextPanel/paperSearch";
+import {
+  parsePaperSearchSlashToken,
+  parseSkillSearchDollarToken,
+} from "../src/modules/contextPanel/paperSearch";
 
 describe("paperSearch slash token parsing", function () {
   it("keeps a single-word slash token active before whitespace", function () {
@@ -46,5 +49,53 @@ describe("paperSearch slash token parsing", function () {
     const token = parsePaperSearchSlashToken(input, 4);
 
     assert.isNull(token);
+  });
+
+  it("keeps a dollar skill token active before whitespace", function () {
+    const input = "$evidence";
+    const token = parseSkillSearchDollarToken(input, input.length);
+
+    assert.deepEqual(token, {
+      query: "evidence",
+      slashStart: 0,
+      caretEnd: input.length,
+    });
+  });
+
+  it("finds a dollar skill token after whitespace", function () {
+    const input = "Use $evidence";
+    const token = parseSkillSearchDollarToken(input, input.length);
+
+    assert.deepEqual(token, {
+      query: "evidence",
+      slashStart: input.indexOf("$evidence"),
+      caretEnd: input.length,
+    });
+  });
+
+  it("ignores dollar skill tokens not preceded by whitespace or start-of-string", function () {
+    const input = "abc$evidence";
+    const token = parseSkillSearchDollarToken(input, input.length);
+
+    assert.isNull(token);
+  });
+
+  it("dismisses dollar skill tokens after whitespace", function () {
+    const input = "$evidence based";
+    const token = parseSkillSearchDollarToken(input, input.length);
+
+    assert.isNull(token);
+  });
+
+  it("dismisses dollar skill tokens after inline math closes", function () {
+    assert.isNull(
+      parseSkillSearchDollarToken("$something$", "$something$".length),
+    );
+    assert.isNull(
+      parseSkillSearchDollarToken(
+        "Please explain $x_i + y_i$ in this model",
+        "Please explain $x_i + y_i$".length,
+      ),
+    );
   });
 });

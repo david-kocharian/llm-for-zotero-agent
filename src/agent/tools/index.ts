@@ -32,7 +32,7 @@ import { createFileIOTool } from "./write/fileIO";
 import { createZoteroScriptTool } from "./write/zoteroScript";
 import { PdfPageService } from "../services/pdfPageService";
 import type { AgentToolDefinition } from "../types";
-import { fail, ok, validateObject } from "./shared";
+import { fail, ok, PAPER_CONTEXT_REF_SCHEMA, validateObject } from "./shared";
 
 type BuiltInAgentToolDeps = {
   zoteroGateway: ZoteroGateway;
@@ -42,6 +42,34 @@ type BuiltInAgentToolDeps = {
 };
 
 type ToolGuidance = NonNullable<AgentToolDefinition["guidance"]>;
+
+const STRING_ARRAY_SCHEMA = {
+  type: "array" as const,
+  items: { type: "string" as const },
+};
+
+const NUMBER_ARRAY_SCHEMA = {
+  type: "array" as const,
+  items: { type: "number" as const },
+};
+
+const METADATA_PATCH_SCHEMA = {
+  type: "object" as const,
+  additionalProperties: true,
+  description: "Metadata fields to update.",
+};
+
+const LIBRARY_UPDATE_OPERATION_SCHEMA = {
+  type: "object" as const,
+  additionalProperties: true,
+  properties: {
+    id: { type: "string" as const },
+    itemId: { type: "number" as const },
+    paperContext: PAPER_CONTEXT_REF_SCHEMA,
+    metadata: METADATA_PATCH_SCHEMA,
+    patch: METADATA_PATCH_SCHEMA,
+  },
+};
 
 const LIBRARY_SEARCH_GUIDANCE: ToolGuidance = {
   matches: (request) =>
@@ -139,13 +167,68 @@ function createLibraryUpdateTool(tools: {
     requiresConfirmation: true,
     inputSchema: {
       type: "object",
-      additionalProperties: true,
+      additionalProperties: false,
       required: ["kind"],
       properties: {
         kind: {
           type: "string",
           enum: ["tags", "collections", "metadata"],
         },
+        action: {
+          type: "string",
+          enum: ["add", "remove"],
+          description:
+            "For tags and collections: whether to add or remove entries.",
+        },
+        itemIds: {
+          ...NUMBER_ARRAY_SCHEMA,
+          description: "Zotero item IDs to update.",
+        },
+        tags: {
+          ...STRING_ARRAY_SCHEMA,
+          description: "Tags to add or remove when kind:'tags'.",
+        },
+        assignments: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              itemId: { type: "number" },
+              tags: STRING_ARRAY_SCHEMA,
+              targetCollectionId: { type: "number" },
+              targetCollectionName: { type: "string" },
+            },
+            required: ["itemId"],
+          },
+          description:
+            "Per-item tag or collection assignments for kind:'tags' or kind:'collections'.",
+        },
+        targetCollectionId: {
+          type: "number",
+          description: "Target collection ID for kind:'collections'.",
+        },
+        targetCollectionName: {
+          type: "string",
+          description:
+            "Target collection name for kind:'collections'; resolved in the confirmation card.",
+        },
+        collectionId: {
+          type: "number",
+          description:
+            "Collection ID to remove items from when kind:'collections' and action:'remove'.",
+        },
+        metadata: METADATA_PATCH_SCHEMA,
+        operations: {
+          type: "array",
+          items: LIBRARY_UPDATE_OPERATION_SCHEMA,
+          description: "Batch metadata operations when kind:'metadata'.",
+        },
+        itemId: {
+          type: "number",
+          description: "Single Zotero item ID for kind:'metadata'.",
+        },
+        paperContext: PAPER_CONTEXT_REF_SCHEMA,
       },
     },
     summaries: {
@@ -188,12 +271,33 @@ function createLibraryImportTool(tools: {
     requiresConfirmation: true,
     inputSchema: {
       type: "object",
-      additionalProperties: true,
+      additionalProperties: false,
       required: ["kind"],
       properties: {
         kind: {
           type: "string",
           enum: ["identifiers", "files"],
+        },
+        identifiers: {
+          ...STRING_ARRAY_SCHEMA,
+          description:
+            "DOIs, ISBNs, arXiv IDs, or URLs to import when kind:'identifiers'.",
+        },
+        filePaths: {
+          ...STRING_ARRAY_SCHEMA,
+          description: "Absolute local file paths to import when kind:'files'.",
+        },
+        targetCollectionId: {
+          type: "number",
+          description: "Collection to add imported items to.",
+        },
+        collectionId: {
+          type: "number",
+          description: "Deprecated alias for targetCollectionId.",
+        },
+        libraryID: {
+          type: "number",
+          description: "Target library ID. Defaults to the user's library.",
         },
       },
     },
@@ -235,12 +339,25 @@ function createLibraryDeleteTool(tools: {
     requiresConfirmation: true,
     inputSchema: {
       type: "object",
-      additionalProperties: true,
+      additionalProperties: false,
       required: ["mode"],
       properties: {
         mode: {
           type: "string",
           enum: ["trash", "merge"],
+        },
+        itemIds: {
+          ...NUMBER_ARRAY_SCHEMA,
+          description: "Zotero item IDs to trash when mode:'trash'.",
+        },
+        masterItemId: {
+          type: "number",
+          description: "The surviving master item ID when mode:'merge'.",
+        },
+        otherItemIds: {
+          ...NUMBER_ARRAY_SCHEMA,
+          description:
+            "Duplicate item IDs to merge into the master when mode:'merge'.",
         },
       },
     },

@@ -456,7 +456,10 @@ describe("Zotero MCP server", function () {
           libraryID: context.request.libraryID,
           activeItemId: context.request.activeItemId,
           selectedPaperContexts: context.request.selectedPaperContexts,
-          selectedCollectionContexts: context.request.selectedCollectionContexts,
+          fullTextPaperContexts: context.request.fullTextPaperContexts,
+          pinnedPaperContexts: context.request.pinnedPaperContexts,
+          selectedCollectionContexts:
+            context.request.selectedCollectionContexts,
           selectedTagContexts: context.request.selectedTagContexts,
         },
       }),
@@ -477,8 +480,11 @@ describe("Zotero MCP server", function () {
         itemId: 55,
         contextItemId: 66,
         title: "Scoped Paper",
+        attachmentTitle: "Scoped PDF",
         firstCreator: "Ng",
         year: "2026",
+        contentSourceMode: "mineru",
+        mineruCacheDir: "/tmp/mineru-cache/scoped-paper",
       },
       selectedCollectionContexts: [
         {
@@ -520,8 +526,23 @@ describe("Zotero MCP server", function () {
             itemId: 55,
             contextItemId: 66,
             title: "Scoped Paper",
+            attachmentTitle: "Scoped PDF",
             firstCreator: "Ng",
             year: "2026",
+            contentSourceMode: "mineru",
+            mineruCacheDir: "/tmp/mineru-cache/scoped-paper",
+          },
+        ],
+        fullTextPaperContexts: [
+          {
+            itemId: 55,
+            contextItemId: 66,
+            title: "Scoped Paper",
+            attachmentTitle: "Scoped PDF",
+            firstCreator: "Ng",
+            year: "2026",
+            contentSourceMode: "mineru",
+            mineruCacheDir: "/tmp/mineru-cache/scoped-paper",
           },
         ],
         selectedCollectionContexts: [
@@ -541,6 +562,108 @@ describe("Zotero MCP server", function () {
       });
     } finally {
       clearScope();
+    }
+  });
+
+  it("passes scoped selected, full-text, and pinned paper contexts with source metadata", async function () {
+    const registry = new AgentToolRegistry();
+    registry.register({
+      spec: {
+        name: "paper_read",
+        description: "Read paper",
+        inputSchema: { type: "object", additionalProperties: true },
+        mutability: "read",
+        requiresConfirmation: false,
+      },
+      validate: (args) => ({ ok: true, value: args ?? {} }),
+      execute: async (_input, context: AgentToolContext) => ({
+        request: {
+          selectedPaperContexts: context.request.selectedPaperContexts,
+          fullTextPaperContexts: context.request.fullTextPaperContexts,
+          pinnedPaperContexts: context.request.pinnedPaperContexts,
+        },
+      }),
+    });
+    registerMcpServer({
+      toolRegistry: registry,
+      zoteroGateway: {} as never,
+    });
+
+    const selectedPaper = {
+      itemId: 56,
+      contextItemId: 67,
+      title: "Selected Scoped Paper",
+      attachmentTitle: "Selected PDF",
+      citationKey: "ngSelected2026",
+      firstCreator: "Ng",
+      year: "2026",
+      contentSourceMode: "mineru" as const,
+      mineruCacheDir: "/tmp/mineru-cache/selected",
+    };
+    const fullTextPaper = {
+      itemId: 57,
+      contextItemId: 68,
+      title: "Full Text Scoped Paper",
+      attachmentTitle: "Full Text PDF",
+      firstCreator: "Lee",
+      year: "2025",
+      contentSourceMode: "markdown" as const,
+      mineruCacheDir: "/tmp/mineru-cache/full-text",
+    };
+    const pinnedPaper = {
+      itemId: 58,
+      contextItemId: 69,
+      title: "Pinned Scoped Paper",
+      attachmentTitle: "Pinned PDF",
+      firstCreator: "Chen",
+      year: "2024",
+      contentSourceMode: "text" as const,
+      mineruCacheDir: "/tmp/mineru-cache/pinned",
+    };
+
+    const scoped = registerScopedZoteroMcpScope({
+      conversationKey: 321,
+      libraryID: 7,
+      kind: "global",
+      paperContext: {
+        itemId: 55,
+        contextItemId: 66,
+        title: "Fallback Paper",
+      },
+      selectedPaperContexts: [selectedPaper],
+      fullTextPaperContexts: [fullTextPaper],
+      pinnedPaperContexts: [pinnedPaper],
+    });
+    try {
+      const response = await invokeMcpEndpoint({
+        token: getOrCreateZoteroMcpBearerToken(),
+        headers: {
+          [ZOTERO_MCP_SCOPE_HEADER]: scoped.token,
+        },
+        body: {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: {
+            name: "paper_read",
+            arguments: {},
+          },
+        },
+      });
+      const payload = JSON.parse(response[2]);
+      const content = JSON.parse(payload.result.content[0].text);
+      assert.equal(content.ok, true);
+      assert.deepEqual(content.result.request.selectedPaperContexts, [
+        selectedPaper,
+      ]);
+      assert.deepEqual(content.result.request.fullTextPaperContexts, [
+        fullTextPaper,
+      ]);
+      assert.deepEqual(content.result.request.pinnedPaperContexts, [
+        pinnedPaper,
+      ]);
+    } finally {
+      scoped.clear();
     }
   });
 

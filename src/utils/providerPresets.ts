@@ -10,6 +10,7 @@ export type SupportedProviderPresetId =
   | "grok"
   | "qwen"
   | "kimi"
+  | "mimo"
   | "copilot";
 
 export type ProviderPresetId = SupportedProviderPresetId | "customized";
@@ -137,6 +138,7 @@ const QWEN_PATHS = [
   "/api/v2/apps/protocols/compatible-mode/v1/responses",
 ];
 const KIMI_PATHS = ["/", "/v1", "/v1/chat/completions"];
+const MIMO_PATHS = ["/", "/v1", "/v1/chat/completions"];
 const COPILOT_PATHS = ["/", "/chat/completions", "/models"];
 
 export const PROVIDER_PRESETS: ProviderPreset[] = [
@@ -255,6 +257,16 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
       ["api.moonshot.cn", "api.moonshot.ai"],
       KIMI_PATHS,
     ),
+    supportsEmbeddings: false,
+  },
+  {
+    id: "mimo",
+    label: "Xiaomi MiMo",
+    defaultApiBase: "https://api.xiaomimimo.com/v1",
+    defaultProtocol: "openai_chat_compat",
+    supportedProtocols: ["openai_chat_compat"],
+    helperText: "Preset uses Xiaomi MiMo's OpenAI-compatible API base (v1).",
+    matches: makeHostAndPathMatcher(["api.xiaomimimo.com"], MIMO_PATHS),
     supportsEmbeddings: false,
   },
   {
