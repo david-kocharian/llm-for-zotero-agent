@@ -396,9 +396,18 @@ export type AgentTraceRequestSummary = {
 export type AgentModelCapabilities = {
   streaming: boolean;
   toolCalls: boolean;
+  contentInputs?: AgentContentInputCapabilities;
+  /** Compatibility alias: true when any non-text content input is available. */
   multimodal: boolean;
+  /** Native upload/file-reference support, not inline document-block support. */
   fileInputs: boolean;
   reasoning: boolean;
+};
+
+export type AgentContentInputCapabilities = {
+  images: boolean;
+  pdfDocuments: boolean;
+  nativeFiles: boolean;
 };
 
 export type AgentModelContentPart =

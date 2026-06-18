@@ -12,6 +12,10 @@ import type {
   AgentModelStep,
 } from "../types";
 import type { AgentModelAdapter, AgentStepParams } from "./adapter";
+import {
+  buildAgentModelCapabilities,
+  mediaContentInputs,
+} from "./contentCapabilities";
 import { isMultimodalRequestSupported } from "./messageBuilder";
 import {
   buildResponsesContinuationInput,
@@ -42,13 +46,13 @@ export class CodexResponsesAgentAdapter implements AgentModelAdapter {
   private conversationItems: unknown[] | null = null;
 
   getCapabilities(request: AgentRuntimeRequest): AgentModelCapabilities {
-    return {
+    return buildAgentModelCapabilities({
       streaming: true,
       toolCalls: isCodexAuthRequest(request),
-      multimodal: isMultimodalRequestSupported(request),
+      contentInputs: mediaContentInputs(isMultimodalRequestSupported(request)),
       fileInputs: false,
       reasoning: true,
-    };
+    });
   }
 
   supportsTools(request: AgentRuntimeRequest): boolean {

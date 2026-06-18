@@ -10,6 +10,7 @@ import {
 import { isGeminiBase } from "../../utils/apiHelpers";
 import { providerSupportsResponsesEndpoint } from "../../utils/providerPresets";
 import type { AgentModelAdapter } from "./adapter";
+import { buildAgentModelCapabilities } from "./contentCapabilities";
 import { CodexResponsesAgentAdapter } from "./codexResponses";
 import { OpenAIResponsesAgentAdapter } from "./openaiResponses";
 import { OpenAIChatCompatAgentAdapter } from "./openaiCompatible";
@@ -18,13 +19,13 @@ import { GeminiNativeAgentAdapter } from "./geminiNative";
 
 class CodexAppServerNativeOnlyAgentAdapter implements AgentModelAdapter {
   getCapabilities(_request: AgentRuntimeRequest): AgentModelCapabilities {
-    return {
+    return buildAgentModelCapabilities({
       streaming: false,
       toolCalls: false,
-      multimodal: false,
+      contentInputs: null,
       fileInputs: false,
       reasoning: false,
-    };
+    });
   }
 
   supportsTools(_request: AgentRuntimeRequest): boolean {

@@ -10,6 +10,7 @@ import {
 } from "./store/transcriptStore";
 import type {
   AgentInheritedApproval,
+  AgentContentInputCapabilities,
   AgentModelCapabilities,
   AgentModelContentPart,
   AgentConfirmationResolution,
@@ -29,6 +30,10 @@ import type {
   AgentAdapterToolCallResult,
   AgentAdapterToolContentItem,
 } from "./model/adapter";
+import {
+  normalizeAgentContentInputs,
+  resolveCapabilitiesContentInputs,
+} from "./model/contentCapabilities";
 import { resolveAgentLimits } from "./model/limits";
 import { classifyRequest } from "./model/requestClassifier";
 import {
@@ -150,63 +155,108 @@ function summarizeArtifacts(artifacts: AgentToolArtifact[]): string {
   return parts.join(" ");
 }
 
-function summarizeTextOnlyArtifacts(
-  artifacts: AgentToolArtifact[],
-  modelName?: string,
-): string {
-  const imageCount = artifacts.filter(
-    (artifact) => artifact.kind === "image",
-  ).length;
-  const fileCount = artifacts.filter(
-    (artifact) => artifact.kind === "file_ref",
-  ).length;
-  return summarizeTextOnlyOmittedParts(imageCount, fileCount, modelName);
+type OmittedContentInputCounts = {
+  images: number;
+  pdfDocuments: number;
+  nativeFiles: number;
+};
+
+function hasOmittedContentInputs(counts: OmittedContentInputCounts): boolean {
+  return counts.images > 0 || counts.pdfDocuments > 0 || counts.nativeFiles > 0;
 }
 
-function summarizeTextOnlyOmittedParts(
-  imageCount: number,
-  fileCount: number,
+function summarizeUnsupportedContentInputs(
+  counts: OmittedContentInputCounts,
   modelName?: string,
 ): string {
   const omitted: string[] = [];
-  if (imageCount) {
-    omitted.push(`${imageCount} image${imageCount === 1 ? "" : "s"}`);
+  const unsupportedKinds: string[] = [];
+  if (counts.images) {
+    omitted.push(
+      `${counts.images} image input${counts.images === 1 ? "" : "s"}`,
+    );
+    unsupportedKinds.push("image input");
   }
-  if (fileCount) {
-    omitted.push(`${fileCount} file${fileCount === 1 ? "" : "s"}`);
+  if (counts.pdfDocuments) {
+    omitted.push(
+      `${counts.pdfDocuments} PDF/document input${
+        counts.pdfDocuments === 1 ? "" : "s"
+      }`,
+    );
+    unsupportedKinds.push("PDF/document input");
+  }
+  if (counts.nativeFiles) {
+    omitted.push(
+      `${counts.nativeFiles} native file input${
+        counts.nativeFiles === 1 ? "" : "s"
+      }`,
+    );
+    unsupportedKinds.push("native file input");
   }
   const target = (modelName || "The selected model").trim();
   const omittedLabel = omitted.length ? omitted.join(" and ") : "artifacts";
+  const unsupportedLabel = unsupportedKinds.length
+    ? unsupportedKinds.join(" or ")
+    : "that content type";
   return (
-    `${omittedLabel} prepared by the tool were not attached because ${target} does not support image or file input. ` +
+    `${omittedLabel} prepared by the tool were not attached because ${target} does not support ${unsupportedLabel}. ` +
     "Use the tool result text, MinerU manifest/full.md content, captions, and surrounding extracted text instead. " +
-    "If direct visual inspection is required, say that a vision-capable model is needed."
+    "If direct visual or document inspection is required, say that a model with the needed content-input support is required."
   );
+}
+
+function isPdfFileRefPart(
+  part: Extract<AgentModelContentPart, { type: "file_ref" }>,
+): boolean {
+  return part.file_ref.mimeType.trim().toLowerCase() === "application/pdf";
+}
+
+function supportsFileRefPart(
+  part: Extract<AgentModelContentPart, { type: "file_ref" }>,
+  contentInputs: AgentContentInputCapabilities,
+): boolean {
+  if (contentInputs.nativeFiles) return true;
+  return isPdfFileRefPart(part) && contentInputs.pdfDocuments;
+}
+
+function countOmittedFileRefPart(
+  part: Extract<AgentModelContentPart, { type: "file_ref" }>,
+  counts: OmittedContentInputCounts,
+): void {
+  if (isPdfFileRefPart(part)) {
+    counts.pdfDocuments += 1;
+  } else {
+    counts.nativeFiles += 1;
+  }
 }
 
 async function buildArtifactFollowupMessage(
   result: AgentToolResult,
-  options: { multimodal?: boolean; modelName?: string } = {},
+  options: {
+    contentInputs?: AgentContentInputCapabilities;
+    modelName?: string;
+  } = {},
 ): Promise<AgentModelMessage | null> {
   const artifacts = Array.isArray(result.artifacts) ? result.artifacts : [];
   if (!artifacts.length || !result.ok) return null;
-  if (options.multimodal === false) {
-    return {
-      role: "user",
-      content: summarizeTextOnlyArtifacts(artifacts, options.modelName),
-    };
-  }
-  const parts: AgentModelContentPart[] = [
-    {
-      type: "text",
-      text: summarizeArtifacts(artifacts),
-    },
-  ];
+  const contentInputs = normalizeAgentContentInputs(options.contentInputs);
+  const parts: AgentModelContentPart[] = [];
+  const attachedArtifacts: AgentToolArtifact[] = [];
+  const omitted: OmittedContentInputCounts = {
+    images: 0,
+    pdfDocuments: 0,
+    nativeFiles: 0,
+  };
   for (const artifact of artifacts) {
     if (artifact.kind === "image") {
+      if (!contentInputs.images) {
+        omitted.images += 1;
+        continue;
+      }
       if (!artifact.storedPath || !artifact.mimeType) continue;
       try {
         const url = await toDataUrl(artifact.storedPath, artifact.mimeType);
+        attachedArtifacts.push(artifact);
         parts.push({
           type: "image_url",
           image_url: {
@@ -223,7 +273,7 @@ async function buildArtifactFollowupMessage(
       }
       continue;
     }
-    parts.push({
+    const fileRefPart: Extract<AgentModelContentPart, { type: "file_ref" }> = {
       type: "file_ref",
       file_ref: {
         name: artifact.name,
@@ -231,9 +281,36 @@ async function buildArtifactFollowupMessage(
         storedPath: artifact.storedPath,
         contentHash: artifact.contentHash,
       },
+    };
+    if (!supportsFileRefPart(fileRefPart, contentInputs)) {
+      countOmittedFileRefPart(fileRefPart, omitted);
+      continue;
+    }
+    attachedArtifacts.push(artifact);
+    parts.push(fileRefPart);
+  }
+  const textParts: string[] = [];
+  if (attachedArtifacts.length) {
+    textParts.push(summarizeArtifacts(attachedArtifacts));
+  }
+  if (hasOmittedContentInputs(omitted)) {
+    textParts.push(
+      summarizeUnsupportedContentInputs(omitted, options.modelName),
+    );
+  }
+  if (textParts.length) {
+    parts.unshift({
+      type: "text",
+      text: textParts.join("\n\n"),
     });
   }
-  return parts.length > 1
+  if (parts.length === 1 && parts[0].type === "text") {
+    return {
+      role: "user",
+      content: parts[0].text,
+    };
+  }
+  return parts.length
     ? {
         role: "user",
         content: parts,
@@ -246,33 +323,64 @@ function filterFollowupMessageForCapabilities(
   capabilities: AgentModelCapabilities,
   modelName?: string,
 ): AgentModelMessage | null {
-  if (!message || capabilities.multimodal) return message;
+  if (!message) return null;
+  if (message.role === "tool") return message;
   if (typeof message.content === "string") return message;
 
-  const textParts: string[] = [];
-  let omittedImages = 0;
-  let omittedFiles = 0;
+  const contentInputs = resolveCapabilitiesContentInputs(capabilities);
+  const parts: AgentModelContentPart[] = [];
+  const omitted: OmittedContentInputCounts = {
+    images: 0,
+    pdfDocuments: 0,
+    nativeFiles: 0,
+  };
   for (const part of message.content) {
     if (part.type === "text") {
-      if (part.text.trim()) textParts.push(part.text);
+      if (part.text.trim()) parts.push(part);
       continue;
     }
     if (part.type === "image_url") {
-      omittedImages += 1;
+      if (contentInputs.images) {
+        parts.push(part);
+      } else {
+        omitted.images += 1;
+      }
       continue;
     }
-    omittedFiles += 1;
+    if (supportsFileRefPart(part, contentInputs)) {
+      parts.push(part);
+    } else {
+      countOmittedFileRefPart(part, omitted);
+    }
   }
 
-  if (omittedImages || omittedFiles) {
-    textParts.push(
-      summarizeTextOnlyOmittedParts(omittedImages, omittedFiles, modelName),
-    );
+  if (hasOmittedContentInputs(omitted)) {
+    parts.push({
+      type: "text",
+      text: summarizeUnsupportedContentInputs(omitted, modelName),
+    });
   }
-  return {
-    ...message,
-    content: textParts.filter(Boolean).join("\n\n"),
-  };
+
+  const hasNonTextPart = parts.some((part) => part.type !== "text");
+  if (!hasNonTextPart) {
+    return {
+      ...message,
+      content: parts
+        .filter(
+          (part): part is Extract<AgentModelContentPart, { type: "text" }> =>
+            part.type === "text",
+        )
+        .map((part) => part.text)
+        .filter(Boolean)
+        .join("\n\n"),
+    };
+  }
+  return parts.length
+    ? {
+        ...message,
+        content: parts,
+      }
+    : null;
 }
 
 type ToolWorkflowDelivery = {
@@ -716,6 +824,7 @@ export class AgentRuntime {
       resourceContextPlan,
       {
         transcriptMessages: transcriptMessagesForPrompt,
+        contentInputs: resolveCapabilitiesContentInputs(adapterCapabilities),
       },
     )) as AgentModelMessage[];
 
@@ -754,6 +863,8 @@ export class AgentRuntime {
             resourceContextPlan,
             {
               transcriptMessages: transcriptMessagesForPrompt,
+              contentInputs:
+                resolveCapabilitiesContentInputs(adapterCapabilities),
             },
           )) as AgentModelMessage[]),
         );
@@ -1226,7 +1337,8 @@ export class AgentRuntime {
             currentAnswerText,
           })
         : await buildArtifactFollowupMessage(toolResult, {
-            multimodal: adapterCapabilities.multimodal,
+            contentInputs:
+              resolveCapabilitiesContentInputs(adapterCapabilities),
             modelName: request.model,
           });
       const filteredFollowupMessage = filterFollowupMessageForCapabilities(

@@ -202,9 +202,9 @@ describe("chat retry model inputs", function () {
   it("fails PDF retries when retry switches to a text-only model", async function () {
     const textOnlyConfig: EffectiveRequestConfig = {
       ...visionConfig,
-      model: "deepseek-reasoner",
-      modelEntryId: "deepseek-entry",
-      modelProviderLabel: "DeepSeek",
+      model: "local-text-only",
+      modelEntryId: "text-only-entry",
+      modelProviderLabel: "Local text-only",
     };
 
     try {

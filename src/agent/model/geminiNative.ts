@@ -13,7 +13,14 @@ import type {
   ToolSpec,
 } from "../types";
 import type { AgentModelAdapter, AgentStepParams } from "./adapter";
-import { isMultimodalRequestSupported, stringifyMessageContent } from "./messageBuilder";
+import {
+  buildAgentModelCapabilities,
+  mediaContentInputs,
+} from "./contentCapabilities";
+import {
+  isMultimodalRequestSupported,
+  stringifyMessageContent,
+} from "./messageBuilder";
 import {
   createFallbackToolCallId,
   getFetch,
@@ -693,13 +700,15 @@ export class GeminiNativeAgentAdapter implements AgentModelAdapter {
   private systemInstruction: { parts: Array<{ text: string }> } | undefined;
 
   getCapabilities(request: AgentRuntimeRequest): AgentModelCapabilities {
-    return {
+    return buildAgentModelCapabilities({
       streaming: true,
       toolCalls: true,
-      multimodal: isMultimodalRequestSupported(request),
+      contentInputs: mediaContentInputs(isMultimodalRequestSupported(request), {
+        pdfDocuments: true,
+      }),
       fileInputs: false,
       reasoning: true,
-    };
+    });
   }
 
   supportsTools(_request: AgentRuntimeRequest): boolean {

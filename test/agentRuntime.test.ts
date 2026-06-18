@@ -227,8 +227,9 @@ describe("AgentRuntime", function () {
       });
 
       const statusTexts = events
-        .filter((event): event is Extract<AgentEvent, { type: "status" }> =>
-          event.type === "status",
+        .filter(
+          (event): event is Extract<AgentEvent, { type: "status" }> =>
+            event.type === "status",
         )
         .map((event) => event.text);
       assert.includeMembers(statusTexts, [
@@ -541,6 +542,146 @@ describe("AgentRuntime", function () {
     }
   });
 
+  it("passes image artifacts while omitting PDF artifacts for image-only adapters", async function () {
+    const restoreDb = installMockDb();
+    const restoreIOUtils = (
+      globalThis as typeof globalThis & {
+        IOUtils?: { read?: (path: string) => Promise<Uint8Array> };
+        btoa?: (value: string) => string;
+      }
+    ).IOUtils;
+    const restoreBtoa = (
+      globalThis as typeof globalThis & { btoa?: (value: string) => string }
+    ).btoa;
+    const tempDir = mkdtempSync(join(tmpdir(), "llm-zotero-agent-runtime-"));
+    const imagePath = join(tempDir, "page.png");
+    writeFileSync(imagePath, Uint8Array.from([137, 80, 78, 71, 1, 2, 3, 4]));
+    try {
+      (
+        globalThis as typeof globalThis & {
+          IOUtils?: { read?: (path: string) => Promise<Uint8Array> };
+        }
+      ).IOUtils = {
+        read: async (path: string) => new Uint8Array(readFileSync(path)),
+      };
+      (
+        globalThis as typeof globalThis & {
+          btoa?: (value: string) => string;
+        }
+      ).btoa = (value: string) =>
+        Buffer.from(value, "binary").toString("base64");
+
+      const registry = new AgentToolRegistry();
+      registry.register({
+        spec: {
+          name: "prepare_visual_artifacts",
+          description: "prepare visual artifacts",
+          inputSchema: { type: "object" },
+          mutability: "read",
+          requiresConfirmation: false,
+        },
+        validate: () => ({ ok: true, value: {} }),
+        execute: async () => ({
+          content: { pageTexts: [{ pageLabel: "1", text: "Extracted text" }] },
+          artifacts: [
+            {
+              kind: "image" as const,
+              mimeType: "image/png",
+              storedPath: imagePath,
+              pageLabel: "1",
+            },
+            {
+              kind: "file_ref" as const,
+              name: "paper.pdf",
+              mimeType: "application/pdf",
+              storedPath: "/tmp/nonexistent-paper.pdf",
+            },
+          ],
+        }),
+      });
+
+      let stepIndex = 0;
+      let continuationMessages: AgentModelMessage[] = [];
+      const runtime = new AgentRuntime({
+        registry,
+        adapterFactory: () => ({
+          getCapabilities: () => ({
+            streaming: false,
+            toolCalls: true,
+            contentInputs: {
+              images: true,
+              pdfDocuments: false,
+              nativeFiles: false,
+            },
+            multimodal: true,
+            fileInputs: false,
+            reasoning: true,
+          }),
+          supportsTools: () => true,
+          async runStep(params: AgentStepParams): Promise<AgentModelStep> {
+            if (stepIndex === 0) {
+              stepIndex += 1;
+              return {
+                kind: "tool_calls",
+                calls: [
+                  {
+                    id: "call-1",
+                    name: "prepare_visual_artifacts",
+                    arguments: {},
+                  },
+                ],
+                assistantMessage: {
+                  role: "assistant",
+                  content: "",
+                  tool_calls: [
+                    {
+                      id: "call-1",
+                      name: "prepare_visual_artifacts",
+                      arguments: {},
+                    },
+                  ],
+                },
+              };
+            }
+            continuationMessages = params.messages;
+            return {
+              kind: "final",
+              text: "done",
+              assistantMessage: { role: "assistant", content: "done" },
+            };
+          },
+        }),
+      });
+
+      await runtime.runTurn({
+        request: {
+          conversationKey: 98,
+          mode: "agent",
+          userText: "inspect the figure",
+          model: "image-capable-chat",
+        },
+      });
+
+      const serialized = JSON.stringify(continuationMessages);
+      assert.include(serialized, "image_url");
+      assert.notInclude(serialized, "file_ref");
+      assert.include(serialized, "PDF/document input");
+      assert.include(serialized, "does not support PDF/document input");
+      assert.include(serialized, "Extracted text");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+      (
+        globalThis as typeof globalThis & {
+          IOUtils?: { read?: (path: string) => Promise<Uint8Array> };
+        }
+      ).IOUtils = restoreIOUtils;
+      (
+        globalThis as typeof globalThis & { btoa?: (value: string) => string }
+      ).btoa = restoreBtoa;
+      restoreDb();
+    }
+  });
+
   it("does not pass image or PDF artifacts to non-multimodal models", async function () {
     const restoreDb = installMockDb();
     try {
@@ -626,14 +767,15 @@ describe("AgentRuntime", function () {
           conversationKey: 99,
           mode: "agent",
           userText: "inspect the figure",
-          model: "deepseek-v4-pro",
+          model: "local-text-only",
         },
       });
 
       const serialized = JSON.stringify(continuationMessages);
       assert.notInclude(serialized, "image_url");
       assert.notInclude(serialized, "file_ref");
-      assert.include(serialized, "does not support image or file input");
+      assert.include(serialized, "does not support image input");
+      assert.include(serialized, "PDF/document input");
       assert.include(serialized, "Extracted text");
     } finally {
       restoreDb();
@@ -1862,10 +2004,7 @@ describe("AgentRuntime", function () {
           fullTextPaperCount: 0,
         },
       );
-      assert.include(
-        secondInitialUserMessage,
-        "Zotero context for this turn:",
-      );
+      assert.include(secondInitialUserMessage, "Zotero context for this turn:");
       assert.include(secondInitialUserMessage, "Paper 1:");
       assert.include(secondInitialUserMessage, 'title="Lifecycle Paper"');
 

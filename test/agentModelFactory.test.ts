@@ -1,5 +1,8 @@
 import { assert } from "chai";
-import { createAgentModelAdapter, resolveRequestProviderProtocol } from "../src/agent/model/factory";
+import {
+  createAgentModelAdapter,
+  resolveRequestProviderProtocol,
+} from "../src/agent/model/factory";
 import type { AgentRuntimeRequest } from "../src/agent/types";
 
 describe("agent model factory", function () {
@@ -99,7 +102,67 @@ describe("agent model factory", function () {
     );
   });
 
-  it("exposes file-input capability only on responses_api", function () {
+  it("exposes content-input capabilities by transport", function () {
+    const responsesAdapter = createAgentModelAdapter(
+      makeRequest({
+        providerProtocol: "responses_api",
+        apiBase: "https://api.openai.com/v1/responses",
+      }),
+    );
+    const anthropicAdapter = createAgentModelAdapter(
+      makeRequest({
+        providerProtocol: "anthropic_messages",
+        apiBase: "https://api.anthropic.com/v1",
+      }),
+    );
+    const chatCompatAdapter = createAgentModelAdapter(
+      makeRequest({
+        providerProtocol: "openai_chat_compat",
+        apiBase: "https://api.deepseek.com/v1",
+        model: "deepseek-v4-pro",
+      }),
+    );
+    const responsesCapabilities = responsesAdapter.getCapabilities(
+      makeRequest({
+        providerProtocol: "responses_api",
+        apiBase: "https://api.openai.com/v1/responses",
+      }),
+    );
+    const anthropicCapabilities = anthropicAdapter.getCapabilities(
+      makeRequest({
+        providerProtocol: "anthropic_messages",
+        apiBase: "https://api.anthropic.com/v1",
+      }),
+    );
+    const chatCompatCapabilities = chatCompatAdapter.getCapabilities(
+      makeRequest({
+        providerProtocol: "openai_chat_compat",
+        apiBase: "https://api.deepseek.com/v1",
+        model: "deepseek-v4-pro",
+      }),
+    );
+
+    assert.deepEqual(responsesCapabilities.contentInputs, {
+      images: true,
+      pdfDocuments: true,
+      nativeFiles: true,
+    });
+    assert.isTrue(responsesCapabilities.fileInputs);
+    assert.deepEqual(anthropicCapabilities.contentInputs, {
+      images: true,
+      pdfDocuments: true,
+      nativeFiles: false,
+    });
+    assert.isFalse(anthropicCapabilities.fileInputs);
+    assert.deepEqual(chatCompatCapabilities.contentInputs, {
+      images: false,
+      pdfDocuments: false,
+      nativeFiles: false,
+    });
+    assert.isFalse(chatCompatCapabilities.fileInputs);
+  });
+
+  it("keeps file-input capability limited to native file transports", function () {
     const responsesAdapter = createAgentModelAdapter(
       makeRequest({
         providerProtocol: "responses_api",

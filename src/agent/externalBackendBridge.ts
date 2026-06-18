@@ -38,6 +38,7 @@ import {
   finishAgentRun,
 } from "./store/traceStore";
 import { AGENT_PERSONA_INSTRUCTIONS } from "./model/agentPersona";
+import { buildAgentModelCapabilities } from "./model/contentCapabilities";
 import type {
   ActionConfirmationMode,
   ActionProgressEvent,
@@ -2274,13 +2275,17 @@ export function createExternalBackendBridgeRuntime(options: {
       if (!bridgeUrl || !isClaudeBridgeActive()) {
         return coreRuntime.getCapabilities(request);
       }
-      return {
+      return buildAgentModelCapabilities({
         streaming: true,
         toolCalls: true,
-        multimodal: true,
+        contentInputs: {
+          images: true,
+          pdfDocuments: true,
+          nativeFiles: true,
+        },
         fileInputs: true,
         reasoning: true,
-      };
+      });
     },
     listExternalActionsSync: () => {
       if (!normalizeBaseUrl(getBridgeUrl()) || !isClaudeBridgeActive()) {

@@ -262,6 +262,22 @@ describe("llmClient prepareChatRequest", function () {
     assert.notInclude(JSON.stringify(prepared.messages), "image_url");
   });
 
+  it("strips image content from explicit text-only chat requests", function () {
+    const prepared = prepareChatRequest({
+      prompt: "Describe this image.",
+      images: ["data:image/png;base64,AAAA"],
+      model: "local-text-only",
+      apiBase: "https://api.example.test/v1",
+    });
+
+    const lastMessage = prepared.messages[prepared.messages.length - 1];
+    assert.equal(lastMessage.role, "user");
+    assert.isString(lastMessage.content);
+    assert.include(String(lastMessage.content), "Describe this image.");
+    assert.include(String(lastMessage.content), "image input");
+    assert.notInclude(JSON.stringify(prepared.messages), "image_url");
+  });
+
   it("keeps Anthropic Messages thinking off by default and preserves temperature", async function () {
     let capturedBody: Record<string, unknown> | null = null;
     mockFetch(async (_url, init) => {

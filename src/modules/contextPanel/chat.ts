@@ -3429,7 +3429,7 @@ async function buildContextPlanForRequest(params: {
     .join("\n\n");
 
   // Extract MinerU figure images from the context (if applicable).
-  // Skip for text-only models (e.g. DeepSeek) that reject image_url content.
+  // Skip only for models explicitly treated as text-only.
   const effectiveModel = params.effectiveRequestConfig.model || "";
   let mineruImages: string[] = [];
   if (planContext && !isTextOnlyModel(effectiveModel)) {
@@ -6150,7 +6150,7 @@ export async function retryLatestAssistantResponse(
       return;
     }
 
-    // Text-only models (e.g. DeepSeek) reject image_url content — drop all images.
+    // Text-only models reject image_url content, so drop all images.
     const allImages = isTextOnlyModel(effectiveRequestConfig.model || "")
       ? []
       : [...(retryScreenshotImages || []), ...(contextPlan.mineruImages || [])];
@@ -8272,7 +8272,7 @@ export async function sendQuestion(
       return;
     }
 
-    // Text-only models (e.g. DeepSeek) reject image_url content — drop all images.
+    // Text-only models reject image_url content, so drop all images.
     const allSendImages = isTextOnlyModel(effectiveRequestConfig.model || "")
       ? []
       : [...(images || []), ...(contextPlan.mineruImages || [])];

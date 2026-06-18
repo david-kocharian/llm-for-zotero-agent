@@ -13,16 +13,19 @@ import {
   resolveProviderTransportEndpoint,
 } from "../../utils/providerTransport";
 import type {
+  AgentContentInputCapabilities,
   AgentModelCapabilities,
   AgentModelMessage,
+  AgentModelContentPart,
   AgentModelStep,
   AgentRuntimeRequest,
   AgentToolCall,
   ToolSpec,
 } from "../types";
 import type { AgentModelAdapter, AgentStepParams } from "./adapter";
+import { buildAgentModelCapabilities } from "./contentCapabilities";
 import {
-  isMultimodalRequestSupported,
+  resolveRequestContentInputs,
   stringifyMessageContent,
 } from "./messageBuilder";
 import {
@@ -31,7 +34,6 @@ import {
   groupToolContinuationMessages,
 } from "./shared";
 import { resolveContentParts } from "./adapterUtils";
-import { isTextOnlyModel } from "../../providers";
 import type { AnthropicPromptCacheControl } from "../../contextCache/manager";
 
 type AnthropicContentBlock = {
@@ -66,7 +68,7 @@ type AnthropicStreamBlockState = {
 };
 
 type AnthropicBuildOptions = {
-  allowMedia: boolean;
+  contentInputs: AgentContentInputCapabilities;
   modelName?: string;
 };
 
@@ -275,40 +277,61 @@ async function buildAnthropicParts(
   message: AgentModelMessage,
   options: AnthropicBuildOptions,
 ): Promise<AnthropicContentBlock[]> {
-  if (!options.allowMedia) {
-    const target = (options.modelName || "The selected model").trim();
-    if (typeof message.content === "string") {
-      return [{ type: "text", text: message.content }];
-    }
-    const textParts: string[] = [];
-    let imageCount = 0;
-    let fileCount = 0;
-    for (const part of message.content) {
-      if (part.type === "text") {
-        if (part.text.trim()) textParts.push(part.text);
-        continue;
-      }
-      if (part.type === "image_url") {
-        imageCount += 1;
-      } else {
-        fileCount += 1;
-      }
-    }
-    const omitted: string[] = [];
-    if (imageCount) {
-      omitted.push(`${imageCount} image${imageCount === 1 ? "" : "s"}`);
-    }
-    if (fileCount) {
-      omitted.push(`${fileCount} file${fileCount === 1 ? "" : "s"}`);
-    }
-    if (omitted.length) {
-      textParts.push(
-        `[${omitted.join(" and ")} omitted because ${target} does not support image or document input.]`,
-      );
-    }
-    return [{ type: "text", text: textParts.join("\n\n") }];
+  if (message.role === "tool") {
+    return [{ type: "text", text: message.content }];
   }
-  const resolved = await resolveContentParts(message);
+  if (typeof message.content === "string") {
+    return [{ type: "text", text: message.content }];
+  }
+
+  const filteredContent: AgentModelContentPart[] = [];
+  let omittedImages = 0;
+  let omittedFiles = 0;
+  for (const part of message.content) {
+    if (part.type === "text") {
+      if (part.text.trim()) filteredContent.push(part);
+      continue;
+    }
+    if (part.type === "image_url") {
+      if (options.contentInputs.images) {
+        filteredContent.push(part);
+      } else {
+        omittedImages += 1;
+      }
+      continue;
+    }
+    if (
+      options.contentInputs.pdfDocuments ||
+      options.contentInputs.nativeFiles
+    ) {
+      filteredContent.push(part);
+    } else {
+      omittedFiles += 1;
+    }
+  }
+
+  const omitted: string[] = [];
+  const unsupported: string[] = [];
+  if (omittedImages) {
+    omitted.push(`${omittedImages} image${omittedImages === 1 ? "" : "s"}`);
+    unsupported.push("image input");
+  }
+  if (omittedFiles) {
+    omitted.push(`${omittedFiles} file${omittedFiles === 1 ? "" : "s"}`);
+    unsupported.push("PDF/document input");
+  }
+  if (omitted.length) {
+    const target = (options.modelName || "The selected model").trim();
+    filteredContent.push({
+      type: "text",
+      text: `[${omitted.join(" and ")} omitted because ${target} does not support ${unsupported.join(" or ")}.]`,
+    });
+  }
+
+  const resolved = await resolveContentParts({
+    ...message,
+    content: filteredContent,
+  });
   return resolved.map((part): AnthropicContentBlock => {
     switch (part.type) {
       case "text":
@@ -390,7 +413,9 @@ async function buildInitialAnthropicMessages(
       );
       const toolCalls =
         Array.isArray(message.tool_calls) && followingToolResultIds.size
-          ? message.tool_calls.filter((call) => followingToolResultIds.has(call.id))
+          ? message.tool_calls.filter((call) =>
+              followingToolResultIds.has(call.id),
+            )
           : [];
       const content = [
         ...(await buildAnthropicParts(message, options)),
@@ -705,13 +730,13 @@ export class AnthropicMessagesAgentAdapter implements AgentModelAdapter {
   private systemBlocks: AnthropicSystemBlock[] | undefined;
 
   getCapabilities(request: AgentRuntimeRequest): AgentModelCapabilities {
-    return {
+    return buildAgentModelCapabilities({
       streaming: true,
       toolCalls: true,
-      multimodal: isMultimodalRequestSupported(request),
+      contentInputs: resolveRequestContentInputs(request),
       fileInputs: false,
       reasoning: true,
-    };
+    });
   }
 
   supportsTools(_request: AgentRuntimeRequest): boolean {
@@ -726,7 +751,7 @@ export class AnthropicMessagesAgentAdapter implements AgentModelAdapter {
   async runStep(params: AgentStepParams): Promise<AgentModelStep> {
     const request = params.request;
     const buildOptions = {
-      allowMedia: !isTextOnlyModel(request.model || ""),
+      contentInputs: resolveRequestContentInputs(request),
       modelName: request.model,
     };
     const initial = await buildInitialAnthropicMessages(

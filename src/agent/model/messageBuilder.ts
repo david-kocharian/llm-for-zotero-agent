@@ -1,4 +1,5 @@
 import type {
+  AgentContentInputCapabilities,
   AgentModelMessage,
   AgentRuntimeRequest,
   AgentToolDefinition,
@@ -27,11 +28,15 @@ import {
 } from "../context/resourceContextPlan";
 import { buildAgentCoverageContextBlock } from "../context/coverageLedger";
 import { buildVisibleTurnContextBlock } from "../context/turnContextEnvelope";
+import {
+  hasAgentContentInputs,
+  normalizeAgentContentInputs,
+} from "./contentCapabilities";
 
 export function isMultimodalRequestSupported(
   request: AgentRuntimeRequest,
 ): boolean {
-  return resolveRequestProviderCapabilities(request).multimodal;
+  return hasAgentContentInputs(resolveRequestContentInputs(request));
 }
 
 function resolveRequestProviderCapabilities(
@@ -43,6 +48,17 @@ function resolveRequestProviderCapabilities(
     authMode: request.authMode,
     apiBase: request.apiBase,
   });
+}
+
+export function resolveRequestContentInputs(
+  request: AgentRuntimeRequest,
+): AgentContentInputCapabilities {
+  const capabilities = resolveRequestProviderCapabilities(request);
+  return {
+    images: capabilities.images,
+    pdfDocuments: capabilities.pdf === "native",
+    nativeFiles: false,
+  };
 }
 
 export function stringifyMessageContent(
@@ -101,6 +117,7 @@ function buildFullUserMessage(
     coverageBlock?: string;
     memoryBlock?: string;
     turnGuidanceBlock?: string;
+    contentInputs?: AgentContentInputCapabilities;
   } = {},
 ): AgentModelMessage {
   const contextLines: string[] = [];
@@ -183,8 +200,31 @@ function buildFullUserMessage(
   const screenshots = Array.isArray(request.screenshots)
     ? request.screenshots.filter((entry) => Boolean(entry))
     : [];
-  const hasInlineMedia = screenshots.length > 0 || pdfAttachments.length > 0;
-  if (!hasInlineMedia || !isMultimodalRequestSupported(request)) {
+  const contentInputs = normalizeAgentContentInputs(
+    options.contentInputs || resolveRequestContentInputs(request),
+  );
+  const imageParts = contentInputs.images
+    ? screenshots.map((url) => ({
+        type: "image_url" as const,
+        image_url: {
+          url,
+          detail: "high" as const,
+        },
+      }))
+    : [];
+  const pdfParts =
+    contentInputs.pdfDocuments || contentInputs.nativeFiles
+      ? pdfAttachments.map((a) => ({
+          type: "file_ref" as const,
+          file_ref: {
+            name: a.name,
+            mimeType: a.mimeType || "application/pdf",
+            storedPath: a.storedPath as string,
+            contentHash: a.contentHash,
+          },
+        }))
+      : [];
+  if (!imageParts.length && !pdfParts.length) {
     return {
       role: "user",
       content: promptText,
@@ -197,22 +237,8 @@ function buildFullUserMessage(
         type: "text",
         text: promptText,
       },
-      ...screenshots.map((url) => ({
-        type: "image_url" as const,
-        image_url: {
-          url,
-          detail: "high" as const,
-        },
-      })),
-      ...pdfAttachments.map((a) => ({
-        type: "file_ref" as const,
-        file_ref: {
-          name: a.name,
-          mimeType: a.mimeType || "application/pdf",
-          storedPath: a.storedPath as string,
-          contentHash: a.contentHash,
-        },
-      })),
+      ...imageParts,
+      ...pdfParts,
     ],
   };
 }
@@ -224,6 +250,7 @@ function buildUserMessage(
     coverageBlock?: string;
     memoryBlock?: string;
     turnGuidanceBlock?: string;
+    contentInputs?: AgentContentInputCapabilities;
   } = {},
 ): AgentModelMessage {
   return buildFullUserMessage(request, {
@@ -231,6 +258,7 @@ function buildUserMessage(
     coverageBlock: options.coverageBlock,
     memoryBlock: options.memoryBlock,
     turnGuidanceBlock: options.turnGuidanceBlock,
+    contentInputs: options.contentInputs,
   });
 }
 
@@ -429,7 +457,7 @@ function buildRuntimePlatformSection(): string {
 }
 
 function buildTextOnlyModelInstruction(request: AgentRuntimeRequest): string {
-  if (resolveRequestProviderCapabilities(request).multimodal) return "";
+  if (isMultimodalRequestSupported(request)) return "";
   const modelLabel = (request.model || "selected model").trim();
   return (
     `MODEL LIMITATION: ${modelLabel} is treated as text-only in this plugin. ` +
@@ -446,6 +474,7 @@ export async function buildAgentInitialMessages(
   resourceContextPlan?: AgentResourceContextPlan,
   options: {
     transcriptMessages?: AgentModelMessage[];
+    contentInputs?: AgentContentInputCapabilities;
   } = {},
 ): Promise<AgentModelMessage[]> {
   const memoryBlock = await buildAgentMemoryBlock(request.conversationKey);
@@ -517,6 +546,7 @@ export async function buildAgentInitialMessages(
       coverageBlock,
       memoryBlock,
       turnGuidanceBlock,
+      contentInputs: options.contentInputs,
     }),
   ];
 }

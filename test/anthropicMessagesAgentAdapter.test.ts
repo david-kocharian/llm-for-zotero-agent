@@ -1,4 +1,7 @@
 import { assert } from "chai";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { AnthropicMessagesAgentAdapter } from "../src/agent/model/anthropicMessages";
 import type { AgentRuntimeRequest, ToolSpec } from "../src/agent/types";
 
@@ -772,7 +775,221 @@ describe("AnthropicMessagesAgentAdapter", function () {
     assert.equal(requestBodies[2]?.temperature, 0.4);
   });
 
-  it("does not send image or document blocks for DeepSeek text-only models", async function () {
+  it("omits image blocks and PDF documents for DeepSeek Anthropic-compatible models", async function () {
+    const adapter = new AnthropicMessagesAgentAdapter();
+    let capturedBody: Record<string, unknown> | null = null;
+    const restoreIOUtils = (
+      globalThis as typeof globalThis & {
+        IOUtils?: { read?: (path: string) => Promise<Uint8Array> };
+      }
+    ).IOUtils;
+    const restoreBtoa = (
+      globalThis as typeof globalThis & { btoa?: (value: string) => string }
+    ).btoa;
+    const tempDir = mkdtempSync(join(tmpdir(), "llm-zotero-anthropic-"));
+    const pdfPath = join(tempDir, "paper.pdf");
+    writeFileSync(pdfPath, Uint8Array.from([37, 80, 68, 70, 45, 49, 46, 55]));
+    (
+      globalThis as typeof globalThis & {
+        ztoolkit: { getGlobal: (name: string) => unknown };
+      }
+    ).ztoolkit = {
+      getGlobal: (name: string) => {
+        if (name !== "fetch") return undefined;
+        return async (_url: string, init?: RequestInit) => {
+          capturedBody = JSON.parse(String(init?.body || "{}")) as Record<
+            string,
+            unknown
+          >;
+          return {
+            ok: true,
+            status: 200,
+            statusText: "OK",
+            body: undefined,
+            json: async () => ({
+              content: [{ type: "text", text: "Done" }],
+            }),
+            text: async () => "",
+          };
+        };
+      },
+    };
+    (
+      globalThis as typeof globalThis & {
+        IOUtils?: { read?: (path: string) => Promise<Uint8Array> };
+      }
+    ).IOUtils = {
+      read: async (path: string) => new Uint8Array(readFileSync(path)),
+    };
+    (
+      globalThis as typeof globalThis & { btoa?: (value: string) => string }
+    ).btoa = (value: string) => Buffer.from(value, "binary").toString("base64");
+
+    try {
+      await adapter.runStep({
+        request: makeRequest({
+          model: "deepseek-v4-flash",
+          apiBase: "https://api.deepseek.com/anthropic",
+        }),
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "Inspect the image and PDF." },
+              {
+                type: "image_url",
+                image_url: { url: "data:image/png;base64,AAAA" },
+              },
+              {
+                type: "file_ref",
+                file_ref: {
+                  name: "paper.pdf",
+                  mimeType: "application/pdf",
+                  storedPath: pdfPath,
+                },
+              },
+            ],
+          },
+        ],
+        tools,
+      });
+
+      const capabilities = adapter.getCapabilities(
+        makeRequest({
+          model: "deepseek-v4-flash",
+          apiBase: "https://api.deepseek.com/anthropic",
+        }),
+      );
+      const serialized = JSON.stringify(capturedBody);
+      assert.isFalse(capabilities.fileInputs);
+      assert.deepEqual(capabilities.contentInputs, {
+        images: false,
+        pdfDocuments: false,
+        nativeFiles: false,
+      });
+      assert.notInclude(serialized, '"type":"image"');
+      assert.notInclude(serialized, '"media_type":"image/png"');
+      assert.notInclude(serialized, '"type":"document"');
+      assert.notInclude(serialized, '"media_type":"application/pdf"');
+      assert.include(serialized, "Inspect the image and PDF.");
+      assert.include(
+        serialized,
+        "does not support image input or PDF/document input",
+      );
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+      (
+        globalThis as typeof globalThis & {
+          IOUtils?: { read?: (path: string) => Promise<Uint8Array> };
+        }
+      ).IOUtils = restoreIOUtils;
+      (
+        globalThis as typeof globalThis & { btoa?: (value: string) => string }
+      ).btoa = restoreBtoa;
+    }
+  });
+
+  it("passes PDF document blocks for native Anthropic Messages while fileInputs is false", async function () {
+    const adapter = new AnthropicMessagesAgentAdapter();
+    let capturedBody: Record<string, unknown> | null = null;
+    const restoreIOUtils = (
+      globalThis as typeof globalThis & {
+        IOUtils?: { read?: (path: string) => Promise<Uint8Array> };
+      }
+    ).IOUtils;
+    const restoreBtoa = (
+      globalThis as typeof globalThis & { btoa?: (value: string) => string }
+    ).btoa;
+    const tempDir = mkdtempSync(join(tmpdir(), "llm-zotero-anthropic-"));
+    const pdfPath = join(tempDir, "paper.pdf");
+    writeFileSync(pdfPath, Uint8Array.from([37, 80, 68, 70, 45, 49, 46, 55]));
+    (
+      globalThis as typeof globalThis & {
+        ztoolkit: { getGlobal: (name: string) => unknown };
+      }
+    ).ztoolkit = {
+      getGlobal: (name: string) => {
+        if (name !== "fetch") return undefined;
+        return async (_url: string, init?: RequestInit) => {
+          capturedBody = JSON.parse(String(init?.body || "{}")) as Record<
+            string,
+            unknown
+          >;
+          return {
+            ok: true,
+            status: 200,
+            statusText: "OK",
+            body: undefined,
+            json: async () => ({
+              content: [{ type: "text", text: "Done" }],
+            }),
+            text: async () => "",
+          };
+        };
+      },
+    };
+    (
+      globalThis as typeof globalThis & {
+        IOUtils?: { read?: (path: string) => Promise<Uint8Array> };
+      }
+    ).IOUtils = {
+      read: async (path: string) => new Uint8Array(readFileSync(path)),
+    };
+    (
+      globalThis as typeof globalThis & { btoa?: (value: string) => string }
+    ).btoa = (value: string) => Buffer.from(value, "binary").toString("base64");
+
+    try {
+      const request = makeRequest({
+        model: "claude-sonnet-4-5",
+        apiBase: "https://api.anthropic.com/v1",
+      });
+      await adapter.runStep({
+        request,
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "Read this PDF." },
+              {
+                type: "file_ref",
+                file_ref: {
+                  name: "paper.pdf",
+                  mimeType: "application/pdf",
+                  storedPath: pdfPath,
+                },
+              },
+            ],
+          },
+        ],
+        tools,
+      });
+
+      const capabilities = adapter.getCapabilities(request);
+      const serialized = JSON.stringify(capturedBody);
+      assert.isFalse(capabilities.fileInputs);
+      assert.deepEqual(capabilities.contentInputs, {
+        images: true,
+        pdfDocuments: true,
+        nativeFiles: false,
+      });
+      assert.include(serialized, '"type":"document"');
+      assert.include(serialized, '"media_type":"application/pdf"');
+      assert.notInclude(serialized, "does not support PDF/document input");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+      (
+        globalThis as typeof globalThis & {
+          IOUtils?: { read?: (path: string) => Promise<Uint8Array> };
+        }
+      ).IOUtils = restoreIOUtils;
+      (
+        globalThis as typeof globalThis & { btoa?: (value: string) => string }
+      ).btoa = restoreBtoa;
+    }
+  });
+
+  it("does not send image or document blocks for explicit text-only models", async function () {
     const adapter = new AnthropicMessagesAgentAdapter();
     let capturedBody: Record<string, unknown> | null = null;
     (
@@ -803,8 +1020,8 @@ describe("AnthropicMessagesAgentAdapter", function () {
 
     await adapter.runStep({
       request: makeRequest({
-        model: "deepseek-v4-flash",
-        apiBase: "https://api.deepseek.com/anthropic",
+        model: "local-text-only",
+        apiBase: "https://api.example.test/anthropic",
       }),
       messages: [
         {
@@ -833,6 +1050,9 @@ describe("AnthropicMessagesAgentAdapter", function () {
     assert.notInclude(serialized, '"type":"image"');
     assert.notInclude(serialized, '"type":"document"');
     assert.include(serialized, "Use extracted text.");
-    assert.include(serialized, "does not support image or document input");
+    assert.include(
+      serialized,
+      "does not support image input or PDF/document input",
+    );
   });
 });

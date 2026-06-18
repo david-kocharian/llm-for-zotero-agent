@@ -894,4 +894,78 @@ describe("agent resource context plan", function () {
     if (imagePart?.type !== "image_url") return;
     assert.equal(imagePart.image_url.detail, "high");
   });
+
+  it("keeps screenshots while omitting PDF refs for image-only content inputs", async function () {
+    const messages = await buildAgentInitialMessages(
+      request({
+        model: "image-capable-chat",
+        screenshots: ["data:image/png;base64,AAAA"],
+        attachments: [
+          {
+            id: "pdf-1",
+            name: "paper.pdf",
+            mimeType: "application/pdf",
+            sizeBytes: 10,
+            category: "pdf",
+            storedPath: "/tmp/paper.pdf",
+          },
+        ],
+      }),
+      [],
+      [],
+      undefined,
+      {
+        contentInputs: {
+          images: true,
+          pdfDocuments: false,
+          nativeFiles: false,
+        },
+      },
+    );
+    const userMessage = messages[messages.length - 1];
+    assert.isArray(userMessage.content);
+    if (!Array.isArray(userMessage.content)) return;
+    assert.isTrue(
+      userMessage.content.some((part) => part.type === "image_url"),
+    );
+    assert.isFalse(
+      userMessage.content.some((part) => part.type === "file_ref"),
+    );
+  });
+
+  it("keeps PDF refs while omitting screenshots for PDF-document content inputs", async function () {
+    const messages = await buildAgentInitialMessages(
+      request({
+        model: "claude-sonnet-4-5",
+        screenshots: ["data:image/png;base64,AAAA"],
+        attachments: [
+          {
+            id: "pdf-1",
+            name: "paper.pdf",
+            mimeType: "application/pdf",
+            sizeBytes: 10,
+            category: "pdf",
+            storedPath: "/tmp/paper.pdf",
+          },
+        ],
+      }),
+      [],
+      [],
+      undefined,
+      {
+        contentInputs: {
+          images: false,
+          pdfDocuments: true,
+          nativeFiles: false,
+        },
+      },
+    );
+    const userMessage = messages[messages.length - 1];
+    assert.isArray(userMessage.content);
+    if (!Array.isArray(userMessage.content)) return;
+    assert.isFalse(
+      userMessage.content.some((part) => part.type === "image_url"),
+    );
+    assert.isTrue(userMessage.content.some((part) => part.type === "file_ref"));
+  });
 });
