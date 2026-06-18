@@ -1,7 +1,7 @@
 import { readMineruImageAsBase64 } from "./mineruCache";
 
 const MD_IMAGE_PATTERN = /!\[([^\]]*)\]\(([^)]+)\)/g;
-const MAX_MINERU_CONTEXT_IMAGES = 5;
+export const MAX_MINERU_CONTEXT_IMAGES = 20;
 
 export type MineruImageRef = {
   alt: string;

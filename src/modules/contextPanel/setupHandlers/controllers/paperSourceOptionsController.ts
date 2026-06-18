@@ -42,6 +42,20 @@ export type PaperSourceOption = {
   hideTextSource?: boolean;
 };
 
+export function canRevealMineruCacheForSourceOption(
+  option: Pick<
+    PaperSourceOption,
+    "mode" | "disabledReason" | "mineruState" | "mineruAction"
+  >,
+): boolean {
+  return (
+    option.mode === "mineru" &&
+    !option.disabledReason &&
+    option.mineruState === "cached" &&
+    option.mineruAction === "select"
+  );
+}
+
 export type BuildPaperSourceOptionsParams = {
   paperContext: PaperContextRef;
   getItemById: (itemId: number) => Zotero.Item | null | undefined;

@@ -200,7 +200,11 @@ import {
   setLastUsedReasoningLevelForProvider,
 } from "./prefHelpers";
 import { resolveMultiContextPlan } from "./multiContextPlanner";
-import { resolveContextImages, buildImageResolver } from "./mineruImages";
+import {
+  MAX_MINERU_CONTEXT_IMAGES,
+  resolveContextImages,
+  buildImageResolver,
+} from "./mineruImages";
 import {
   formatPaperCitationLabel,
   formatPaperSourceLabel,
@@ -3456,14 +3460,14 @@ async function buildContextPlanForRequest(params: {
         }
       }
     }
-    // Resolve images from all MinerU papers (cap total at 5)
+    // Resolve images from all MinerU papers with a shared total cap.
     for (const attachmentId of mineruAttachmentIds) {
-      if (mineruImages.length >= 5) break;
+      if (mineruImages.length >= MAX_MINERU_CONTEXT_IMAGES) break;
       try {
         const images = await resolveContextImages({
           contextText: planContext,
           attachmentId,
-          maxImages: 5 - mineruImages.length,
+          maxImages: MAX_MINERU_CONTEXT_IMAGES - mineruImages.length,
         });
         mineruImages.push(...images);
       } catch (err) {

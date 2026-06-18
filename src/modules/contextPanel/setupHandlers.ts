@@ -1,5 +1,6 @@
 import { createElement } from "../../utils/domHelpers";
 import { t } from "../../utils/i18n";
+import { revealLocalPath } from "../../utils/revealLocalPath";
 import { getAllSkills } from "../../agent/skills";
 import type { AgentSkill } from "../../agent/skills/skillLoader";
 import type { RuntimeModelEntry } from "../../utils/modelProviders";
@@ -405,6 +406,7 @@ import {
 } from "./setupHandlers/controllers/uiSchedulingController";
 import {
   buildPaperSourceOptions as buildPaperSourceOptionsController,
+  canRevealMineruCacheForSourceOption,
   type MineruSourceAction,
   type MineruSourceUiState,
   type PaperSourceOption,
@@ -2497,6 +2499,8 @@ export function setupHandlers(
   };
 
   let paperChipMenu: HTMLDivElement | null = null;
+  let paperChipMineruCacheMenu: HTMLDivElement | null = null;
+  let paperChipMineruCacheMenuTarget: { contextItemId: number } | null = null;
   let paperChipMenuAnchor: HTMLDivElement | null = null;
   let paperChipMenuSticky = false;
   let paperChipMenuTarget: PaperContextRef | null = null;
@@ -2514,7 +2518,14 @@ export function setupHandlers(
     }
     paperChipMenuHideTimer = null;
   };
+  const closePaperChipMineruCacheMenu = () => {
+    if (paperChipMineruCacheMenu) {
+      paperChipMineruCacheMenu.style.display = "none";
+    }
+    paperChipMineruCacheMenuTarget = null;
+  };
   const closePaperChipMenu = () => {
+    closePaperChipMineruCacheMenu();
     clearPaperChipMenuHideTimer();
     if (paperChipMenu) {
       paperChipMenu.style.display = "none";
@@ -2582,6 +2593,7 @@ export function setupHandlers(
       mineruState?: MineruSourceUiState;
       mineruAction?: MineruSourceAction;
       mineruActionTitle?: string;
+      mineruCacheReveal?: boolean;
     },
   ): HTMLButtonElement => {
     const card = createElement(
@@ -2611,6 +2623,9 @@ export function setupHandlers(
       if (options.mineruActionTitle) {
         card.title = options.mineruActionTitle;
       }
+    }
+    if (options?.mineruCacheReveal) {
+      card.dataset.mineruCacheReveal = "true";
     }
     if (options?.disabledReason) {
       card.disabled = true;
@@ -2829,6 +2844,152 @@ export function setupHandlers(
     refreshOpenPaperChipMenu();
   };
 
+  const resolvePaperChipMenuSourceOptionFromCard = (
+    card: HTMLButtonElement,
+  ): PaperSourceOption | null => {
+    if (!paperChipMenuTarget) return null;
+    const mode = card.dataset.sourceMode as PaperContentSourceMode | "";
+    const contextItemId = Number.parseInt(card.dataset.contextItemId || "", 10);
+    const paperItemId = Number.parseInt(card.dataset.paperItemId || "", 10);
+    if (!mode || !Number.isFinite(contextItemId) || contextItemId <= 0) {
+      return null;
+    }
+    return (
+      buildPaperSourceOptions(paperChipMenuTarget).find(
+        (candidate) =>
+          candidate.mode === mode &&
+          candidate.paperContext.contextItemId === contextItemId &&
+          candidate.paperContext.itemId === paperItemId,
+      ) || null
+    );
+  };
+
+  const handleShowMineruCacheInFileSystem = async (): Promise<void> => {
+    const target = paperChipMineruCacheMenuTarget;
+    closePaperChipMineruCacheMenu();
+    if (!target) return;
+
+    const attachment = Zotero.Items.get(target.contextItemId) || null;
+    if (!attachment) {
+      if (status) {
+        setStatus(status, t("Could not find this paper attachment."), "error");
+      }
+      return;
+    }
+
+    try {
+      const { ensureMineruCacheDirForAttachment } =
+        await import("./mineruSync");
+      const cacheDir = await ensureMineruCacheDirForAttachment(attachment);
+      if (!cacheDir) {
+        if (status) {
+          setStatus(
+            status,
+            t("MinerU cache is not available in the file system."),
+            "error",
+          );
+        }
+        return;
+      }
+      if (!revealLocalPath(cacheDir)) {
+        if (status) {
+          setStatus(
+            status,
+            t("Could not show MinerU cache in file system."),
+            "error",
+          );
+        }
+        return;
+      }
+      if (status) {
+        setStatus(status, t("Showing MinerU cache in file system."), "ready");
+      }
+    } catch (error) {
+      ztoolkit.log("LLM: Failed to show MinerU cache folder", error);
+      if (status) {
+        setStatus(
+          status,
+          t("Could not show MinerU cache in file system."),
+          "error",
+        );
+      }
+    }
+  };
+
+  const ensurePaperChipMineruCacheMenu = (): HTMLDivElement | null => {
+    if (paperChipMineruCacheMenu?.isConnected) {
+      return paperChipMineruCacheMenu;
+    }
+    const ownerDoc = body.ownerDocument;
+    if (!ownerDoc) return null;
+    const menu = createElement(
+      ownerDoc,
+      "div",
+      "llm-model-menu llm-paper-chip-cache-menu",
+    );
+    menu.style.display = "none";
+    menu.addEventListener("pointerdown", (event: Event) => {
+      event.stopPropagation();
+    });
+    menu.addEventListener("mousedown", (event: Event) => {
+      event.stopPropagation();
+    });
+    menu.addEventListener("contextmenu", (event: Event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+
+    const showCacheButton = createElement(
+      ownerDoc,
+      "button",
+      "llm-paper-chip-cache-menu-item",
+      {
+        type: "button",
+        textContent: t("Show MinerU cache in file system"),
+      },
+    ) as HTMLButtonElement;
+    showCacheButton.addEventListener("click", (event: Event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void handleShowMineruCacheInFileSystem();
+    });
+    menu.appendChild(showCacheButton);
+
+    ownerDoc.addEventListener(
+      "keydown",
+      (event: Event) => {
+        const keyboardEvent = event as KeyboardEvent;
+        if (
+          keyboardEvent.key !== "Escape" ||
+          !paperChipMineruCacheMenu ||
+          paperChipMineruCacheMenu.style.display === "none"
+        ) {
+          return;
+        }
+        closePaperChipMineruCacheMenu();
+        event.preventDefault();
+        event.stopPropagation();
+      },
+      true,
+    );
+
+    body.appendChild(menu);
+    paperChipMineruCacheMenu = menu;
+    return menu;
+  };
+
+  const openPaperChipMineruCacheMenu = (
+    contextItemId: number,
+    clientX: number,
+    clientY: number,
+  ): void => {
+    const menu = ensurePaperChipMineruCacheMenu();
+    if (!menu) return;
+    paperChipMineruCacheMenuTarget = { contextItemId };
+    positionMenuAtPointer(body, menu, clientX, clientY);
+    menu.style.display = "grid";
+  };
+
   const ensurePaperChipMenu = (): HTMLDivElement | null => {
     if (paperChipMenu?.isConnected) return paperChipMenu;
     const ownerDoc = body.ownerDocument;
@@ -2868,21 +3029,7 @@ export function setupHandlers(
         if (status && card.title) setStatus(status, card.title, "error");
         return;
       }
-      const mode = card.dataset.sourceMode as PaperContentSourceMode | "";
-      const contextItemId = Number.parseInt(
-        card.dataset.contextItemId || "",
-        10,
-      );
-      const paperItemId = Number.parseInt(card.dataset.paperItemId || "", 10);
-      if (!mode || !Number.isFinite(contextItemId) || contextItemId <= 0) {
-        return;
-      }
-      const option = buildPaperSourceOptions(paperChipMenuTarget).find(
-        (candidate) =>
-          candidate.mode === mode &&
-          candidate.paperContext.contextItemId === contextItemId &&
-          candidate.paperContext.itemId === paperItemId,
-      );
+      const option = resolvePaperChipMenuSourceOptionFromCard(card);
       if (!option || option.disabledReason) {
         if (status && option?.disabledReason) {
           setStatus(status, option.disabledReason, "error");
@@ -2895,6 +3042,7 @@ export function setupHandlers(
       }
       const currentItem = item;
       if (!currentItem) return;
+      const mode = option.mode;
       const selectedContext = option.paperContext;
       if (paperChipMenuAnchor?.dataset.autoLoaded === "true") {
         const contextItem =
@@ -2942,6 +3090,31 @@ export function setupHandlers(
       if (status) {
         setStatus(status, `${t("Content source:")} ${option.badge}`, "ready");
       }
+    });
+    menu.addEventListener("contextmenu", (e: Event) => {
+      const target = e.target as Element | null;
+      if (!target) return;
+      const card = target.closest(
+        ".llm-paper-chip-menu-row",
+      ) as HTMLButtonElement | null;
+      if (!card || !paperChipMenuTarget) return;
+      const option = resolvePaperChipMenuSourceOptionFromCard(card);
+      if (
+        card.dataset.mineruCacheReveal !== "true" ||
+        !option ||
+        !canRevealMineruCacheForSourceOption(option)
+      ) {
+        closePaperChipMineruCacheMenu();
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      const mouseEvent = e as MouseEvent;
+      openPaperChipMineruCacheMenu(
+        option.paperContext.contextItemId,
+        mouseEvent.clientX,
+        mouseEvent.clientY,
+      );
     });
     body.appendChild(menu);
     paperChipMenu = menu;
@@ -3041,6 +3214,7 @@ export function setupHandlers(
     }
     paperChipMenuSticky = options?.sticky === true;
     paperChipMenuTarget = paperContext;
+    closePaperChipMineruCacheMenu();
     menu.innerHTML = "";
     for (const sourceOption of sourceOptions) {
       menu.appendChild(
@@ -3053,6 +3227,7 @@ export function setupHandlers(
           mineruState: sourceOption.mineruState,
           mineruAction: sourceOption.mineruAction,
           mineruActionTitle: sourceOption.mineruActionTitle,
+          mineruCacheReveal: canRevealMineruCacheForSourceOption(sourceOption),
           selected:
             sourceOption.mode === currentMode &&
             sourceOption.paperContext.contextItemId ===
@@ -6610,8 +6785,10 @@ export function setupHandlers(
     shortcutMenu,
     paperPicker,
     getPaperChipMenu: () => paperChipMenu,
+    getPaperChipMineruCacheMenu: () => paperChipMineruCacheMenu,
     getPaperChipMenuSticky: () => paperChipMenuSticky,
     getPaperChipMenuAnchor: () => paperChipMenuAnchor,
+    closePaperChipMineruCacheMenu,
     closePaperChipMenu,
     getItem: () => item,
     getInlineEditTarget: () => inlineEditTarget,

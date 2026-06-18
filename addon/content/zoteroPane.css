@@ -7241,6 +7241,36 @@ label.llm-search-results-item:hover {
   padding: 6px;
 }
 
+.llm-paper-chip-cache-menu {
+  min-width: 220px;
+  max-width: min(280px, calc(100vw - 24px));
+  gap: 0;
+  padding: 4px;
+}
+
+.llm-paper-chip-cache-menu-item {
+  all: unset;
+  box-sizing: border-box;
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  width: 100%;
+  min-width: 0;
+  padding: 7px 10px;
+  border-radius: 5px;
+  color: var(--fill-primary);
+  font: inherit;
+  font-size: var(--llm-fs-12, 12px);
+  line-height: 1.25;
+  text-align: left;
+  cursor: pointer;
+}
+
+.llm-paper-chip-cache-menu-item:hover,
+.llm-paper-chip-cache-menu-item:focus-visible {
+  background: var(--fill-quinary);
+}
+
 .llm-paper-chip-menu-row .llm-paper-picker-title,
 .llm-paper-chip-menu-row .llm-paper-picker-meta {
   white-space: normal;

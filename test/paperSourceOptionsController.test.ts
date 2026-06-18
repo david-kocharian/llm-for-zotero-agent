@@ -2,6 +2,7 @@ import { assert } from "chai";
 import { describe, it } from "mocha";
 import {
   buildPaperSourceOptions,
+  canRevealMineruCacheForSourceOption,
   filterPaperSourceOptionsForWebChat,
   resolveMineruSourceOptionState,
 } from "../src/modules/contextPanel/setupHandlers/controllers/paperSourceOptionsController";
@@ -282,6 +283,68 @@ describe("paper source MinerU option state", function () {
     assert.deepEqual(
       options.map((option) => option.paperContext.contextItemId),
       [11, 11, 11],
+    );
+  });
+
+  it("exposes cache reveal only for cached selectable MinerU rows", function () {
+    const parent = makeParentItem({ id: 10, attachmentIds: [11] });
+    const pdf = makeAttachment({
+      id: 11,
+      parentID: 10,
+      filename: "paper.pdf",
+      contentType: "application/pdf",
+      title: "paper.pdf",
+    });
+
+    const cachedOptions = buildOptionsForItems({
+      paperContext: { itemId: 10, contextItemId: 11, title: "Parent paper" },
+      items: [parent, pdf],
+      mineruCachedIds: [11],
+    });
+    const cachedMineruOption = cachedOptions.find(
+      (option) => option.mode === "mineru",
+    );
+
+    assert.isOk(cachedMineruOption);
+    assert.isTrue(canRevealMineruCacheForSourceOption(cachedMineruOption!));
+    assert.isFalse(
+      canRevealMineruCacheForSourceOption({
+        mode: "mineru",
+        mineruState: "idle",
+        mineruAction: "start",
+      }),
+    );
+    assert.isFalse(
+      canRevealMineruCacheForSourceOption({
+        mode: "mineru",
+        mineruState: "processing",
+        mineruAction: "pause",
+      }),
+    );
+    assert.isFalse(
+      canRevealMineruCacheForSourceOption({
+        mode: "mineru",
+        mineruState: "failed",
+        mineruAction: "retry",
+      }),
+    );
+    assert.isFalse(
+      canRevealMineruCacheForSourceOption({
+        mode: "mineru",
+        mineruState: "cached",
+        mineruAction: "select",
+        disabledReason: "disabled",
+      }),
+    );
+    assert.isFalse(
+      canRevealMineruCacheForSourceOption({
+        mode: "pdf",
+      }),
+    );
+    assert.isFalse(
+      canRevealMineruCacheForSourceOption({
+        mode: "text",
+      }),
     );
   });
 

@@ -11,6 +11,10 @@ import {
   writeMineruSourceProvenanceForAttachment,
   type MineruCacheFile,
 } from "../src/modules/contextPanel/mineruCache";
+import {
+  MAX_MINERU_CONTEXT_IMAGES,
+  resolveContextImages,
+} from "../src/modules/contextPanel/mineruImages";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -316,6 +320,31 @@ describe("mineruCache", function () {
       await readMineruImageAsBase64(7, "images/a.png"),
       /^data:image\/png;base64,/,
     );
+  });
+
+  it("resolves up to twenty MinerU context images by default", async function () {
+    setupMemoryIO();
+    const imageCount = 25;
+    const markdown = Array.from(
+      { length: imageCount },
+      (_value, index) => `![Figure ${index + 1}](images/fig${index + 1}.png)`,
+    ).join("\n");
+    await writeMineruCacheFiles(77, markdown, [
+      { relativePath: "full.md", data: bytes(markdown) },
+      ...Array.from({ length: imageCount }, (_value, index) => ({
+        relativePath: `images/fig${index + 1}.png`,
+        data: bytes([137, 80, 78, 71, index]),
+      })),
+    ]);
+
+    const images = await resolveContextImages({
+      contextText: markdown,
+      attachmentId: 77,
+    });
+
+    assert.equal(MAX_MINERU_CONTEXT_IMAGES, 20);
+    assert.lengthOf(images, 20);
+    assert.match(images[0], /^data:image\/png;base64,/);
   });
 
   it("writes lightweight parsed source metadata without fingerprinting the PDF", async function () {
