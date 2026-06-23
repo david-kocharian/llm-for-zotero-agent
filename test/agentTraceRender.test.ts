@@ -3582,6 +3582,62 @@ describe("agentTrace render", function () {
     assert.include(rowText, "action:'write'");
   });
 
+  it("redacts content-like arguments for non-file tools", function () {
+    const events: AgentRunEventRecord[] = [
+      {
+        runId: "run-1",
+        seq: 1,
+        eventType: "tool_call",
+        payload: {
+          type: "tool_call",
+          callId: "call-script",
+          name: "zotero_script",
+          args: {
+            mode: "read",
+            script: "const secretScript = 'do not show';",
+            metadata: "public metadata should remain",
+            nested: {
+              body: "nested body should be hidden",
+              source: "source text should be hidden",
+            },
+          },
+        },
+        createdAt: 1,
+      },
+      {
+        runId: "run-1",
+        seq: 2,
+        eventType: "tool_call",
+        payload: {
+          type: "tool_call",
+          callId: "call-bad-script",
+          name: "zotero_script",
+          args: createMalformedToolArgumentsDiagnostic(
+            '{"mode":"read","script":"secret malformed script"',
+          ),
+        },
+        createdAt: 2,
+      },
+    ];
+
+    const { items } = buildAgentTraceDisplayItems(events, null);
+    const actions = items.filter(
+      (item): item is Extract<(typeof items)[number], { type: "action" }> =>
+        item.type === "action",
+    );
+    const detailText = JSON.stringify(actions.map((item) => item.details));
+
+    assert.include(detailText, "[redacted");
+    assert.include(detailText, "Malformed input");
+    assert.include(detailText, "public metadata should remain");
+    assert.notInclude(detailText, "secretScript");
+    assert.notInclude(detailText, "nested body should be hidden");
+    assert.notInclude(detailText, "source text should be hidden");
+    assert.notInclude(detailText, "secret malformed script");
+    assert.notInclude(detailText, "Action field");
+    assert.notInclude(detailText, "Path field");
+  });
+
   it("shows concrete skill names instead of a generic skill label", function () {
     const events: AgentRunEventRecord[] = [
       {

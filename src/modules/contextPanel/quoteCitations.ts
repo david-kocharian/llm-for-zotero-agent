@@ -11,6 +11,7 @@ import {
   normalizeLocatorText,
   type QuoteTextSearchMatch,
 } from "./quoteTextSearch";
+import { stripLeadingCitationSeparators } from "./citationText";
 
 export const QUOTE_CITATION_PATTERN = /\[\[quote:([A-Za-z0-9_-]+)\]\]/g;
 const BLOCKQUOTE_WRAPPED_QUOTE_CITATION_PATTERN =
@@ -906,9 +907,7 @@ function extractLeadingParentheticalLabel(value: string): {
 }
 
 function normalizeCitationRemainder(value: string | undefined): string {
-  return normalizeMultilineText(value || "")
-    .replace(/^[\s,;]+/, "")
-    .trim();
+  return stripLeadingCitationSeparators(normalizeMultilineText(value || ""));
 }
 
 function resolveQuoteCitationForFinalizer(params: {

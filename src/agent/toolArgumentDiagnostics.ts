@@ -1,12 +1,11 @@
-const CONTENT_LIKE_ARGUMENT_KEYS = new Set([
-  "body",
-  "code",
-  "content",
-  "contents",
-  "data",
-  "source",
-  "text",
-]);
+import { CONTENT_LIKE_ARGUMENT_KEYS } from "./toolArgumentFields";
+
+const CONTENT_LIKE_ARGUMENT_KEY_SET = new Set(CONTENT_LIKE_ARGUMENT_KEYS);
+const CONTENT_LIKE_ARGUMENT_KEY_PATTERN = CONTENT_LIKE_ARGUMENT_KEYS.join("|");
+const CONTENT_LIKE_ASSIGNMENT_START_PATTERN = new RegExp(
+  `(?:(["'])(?:${CONTENT_LIKE_ARGUMENT_KEY_PATTERN})\\1|\\b(?:${CONTENT_LIKE_ARGUMENT_KEY_PATTERN})\\b)\\s*:\\s*`,
+  "gi",
+);
 
 export const MALFORMED_TOOL_ARGUMENTS_KEY =
   "__llmForZoteroMalformedToolArguments";
@@ -23,24 +22,22 @@ export function isContentLikeToolArgumentKey(key: string): boolean {
     .trim()
     .replace(/[-_\s]+/g, "")
     .toLowerCase();
-  return CONTENT_LIKE_ARGUMENT_KEYS.has(normalized);
+  return CONTENT_LIKE_ARGUMENT_KEY_SET.has(
+    normalized as (typeof CONTENT_LIKE_ARGUMENT_KEYS)[number],
+  );
 }
 
 function redactContentLikeAssignments(raw: string): string {
-  const contentKeyPattern = Array.from(CONTENT_LIKE_ARGUMENT_KEYS).join("|");
-  const assignmentStartPattern = new RegExp(
-    `(?:"|')?(?:${contentKeyPattern})(?:"|')?\\s*:\\s*`,
-    "gi",
-  );
+  CONTENT_LIKE_ASSIGNMENT_START_PATTERN.lastIndex = 0;
   let redacted = "";
   let cursor = 0;
   let match: RegExpExecArray | null;
-  while ((match = assignmentStartPattern.exec(raw))) {
+  while ((match = CONTENT_LIKE_ASSIGNMENT_START_PATTERN.exec(raw))) {
     const valueStart = match.index + match[0].length;
     const valueEnd = findToolArgumentValueEnd(raw, valueStart);
     redacted += raw.slice(cursor, valueStart) + '"[redacted]"';
     cursor = valueEnd;
-    assignmentStartPattern.lastIndex = valueEnd;
+    CONTENT_LIKE_ASSIGNMENT_START_PATTERN.lastIndex = valueEnd;
   }
   return redacted + raw.slice(cursor);
 }
@@ -59,7 +56,6 @@ function findToolArgumentValueEnd(raw: string, valueStart: number): number {
   }
   for (let index = valueStart; index < raw.length; index += 1) {
     const char = raw[index];
-    if (char === "}" || char === "]") return index;
     if (char === "," && startsNextToolArgumentField(raw, index)) return index;
   }
   return raw.length;

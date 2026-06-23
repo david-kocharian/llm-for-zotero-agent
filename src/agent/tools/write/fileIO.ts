@@ -15,6 +15,7 @@ import {
   parseNotesDirectoryWritePolicy,
 } from "../../../utils/notesDirectoryConfig";
 import { pushUndoEntry } from "../../store/undoStore";
+import { FILE_IO_CONTENT_FIELDS } from "../../toolArgumentFields";
 import { isMalformedToolArgumentsDiagnostic } from "../../toolArgumentDiagnostics";
 
 type FileIOInput = {
@@ -41,8 +42,6 @@ const FILE_IO_PATH_FIELDS = [
   "file_path",
   "filepath",
 ] as const;
-const FILE_IO_CONTENT_FIELDS = ["content", "text", "contents", "data"] as const;
-
 const FILE_IO_READ_ACTIONS = new Set([
   "read",
   "open",

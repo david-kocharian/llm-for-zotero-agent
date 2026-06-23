@@ -2639,7 +2639,7 @@ function buildAgentTraceActionDetails(
 const FILE_IO_TRACE_ACTION_FIELDS = ["action", "mode", "operation", "op"];
 const FILE_IO_TRACE_PATH_FIELDS = ["filePath", "path", "file_path", "filepath"];
 
-function redactFileIoTraceArgs(value: unknown, key = ""): unknown {
+function redactContentLikeTraceArgs(value: unknown, key = ""): unknown {
   if (isContentLikeToolArgumentKey(key)) {
     if (typeof value === "string") {
       return `[redacted ${value.length} chars]`;
@@ -2656,12 +2656,12 @@ function redactFileIoTraceArgs(value: unknown, key = ""): unknown {
     return value;
   }
   if (Array.isArray(value)) {
-    return value.map((entry) => redactFileIoTraceArgs(entry));
+    return value.map((entry) => redactContentLikeTraceArgs(entry));
   }
   if (!isAgentTraceRecord(value)) return value;
   const out: Record<string, unknown> = {};
   for (const [entryKey, entryValue] of Object.entries(value)) {
-    out[entryKey] = redactFileIoTraceArgs(entryValue, entryKey);
+    out[entryKey] = redactContentLikeTraceArgs(entryValue, entryKey);
   }
   return out;
 }
@@ -2683,33 +2683,33 @@ function buildAgentTraceArgsDetails(
   toolName: string | undefined,
   args: unknown,
 ): AgentTraceDetail[] {
-  if (toolName !== "file_io") {
-    const detail = buildJsonTraceDetail("Arguments", args);
-    return detail ? [detail] : [];
-  }
-
   const details: AgentTraceDetail[] = [];
   const record = isAgentTraceRecord(args) ? args : null;
   if (record) {
-    const keys = Object.keys(record);
-    pushTraceDetail(details, "Argument keys", keys.join(", "));
-    const action = readFirstTraceStringField(
-      record,
-      FILE_IO_TRACE_ACTION_FIELDS,
-    );
-    if (action) {
-      pushTraceDetail(details, `Action field (${action.field})`, action.value);
-    }
-    const path = readFirstTraceStringField(record, FILE_IO_TRACE_PATH_FIELDS);
-    if (path) {
-      pushTraceDetail(details, `Path field (${path.field})`, path.value);
+    if (toolName === "file_io") {
+      const keys = Object.keys(record);
+      pushTraceDetail(details, "Argument keys", keys.join(", "));
+      const action = readFirstTraceStringField(
+        record,
+        FILE_IO_TRACE_ACTION_FIELDS,
+      );
+      if (action) {
+        pushTraceDetail(details, `Action field (${action.field})`, action.value);
+      }
+      const path = readFirstTraceStringField(record, FILE_IO_TRACE_PATH_FIELDS);
+      if (path) {
+        pushTraceDetail(details, `Path field (${path.field})`, path.value);
+      }
     }
     if (isMalformedToolArgumentsDiagnostic(record)) {
       pushTraceDetail(details, "Malformed input", record.rawPreview, "code");
     }
   }
 
-  const detail = buildJsonTraceDetail("Arguments", redactFileIoTraceArgs(args));
+  const detail = buildJsonTraceDetail(
+    "Arguments",
+    redactContentLikeTraceArgs(args),
+  );
   if (detail) details.push(detail);
   return dedupeAgentTraceDetails(details);
 }

@@ -19,6 +19,7 @@ import {
   INLINE_CITATION_SKIP_SELECTOR,
   type AssistantCitationPaperCandidate,
 } from "../src/modules/contextPanel/assistantCitationLinks";
+import { stripLeadingCitationSeparators } from "../src/modules/contextPanel/citationText";
 import type { PaperContextRef } from "../src/modules/contextPanel/types";
 
 const testDir = dirname(fileURLToPath(import.meta.url));
@@ -722,6 +723,13 @@ describe("assistantCitationLinks", function () {
     assert.equal(
       extracted?.extractedCitation.sourceLabel,
       "(Climer et al., 2025)",
+    );
+  });
+
+  it("uses the shared citation separator helper", function () {
+    assert.equal(
+      stripLeadingCitationSeparators("; with an explanatory continuation."),
+      "with an explanatory continuation.",
     );
   });
 

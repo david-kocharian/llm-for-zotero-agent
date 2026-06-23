@@ -14,6 +14,7 @@ import {
   replaceQuoteCitationPlaceholdersForMarkdown,
   sanitizeInvalidStructuredSourceMarkers,
 } from "../src/modules/contextPanel/quoteCitations";
+import { stripLeadingCitationSeparators } from "../src/modules/contextPanel/citationText";
 import { renderMarkdown } from "../src/utils/markdown";
 
 describe("quoteCitations", function () {
@@ -625,6 +626,13 @@ describe("quoteCitations", function () {
       "And this explains why learning succeeded.",
     );
     assert.notInclude(finalized.markdown, "(Busch et al., 2026) And");
+  });
+
+  it("uses the shared citation separator helper", function () {
+    assert.equal(
+      stripLeadingCitationSeparators("; and this separator should not remain."),
+      "and this separator should not remain.",
+    );
   });
 
   it("collapses duplicate unlabeled manual quotes when the same quote anchor is already present", function () {

@@ -9,6 +9,7 @@ import type {
   PreparedToolExecution,
   ToolSpec,
 } from "../types";
+import { isMalformedToolArgumentsDiagnostic } from "../toolArgumentDiagnostics";
 
 function createSyntheticErrorResult(
   call: AgentToolCall,
@@ -128,6 +129,12 @@ export class AgentToolRegistry {
       return createSyntheticErrorResult(
         call,
         `${call.name} is not available for this request`,
+      );
+    }
+    if (isMalformedToolArgumentsDiagnostic(call.arguments)) {
+      return createSyntheticErrorResult(
+        call,
+        `Invalid tool input for ${call.name}: ${call.name} received malformed tool arguments from the model. Retry with valid JSON.`,
       );
     }
     const validation = tool.validate(call.arguments);

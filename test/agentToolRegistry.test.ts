@@ -1,4 +1,5 @@
 import { assert } from "chai";
+import { createMalformedToolArgumentsDiagnostic } from "../src/agent/toolArgumentDiagnostics";
 import { AgentToolRegistry } from "../src/agent/tools/registry";
 import type { AgentToolContext } from "../src/agent/types";
 
@@ -31,6 +32,45 @@ describe("AgentToolRegistry", function () {
     assert.include(
       String((result.execution.result.content as { error?: string }).error),
       "Unknown tool",
+    );
+  });
+
+  it("rejects malformed diagnostic arguments centrally before validation", async function () {
+    const registry = new AgentToolRegistry();
+    let validateCalls = 0;
+    registry.register({
+      spec: {
+        name: "zotero_script",
+        description: "run a Zotero script",
+        inputSchema: { type: "object" },
+        mutability: "write",
+        requiresConfirmation: true,
+      },
+      validate: () => {
+        validateCalls += 1;
+        return { ok: false, error: "mode must be 'read' or 'write'" };
+      },
+      execute: async () => ({ ok: true }),
+    });
+
+    const result = await registry.prepareExecution(
+      {
+        id: "call-malformed",
+        name: "zotero_script",
+        arguments: createMalformedToolArgumentsDiagnostic(
+          '{"mode":"read","script": secret draft',
+        ),
+      },
+      baseContext,
+    );
+
+    assert.equal(validateCalls, 0);
+    assert.equal(result.kind, "result");
+    if (result.kind !== "result") return;
+    assert.equal(result.execution.result.ok, false);
+    assert.equal(
+      String((result.execution.result.content as { error?: string }).error),
+      "Invalid tool input for zotero_script: zotero_script received malformed tool arguments from the model. Retry with valid JSON.",
     );
   });
 

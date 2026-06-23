@@ -18,6 +18,7 @@ import {
   QUOTE_CITATION_PATTERN,
   stripTrailingNonSourceQuoteLabelFromQuoteText,
 } from "./quoteCitations";
+import { stripLeadingCitationSeparators } from "./citationText";
 import {
   getActiveReaderForSelectedTab,
   resolveContextSourceItem,
@@ -853,9 +854,7 @@ export function extractStandalonePaperSourceLabel(
 }
 
 function normalizeCitationRemainderText(value: string): string {
-  return sanitizeText(value || "")
-    .replace(/^[\s,;]+/, "")
-    .trim();
+  return stripLeadingCitationSeparators(sanitizeText(value || ""));
 }
 
 function extractLeadingPaperSourceLabelWithRemainder(value: string): {
