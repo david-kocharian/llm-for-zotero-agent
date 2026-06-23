@@ -17,6 +17,11 @@ import {
 import { renderMarkdown } from "../src/utils/markdown";
 
 describe("quoteCitations", function () {
+  function countOccurrences(value: string, needle: string): number {
+    if (!needle) return 0;
+    return value.split(needle).length - 1;
+  }
+
   it("generates stable ids from quote text, citation label, and context item", function () {
     const first = buildQuoteCitation({
       quoteText: "The models will offer a set of categories.",
@@ -620,6 +625,157 @@ describe("quoteCitations", function () {
       "And this explains why learning succeeded.",
     );
     assert.notInclude(finalized.markdown, "(Busch et al., 2026) And");
+  });
+
+  it("collapses duplicate unlabeled manual quotes when the same quote anchor is already present", function () {
+    const quoteText =
+      "Humans and animals excel at generalizing from limited data, a capability yet to be fully replicated in artificial intelligence.";
+    const citation = buildQuoteCitation({
+      quoteText,
+      citationLabel: "(Li et al., 2024)",
+      contextItemId: 22,
+    });
+    assert.isDefined(citation);
+    const sourceIndex = buildQuoteSourceIndex({
+      quoteCitations: [citation!],
+      sourceTexts: [
+        {
+          sourceText: quoteText,
+          sourceLabel: "(Li et al., 2024)",
+          contextItemId: 22,
+        },
+      ],
+    });
+
+    const finalized = finalizeAssistantQuoteCitations({
+      markdown: [
+        "Overview -- (Li et al., 2024)",
+        "",
+        `> ${quoteText}`,
+        "",
+        `[[quote:${citation!.id}]]`,
+        "",
+        "This Perspective paper asks how neural representations shape generalization.",
+      ].join("\n"),
+      quoteCitations: [citation!],
+      sourceIndex,
+    });
+
+    assert.equal(
+      countOccurrences(finalized.markdown, `[[quote:${citation!.id}]]`),
+      1,
+    );
+    const display = replaceQuoteCitationPlaceholdersForMarkdown(
+      finalized.markdown,
+      finalized.quoteCitations,
+    );
+    assert.equal(countOccurrences(display, `> ${quoteText}`), 1);
+  });
+
+  it("collapses duplicate unlabeled and source-labeled manual quotes that resolve to the same anchor", function () {
+    const quoteText =
+      "Humans and animals excel at generalizing from limited data, a capability yet to be fully replicated in artificial intelligence.";
+    const citation = buildQuoteCitation({
+      quoteText,
+      citationLabel: "(Li et al., 2024)",
+      contextItemId: 22,
+    });
+    assert.isDefined(citation);
+    const sourceIndex = buildQuoteSourceIndex({
+      quoteCitations: [citation!],
+      sourceTexts: [
+        {
+          sourceText: quoteText,
+          sourceLabel: "(Li et al., 2024)",
+          contextItemId: 22,
+        },
+      ],
+    });
+
+    const finalized = finalizeAssistantQuoteCitations({
+      markdown: [
+        "Overview -- (Li et al., 2024)",
+        "",
+        `> ${quoteText}`,
+        "",
+        `> ${quoteText}`,
+        ">",
+        "> (Li et al., 2024)",
+        "",
+        "This Perspective paper asks how neural representations shape generalization.",
+      ].join("\n"),
+      quoteCitations: [citation!],
+      sourceIndex,
+    });
+
+    assert.equal(
+      countOccurrences(finalized.markdown, `[[quote:${citation!.id}]]`),
+      1,
+    );
+    const display = replaceQuoteCitationPlaceholdersForMarkdown(
+      finalized.markdown,
+      finalized.quoteCitations,
+    );
+    assert.equal(countOccurrences(display, `> ${quoteText}`), 1);
+  });
+
+  it("preserves repeated use of the same quote when real prose separates the anchors", function () {
+    const quoteText =
+      "The amount of neural realignment was comparable between IM and WMP components.";
+    const sourceIndex = buildQuoteSourceIndex({
+      sourceTexts: [
+        {
+          sourceText: quoteText,
+          sourceLabel: "(Busch et al., 2026)",
+          contextItemId: 22,
+        },
+      ],
+    });
+
+    const finalized = finalizeAssistantQuoteCitations({
+      markdown: [
+        "First point:",
+        "",
+        `> ${quoteText}`,
+        "",
+        "Second point returns to the same evidence:",
+        "",
+        `> ${quoteText}`,
+      ].join("\n"),
+      sourceIndex,
+    });
+    const anchorId = finalized.quoteCitations[0]?.id || "";
+
+    assert.match(anchorId, /^Q_[a-z0-9]+$/);
+    assert.equal(
+      countOccurrences(finalized.markdown, `[[quote:${anchorId}]]`),
+      2,
+    );
+  });
+
+  it("strips leading punctuation from consumed citation continuation text", function () {
+    const quoteText = "This quote supports the mechanistic account.";
+    const citation = buildQuoteCitation({
+      quoteText,
+      citationLabel: "(Anticevic et al., 2013)",
+      contextItemId: 33,
+    });
+    assert.isDefined(citation);
+
+    const finalized = finalizeAssistantQuoteCitations({
+      markdown:
+        `The paper says:\n\n> ${quoteText}\n\n` +
+        "(Anticevic et al., 2013), pushing the field toward a mechanistic, multilevel account.",
+      quoteCitations: [citation!],
+    });
+
+    assert.include(finalized.markdown, `[[quote:${citation!.id}]]`);
+    assert.include(
+      finalized.markdown,
+      "pushing the field toward a mechanistic, multilevel account.",
+    );
+    assert.notInclude(finalized.markdown, "\n\n, pushing");
+    assert.notInclude(finalized.markdown, "(Anticevic et al., 2013),");
   });
 
   it("repairs section labels to canonical source labels when one source matches", function () {

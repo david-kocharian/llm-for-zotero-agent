@@ -9518,9 +9518,11 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
 
         for (const attachment of fileAttachments) {
           const canOpen = Boolean(toFileUrl(attachment.storedPath));
-          const fileItem = doc.createElement(canOpen ? "button" : "div") as
-            | HTMLButtonElement
-            | HTMLDivElement;
+          const fileItem = (
+            canOpen
+              ? doc.createElementNS(HTML_NS, "button")
+              : doc.createElement("div")
+          ) as HTMLButtonElement | HTMLDivElement;
           fileItem.className = "llm-user-files-item";
           if (canOpen) {
             fileItem.classList.add("llm-user-files-item-openable");

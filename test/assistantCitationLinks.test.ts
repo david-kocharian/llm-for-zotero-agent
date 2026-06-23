@@ -762,6 +762,38 @@ describe("assistantCitationLinks", function () {
     );
   });
 
+  it("keeps standalone citation-only text out of chat inline decoration", function () {
+    const source = readFileSync(
+      resolve(testDir, "../src/modules/contextPanel/assistantCitationLinks.ts"),
+      "utf8",
+    );
+    const start = source.indexOf("function decorateInlineCitationNodes");
+    const end = source.indexOf(
+      "function replaceBlockquoteWithFallbackQuoteCard",
+    );
+    const decorationSection = source.slice(start, end);
+
+    assert.isAtLeast(start, 0);
+    assert.isAbove(end, start);
+    assert.include(
+      decorationSection,
+      "if (extractStandalonePaperSourceLabel(trimmedText)) return;",
+    );
+  });
+
+  it("still extracts inline parenthetical citations embedded in prose", function () {
+    const mentions = extractInlineCitationMentions(
+      "The framework links neural dysfunction to cognition (Anticevic et al., 2013).",
+    );
+
+    assert.lengthOf(mentions, 1);
+    assert.equal(mentions[0]?.rawText, "(Anticevic et al., 2013)");
+    assert.equal(
+      mentions[0]?.extractedCitation.citationLabel,
+      "Anticevic et al., 2013",
+    );
+  });
+
   it("extracts yearless dual-author parenthetical citations", function () {
     const mentions = extractInlineCitationMentions(
       "Drift is ubiquitous but modulated by circuit architecture (Marks & Goard).",

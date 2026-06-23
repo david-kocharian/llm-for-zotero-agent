@@ -14,6 +14,7 @@ import {
   buildPaperQuoteCitationGuidance,
 } from "../src/modules/contextPanel/paperAttribution";
 import { BALANCED_EVIDENCE_GUIDANCE } from "../src/shared/quoteGuidance";
+import { DEFAULT_SYSTEM_PROMPT } from "../src/utils/llmDefaults";
 import type { AgentRuntimeRequest } from "../src/agent/types";
 import type { PaperContextRef } from "../src/shared/types";
 
@@ -21,6 +22,11 @@ const BALANCED_EVIDENCE_PHRASES = [
   "important paper-specific claims checkable",
   "not to decorate every paragraph",
   "repetitive citations or low-information quotes",
+];
+
+const SOURCE_LABEL_PLACEMENT_PHRASES = [
+  "Do not append a standalone source label or citation-only final line",
+  "source labels on their own line belong only after direct blockquotes",
 ];
 
 const DIRECT_QUOTE_SAFETY_PHRASES = [
@@ -33,6 +39,14 @@ const DIRECT_QUOTE_SAFETY_PHRASES = [
 function assertBalancedEvidenceGuidance(text: string): void {
   const normalized = text.replace(/\s+/g, " ");
   for (const phrase of BALANCED_EVIDENCE_PHRASES) {
+    assert.include(normalized, phrase);
+  }
+  assertSourceLabelPlacementGuidance(text);
+}
+
+function assertSourceLabelPlacementGuidance(text: string): void {
+  const normalized = text.replace(/\s+/g, " ");
+  for (const phrase of SOURCE_LABEL_PLACEMENT_PHRASES) {
     assert.include(normalized, phrase);
   }
 }
@@ -77,6 +91,10 @@ describe("quote guidance prompts", function () {
 
   it("centralizes the balanced evidence wording for runtime prompts", function () {
     assertBalancedEvidenceGuidance(BALANCED_EVIDENCE_GUIDANCE);
+  });
+
+  it("keeps direct chat guidance from requesting dangling source labels", function () {
+    assertSourceLabelPlacementGuidance(DEFAULT_SYSTEM_PROMPT);
   });
 
   it("includes balanced evidence guidance in the core agent persona", function () {

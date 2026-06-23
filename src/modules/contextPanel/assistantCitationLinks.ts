@@ -852,6 +852,12 @@ export function extractStandalonePaperSourceLabel(
   };
 }
 
+function normalizeCitationRemainderText(value: string): string {
+  return sanitizeText(value || "")
+    .replace(/^[\s,;]+/, "")
+    .trim();
+}
+
 function extractLeadingPaperSourceLabelWithRemainder(value: string): {
   extractedCitation: ExtractedCitationLabel;
   remainder: string;
@@ -869,7 +875,7 @@ function extractLeadingPaperSourceLabelWithRemainder(value: string): {
     const extractedCitation =
       extractStandalonePaperSourceLabel(sourceCandidate);
     if (!extractedCitation) return null;
-    const remainder = sanitizeText(text.slice(index + 1)).trim();
+    const remainder = normalizeCitationRemainderText(text.slice(index + 1));
     return { extractedCitation, remainder };
   }
   return null;
@@ -3109,6 +3115,8 @@ function decorateInlineCitationNodes(params: {
       if (!parent || shouldSkipInlineCitationNode(parent)) return;
       const text = textNode.nodeValue || "";
       if (text.length < 8) return;
+      const trimmedText = stripCitationControlChars(sanitizeText(text)).trim();
+      if (extractStandalonePaperSourceLabel(trimmedText)) return;
       const mentions = extractInlineCitationMentions(text);
       if (mentions.length) targets.push(textNode);
       return;

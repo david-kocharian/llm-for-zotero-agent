@@ -905,6 +905,12 @@ function extractLeadingParentheticalLabel(value: string): {
   return null;
 }
 
+function normalizeCitationRemainder(value: string | undefined): string {
+  return normalizeMultilineText(value || "")
+    .replace(/^[\s,;]+/, "")
+    .trim();
+}
+
 function resolveQuoteCitationForFinalizer(params: {
   quoteText: string;
   citationLabel: string;
@@ -976,11 +982,14 @@ function finalizeSourceBackedQuoteBlock(params: {
   const quoteText = stripTrailingNonSourceQuoteLabelFromQuoteText(
     params.quoteText,
   );
+  const citationRemainder = normalizeCitationRemainder(
+    params.citationRemainder,
+  );
   const quoteCitation = resolveQuoteCitationForFinalizer(params);
   if (quoteCitation) {
     return {
       markdown: `[[quote:${quoteCitation.id}]]${
-        params.citationRemainder ? `\n\n${params.citationRemainder}` : ""
+        citationRemainder ? `\n\n${citationRemainder}` : ""
       }`,
       quoteCitation,
       consumedCitation: true,
@@ -989,7 +998,7 @@ function finalizeSourceBackedQuoteBlock(params: {
   if (isNonSourceQuoteLabel(params.citationLabel)) {
     return {
       markdown: `${formatPlainQuoteMarkdown(quoteText)}${
-        params.citationRemainder ? `\n\n${params.citationRemainder}` : ""
+        citationRemainder ? `\n\n${citationRemainder}` : ""
       }`,
       consumedCitation: true,
     };
@@ -1003,16 +1012,47 @@ function finalizeSourceBackedQuoteBlock(params: {
       markdown: `${formatPlainQuoteWithCitationMarkdown(
         quoteText,
         params.citationLabel,
-      )}${params.citationRemainder ? `\n\n${params.citationRemainder}` : ""}`,
+      )}${citationRemainder ? `\n\n${citationRemainder}` : ""}`,
       consumedCitation: true,
     };
   }
   return {
     markdown: `${formatPlainQuoteMarkdown(quoteText)}${
-      params.citationRemainder ? `\n\n${params.citationRemainder}` : ""
+      citationRemainder ? `\n\n${citationRemainder}` : ""
     }`,
     consumedCitation: true,
   };
+}
+
+function collapseAdjacentDuplicateQuoteCitationPlaceholders(
+  markdown: string,
+): string {
+  if (!markdown || !QUOTE_CITATION_PATTERN.test(markdown)) {
+    QUOTE_CITATION_PATTERN.lastIndex = 0;
+    return markdown;
+  }
+  QUOTE_CITATION_PATTERN.lastIndex = 0;
+
+  let result = "";
+  let cursor = 0;
+  let lastEmittedQuoteId = "";
+  for (const match of markdown.matchAll(QUOTE_CITATION_PATTERN)) {
+    const start = match.index || 0;
+    const token = match[0];
+    const quoteId = match[1] || "";
+    const between = markdown.slice(cursor, start);
+    if (quoteId && quoteId === lastEmittedQuoteId && !between.trim()) {
+      cursor = start + token.length;
+      continue;
+    }
+    result += between;
+    result += token;
+    lastEmittedQuoteId = quoteId;
+    cursor = start + token.length;
+  }
+  result += markdown.slice(cursor);
+  QUOTE_CITATION_PATTERN.lastIndex = 0;
+  return result;
 }
 
 export function finalizeAssistantQuoteCitations(params: {
@@ -1135,7 +1175,9 @@ export function finalizeAssistantQuoteCitations(params: {
     index -= 1;
   }
   const finalizedMarkdown = replaceQuoteCitationPlaceholdersForMarkdown(
-    normalizeSanitizedMarkdown(out.join("\n")),
+    collapseAdjacentDuplicateQuoteCitationPlaceholders(
+      normalizeSanitizedMarkdown(out.join("\n")),
+    ),
     quoteCitations,
     { resolved: "preserve", unresolved: "omit" },
   );

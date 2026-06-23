@@ -17,11 +17,12 @@ describe("chat.ts button namespace hygiene", function () {
   );
 
   it("never creates <button> elements in the default (XUL) namespace", function () {
-    const plain = source.match(/createElement\("button"\)/g) || [];
+    const plain =
+      source.match(/createElement\((?=[^)]*["']button["'])[^)]*\)/g) || [];
     assert.deepEqual(
       plain,
       [],
-      'chat.ts must not use createElement("button") — use createElementNS(HTML_NS, "button") so CSS applies in Zotero\'s XUL document',
+      'chat.ts must not use createElement(...) to create buttons — use createElementNS(HTML_NS, "button") so CSS applies in Zotero\'s XUL document',
     );
   });
 
