@@ -241,7 +241,7 @@ function buildMineruVisualRedirect(params: {
     paperContext,
     mineruCacheDir,
     guidance:
-      "MinerU cache is available for this paper, so do not render PDF pages for this generic figure/table request. Inspect the MinerU cache first: read manifest.json to find the requested figure/table, read the matching full.md section slice for caption and surrounding discussion, then read the extracted figure image with file_io. Use paper_read mode:'visual' only if MinerU lookup or image loading fails, or if the user explicitly asks for raw/rendered PDF pages, page screenshots, page layout, exact pages, or visible-reader inspection.",
+      "MinerU cache is available for this paper, so do not render PDF pages for this generic figure/table request. Inspect the MinerU cache first: read manifest.json to find the requested figure/table, read the matching full.md section slice for caption and surrounding discussion, then read the extracted figure image with file_io. For a full compound figure, read every same-number panel/image path and the complete figure text before answering. Use paper_read mode:'visual' only if MinerU lookup or image loading fails, or if the user explicitly asks for raw/rendered PDF pages, page screenshots, page layout, exact pages, or visible-reader inspection.",
     nextSteps: [
       `file_io({ action:'read', filePath:'${joinLocalPath(
         mineruCacheDir,

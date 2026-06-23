@@ -88,14 +88,18 @@ import { joinLocalPath } from "../utils/localPath";
 import {
   isMineruEnabled,
   getMineruApiKey,
+  getMineruCloudModel,
   getMineruLocalApiBase,
   getMineruLocalBackend,
   getMineruMode,
+  type MineruCloudModel,
   type MineruLocalBackend,
   type MineruMode,
+  normalizeMineruCloudModel,
   normalizeMineruLocalBackend,
   setMineruEnabled,
   setMineruApiKey,
+  setMineruCloudModel,
   setMineruLocalApiBase,
   setMineruLocalBackend,
   setMineruMode,
@@ -122,7 +126,6 @@ import {
 import {
   testMineruConnection,
   testMineruLocalConnection,
-  testProxyConnection,
 } from "../utils/mineruClient";
 import {
   MINERU_PARSE_FILTERS_CHANGED_EVENT,
@@ -3584,18 +3587,24 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
   const mineruSubSettings = doc.querySelector(
     `#${config.addonRef}-mineru-sub-settings`,
   ) as HTMLDivElement | null;
-  const mineruLocalModeInput = doc.querySelector(
-    `#${config.addonRef}-mineru-local-mode`,
-  ) as HTMLInputElement | null;
-  const mineruCloudInfo = doc.querySelector(
-    `#${config.addonRef}-mineru-cloud-info`,
-  ) as HTMLDivElement | null;
+  const mineruCloudModeButton = doc.querySelector(
+    `#${config.addonRef}-mineru-mode-cloud`,
+  ) as HTMLButtonElement | null;
+  const mineruLocalModeButton = doc.querySelector(
+    `#${config.addonRef}-mineru-mode-local`,
+  ) as HTMLButtonElement | null;
   const mineruApiKeySection = doc.querySelector(
     `#${config.addonRef}-mineru-api-key-section`,
   ) as HTMLDivElement | null;
   const mineruApiKeyInput = doc.querySelector(
     `#${config.addonRef}-mineru-api-key`,
   ) as HTMLInputElement | null;
+  const mineruCloudModelSection = doc.querySelector(
+    `#${config.addonRef}-mineru-cloud-model-section`,
+  ) as HTMLDivElement | null;
+  const mineruCloudModelSelect = doc.querySelector(
+    `#${config.addonRef}-mineru-cloud-model`,
+  ) as HTMLSelectElement | null;
   const mineruLocalSection = doc.querySelector(
     `#${config.addonRef}-mineru-local-section`,
   ) as HTMLDivElement | null;
@@ -3624,24 +3633,50 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
     `#${config.addonRef}-mineru-sync-status`,
   ) as HTMLSpanElement | null;
 
-  const getSelectedMineruMode = (): MineruMode =>
-    mineruLocalModeInput?.checked ? "local" : "cloud";
+  let selectedMineruMode: MineruMode = getMineruMode();
+  const getSelectedMineruMode = (): MineruMode => selectedMineruMode;
   const clearMineruTestStatus = () => {
     if (!mineruTestStatus) return;
     mineruTestStatus.style.display = "none";
     mineruTestStatus.textContent = "";
   };
+  const applyMineruModeButtonState = () => {
+    const updateButton = (
+      button: HTMLButtonElement | null,
+      buttonMode: MineruMode,
+    ) => {
+      if (!button) return;
+      const isActive = selectedMineruMode === buttonMode;
+      button.setAttribute("aria-pressed", isActive ? "true" : "false");
+      button.style.color = isActive
+        ? "FieldText"
+        : "var(--fill-secondary, #888)";
+      button.style.background = isActive ? "Field" : "transparent";
+      button.style.fontWeight = isActive ? "600" : "500";
+      button.style.boxShadow = isActive ? "0 1px 3px rgba(0,0,0,0.12)" : "none";
+    };
+    updateButton(mineruCloudModeButton, "cloud");
+    updateButton(mineruLocalModeButton, "local");
+  };
   const syncMineruModeVisibility = () => {
     const mode = getSelectedMineruMode();
-    if (mineruCloudInfo) {
-      mineruCloudInfo.style.display = mode === "cloud" ? "block" : "none";
-    }
     if (mineruApiKeySection) {
       mineruApiKeySection.style.display = mode === "cloud" ? "flex" : "none";
+    }
+    if (mineruCloudModelSection) {
+      mineruCloudModelSection.style.display =
+        mode === "cloud" ? "flex" : "none";
     }
     if (mineruLocalSection) {
       mineruLocalSection.style.display = mode === "local" ? "flex" : "none";
     }
+  };
+  const selectMineruMode = (mode: MineruMode) => {
+    selectedMineruMode = mode;
+    setMineruMode(mode);
+    applyMineruModeButtonState();
+    syncMineruModeVisibility();
+    clearMineruTestStatus();
   };
 
   if (mineruEnabledInput) {
@@ -3812,13 +3847,16 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
     });
   }
 
-  if (mineruLocalModeInput) {
-    mineruLocalModeInput.checked = getMineruMode() === "local";
+  if (mineruCloudModeButton || mineruLocalModeButton) {
+    selectedMineruMode = getMineruMode();
+    applyMineruModeButtonState();
     syncMineruModeVisibility();
-    mineruLocalModeInput.addEventListener("change", () => {
-      setMineruMode(getSelectedMineruMode());
-      syncMineruModeVisibility();
-      clearMineruTestStatus();
+
+    mineruCloudModeButton?.addEventListener("click", () => {
+      selectMineruMode("cloud");
+    });
+    mineruLocalModeButton?.addEventListener("click", () => {
+      selectMineruMode("local");
     });
   } else {
     syncMineruModeVisibility();
@@ -3826,8 +3864,60 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
 
   if (mineruApiKeyInput) {
     mineruApiKeyInput.value = getMineruApiKey();
+    const getSelectedMineruApiKeyText = () => {
+      const start = mineruApiKeyInput.selectionStart;
+      const end = mineruApiKeyInput.selectionEnd;
+      if (typeof start === "number" && typeof end === "number") {
+        if (start === end) return "";
+        return mineruApiKeyInput.value.slice(
+          Math.min(start, end),
+          Math.max(start, end),
+        );
+      }
+      return mineruApiKeyInput.value;
+    };
+    const copySelectedMineruApiKeyText = (event?: ClipboardEvent) => {
+      const text = getSelectedMineruApiKeyText();
+      if (!text) return false;
+      const clipboardData = event?.clipboardData;
+      if (clipboardData) {
+        clipboardData.setData("text/plain", text);
+        event.preventDefault();
+        return true;
+      }
+      void copyTextToClipboard(text);
+      return true;
+    };
     mineruApiKeyInput.addEventListener("input", () => {
       setMineruApiKey(mineruApiKeyInput.value);
+    });
+    mineruApiKeyInput.addEventListener("copy", (event) => {
+      copySelectedMineruApiKeyText(event);
+    });
+    mineruApiKeyInput.addEventListener("keydown", (event) => {
+      if (
+        event.key.toLowerCase() !== "c" ||
+        (!event.metaKey && !event.ctrlKey) ||
+        event.altKey ||
+        event.shiftKey
+      ) {
+        return;
+      }
+      if (copySelectedMineruApiKeyText()) {
+        event.preventDefault();
+      }
+    });
+  }
+
+  if (mineruCloudModelSelect) {
+    mineruCloudModelSelect.value = getMineruCloudModel();
+    mineruCloudModelSelect.addEventListener("change", () => {
+      const next: MineruCloudModel = normalizeMineruCloudModel(
+        mineruCloudModelSelect.value,
+      );
+      setMineruCloudModel(next);
+      mineruCloudModelSelect.value = next;
+      clearMineruTestStatus();
     });
   }
 
@@ -3875,7 +3965,9 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
           if (apiKey) {
             await testMineruConnection(apiKey);
           } else {
-            await testProxyConnection();
+            mineruTestStatus.textContent = t("Enter your MinerU API key first");
+            mineruTestStatus.style.color = "#b45309";
+            return;
           }
         }
         mineruTestStatus.textContent = t("✓ Connection successful");

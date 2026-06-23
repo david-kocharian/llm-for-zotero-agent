@@ -2345,65 +2345,64 @@
               </html:span>
             </html:span>
 
-            <html:label
-              style="
-                display: inline-flex;
-                align-items: center;
-                gap: 8px;
-                font-weight: 600;
-                font-size: 12px;
-                color: var(--fill-primary, inherit);
-              "
-            >
-              <html:input
-                id="__addonRef__-mineru-local-mode"
-                type="checkbox"
-              ></html:input>
-              Use local MinerU server
-            </html:label>
-
-            <!-- Info box -->
             <html:div
-              id="__addonRef__-mineru-cloud-info"
+              id="__addonRef__-mineru-mode-segmented"
+              role="group"
+              aria-label="MinerU parsing mode"
               style="
-                background: color-mix(
-                  in srgb,
-                  var(--color-accent, #2563eb) 8%,
-                  transparent
-                );
-                border: 1px solid
-                  color-mix(
-                    in srgb,
-                    var(--color-accent, #2563eb) 20%,
-                    transparent
-                  );
-                border-radius: 6px;
-                padding: 10px 12px;
-                font-size: 11.5px;
-                line-height: 1.6;
-                color: var(--fill-primary, inherit);
+                display: flex;
+                gap: 4px;
+                padding: 3px;
+                background: color-mix(in srgb, currentColor 12%, Field);
+                border-radius: 8px;
+                width: 100%;
+                box-sizing: border-box;
               "
             >
-              <html:span style="font-weight: 600"
-                >No API key needed to start, but a personal key is strongly
-                recommended.</html:span
-              >
-              The built-in MinerU API may no longer be supported after June 1,
-              2026.
-              <html:br />
-              <html:br />
-              Get your own free API key from
-              <html:a
-                href="https://mineru.net"
-                target="_blank"
-                rel="noopener"
+              <html:button
+                id="__addonRef__-mineru-mode-cloud"
+                type="button"
+                data-mineru-mode="cloud"
+                aria-pressed="true"
                 style="
-                  color: var(--color-accent, #2563eb);
-                  text-decoration: underline;
+                  flex: 1;
+                  padding: 6px 0;
+                  font-size: 12px;
+                  font-weight: 600;
+                  border: none;
+                  border-radius: 6px;
+                  background: Field;
+                  color: FieldText;
+                  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+                  cursor: pointer;
+                  display: flex;
+                  align-items: center;
+                  justify-content: center;
                 "
-                >mineru.net</html:a
+                >Cloud</html:button
               >
-              and paste it below.
+              <html:button
+                id="__addonRef__-mineru-mode-local"
+                type="button"
+                data-mineru-mode="local"
+                aria-pressed="false"
+                style="
+                  flex: 1;
+                  padding: 6px 0;
+                  font-size: 12px;
+                  font-weight: 500;
+                  border: none;
+                  border-radius: 6px;
+                  background: transparent;
+                  color: var(--fill-secondary, #888);
+                  box-shadow: none;
+                  cursor: pointer;
+                  display: flex;
+                  align-items: center;
+                  justify-content: center;
+                "
+                >Local</html:button
+              >
             </html:div>
 
             <!-- API key section -->
@@ -2421,12 +2420,14 @@
                   margin-bottom: 2px;
                 "
               >
-                API Key (Recommended)
+                API Key (Required)
               </html:label>
               <html:input
                 id="__addonRef__-mineru-api-key"
                 type="password"
                 placeholder="Paste your free MinerU API key"
+                spellcheck="false"
+                autocapitalize="off"
                 style="
                   width: 100%;
                   padding: 6px 10px;
@@ -2445,7 +2446,61 @@
                   margin-top: 1px;
                 "
               >
-                With your own key: direct connection to mineru.net
+                An API key is required. Get a free key from
+                <html:a
+                  href="https://mineru.net"
+                  target="_blank"
+                  rel="noopener"
+                  style="
+                    color: var(--color-accent, #2563eb);
+                    text-decoration: underline;
+                  "
+                  >mineru.net</html:a
+                >. Connects directly to mineru.net.
+              </html:span>
+            </html:div>
+
+            <html:div
+              id="__addonRef__-mineru-cloud-model-section"
+              style="display: flex; flex-direction: column; gap: 4px"
+            >
+              <html:label
+                for="__addonRef__-mineru-cloud-model"
+                style="
+                  display: block;
+                  font-weight: 600;
+                  font-size: 12px;
+                  color: var(--fill-primary, inherit);
+                  margin-bottom: 2px;
+                "
+              >
+                Parsing model
+              </html:label>
+              <html:select
+                id="__addonRef__-mineru-cloud-model"
+                style="
+                  width: 100%;
+                  padding: 6px 10px;
+                  font-size: 13px;
+                  border: 1px solid var(--stroke-secondary, #c8c8c8);
+                  border-radius: 6px;
+                  box-sizing: border-box;
+                  background: Field;
+                  color: FieldText;
+                "
+              >
+                <html:option value="pipeline">pipeline</html:option>
+                <html:option value="vlm">vlm (recommended)</html:option>
+              </html:select>
+              <html:span
+                style="
+                  font-size: 10.5px;
+                  color: var(--fill-secondary, #888);
+                  margin-top: 1px;
+                "
+              >
+                vlm uses a vision-language model — generally better at chapter
+                structure, figures, and formulas; may be slower than pipeline.
               </html:span>
             </html:div>
 

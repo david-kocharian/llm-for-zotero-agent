@@ -1,9 +1,11 @@
 import { assert } from "chai";
 import {
   buildMineruFilenameMatcher,
+  DEFAULT_MINERU_CLOUD_MODEL,
   DEFAULT_MINERU_MAX_AUTO_PAGES,
   DEFAULT_MINERU_LOCAL_API_BASE,
   MAX_MINERU_FILENAME_PATTERN_LENGTH,
+  normalizeMineruCloudModel,
   normalizeMineruMaxAutoPages,
   normalizeMineruLocalApiBase,
   normalizeMineruLocalBackend,
@@ -68,6 +70,21 @@ describe("mineruConfig", function () {
       assert.equal(normalizeMineruLocalBackend(""), "pipeline");
       assert.equal(normalizeMineruLocalBackend(undefined), "pipeline");
       assert.equal(normalizeMineruLocalBackend("vlm-auto-engine"), "pipeline");
+    });
+  });
+
+  describe("normalizeMineruCloudModel", function () {
+    it("accepts the valid cloud model codes", function () {
+      assert.equal(normalizeMineruCloudModel("pipeline"), "pipeline");
+      assert.equal(normalizeMineruCloudModel("vlm"), "vlm");
+    });
+
+    it("falls back to pipeline for unknown or empty values", function () {
+      assert.equal(DEFAULT_MINERU_CLOUD_MODEL, "pipeline");
+      assert.equal(normalizeMineruCloudModel(""), "pipeline");
+      assert.equal(normalizeMineruCloudModel(undefined), "pipeline");
+      assert.equal(normalizeMineruCloudModel("MinerU-HTML"), "pipeline");
+      assert.equal(normalizeMineruCloudModel("vlm-auto-engine"), "pipeline");
     });
   });
 

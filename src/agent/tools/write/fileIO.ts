@@ -17,6 +17,7 @@ import {
 import { pushUndoEntry } from "../../store/undoStore";
 import { FILE_IO_CONTENT_FIELDS } from "../../toolArgumentFields";
 import { isMalformedToolArgumentsDiagnostic } from "../../toolArgumentDiagnostics";
+import { getManifestFigureBaseLabel } from "../../../modules/contextPanel/mineruCache";
 
 type FileIOInput = {
   action: "read" | "write";
@@ -34,6 +35,28 @@ type ResolvedWriteInput = {
 };
 
 type FileIOAction = FileIOInput["action"];
+
+type ManifestImageLike = {
+  label?: unknown;
+  baseLabel?: unknown;
+  path?: unknown;
+  caption?: unknown;
+  section?: unknown;
+};
+
+type CompoundFigureGroup = {
+  baseLabel: string;
+  cacheDir: string;
+  paths: string[];
+};
+
+type CompoundFigureWriteGuardResult = {
+  error: string;
+  baseLabel: string;
+  embeddedCount: number;
+  availableCount: number;
+  availablePaths: string[];
+};
 
 const FILE_IO_ACTION_FIELDS = ["action", "mode", "operation", "op"] as const;
 const FILE_IO_PATH_FIELDS = [
@@ -258,6 +281,172 @@ async function ensureDirectoryExists(directoryPath: string): Promise<void> {
 
 function isMarkdownWritePath(filePath: string): boolean {
   return /\.(?:md|markdown)$/i.test(filePath.trim());
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function uniqueStrings(values: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of values) {
+    if (seen.has(value)) continue;
+    seen.add(value);
+    out.push(value);
+  }
+  return out;
+}
+
+function parseFigureBaseLabel(
+  baseLabel: string,
+): { kind: "Figure" | "Table"; number: string; supplementary: boolean } | null {
+  const match = baseLabel
+    .trim()
+    .match(/^(Supplementary\s+)?(Figure|Table)\s+([sS]?\d+)$/i);
+  if (!match) return null;
+  return {
+    kind: /^table$/i.test(match[2]) ? "Table" : "Figure",
+    number: match[3].toUpperCase(),
+    supplementary: Boolean(match[1]),
+  };
+}
+
+function markdownImageEmbeds(content: string): Array<{
+  alt: string;
+  target: string;
+}> {
+  const embeds: Array<{ alt: string; target: string }> = [];
+  const pattern = /!\[([^\]]*)\]\(([^)\n]+)\)/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(content)) !== null) {
+    embeds.push({ alt: match[1] || "", target: match[2] || "" });
+  }
+  return embeds;
+}
+
+function hasFullFigureMention(content: string, baseLabel: string): boolean {
+  const parsed = parseFigureBaseLabel(baseLabel);
+  if (!parsed) return false;
+  const number = escapeRegExp(parsed.number);
+  const supplementary = parsed.supplementary
+    ? "Supplementary\\s+"
+    : "(?:Supplementary\\s+)?";
+  const kind = parsed.kind === "Figure" ? "Fig(?:ure)?\\.?" : "Table";
+  const pattern = new RegExp(`\\b${supplementary}${kind}\\s*${number}\\b`, "i");
+  return pattern.test(content);
+}
+
+function imageEmbedMatchesBase(
+  embed: { alt: string; target: string },
+  baseLabel: string,
+): boolean {
+  const parsed = parseFigureBaseLabel(baseLabel);
+  if (!parsed) return false;
+  const haystack = `${embed.alt} ${embed.target}`.toLowerCase();
+  const number = escapeRegExp(parsed.number.toLowerCase());
+  if (parsed.kind === "Table") {
+    return new RegExp(`\\btable[\\s._-]*${number}[a-z]?\\b`, "i").test(
+      haystack,
+    );
+  }
+  return (
+    new RegExp(`\\bfig(?:ure)?[\\s._-]*${number}[a-z]?\\b`, "i").test(
+      haystack,
+    ) || new RegExp(`\\bpanel[\\s._-]*${number}[a-z]?\\b`, "i").test(haystack)
+  );
+}
+
+function countMatchingImageEmbeds(content: string, baseLabel: string): number {
+  const embeds = markdownImageEmbeds(content);
+  return embeds.filter((embed) => imageEmbedMatchesBase(embed, baseLabel))
+    .length;
+}
+
+async function readCompoundFigureGroups(
+  context: AgentToolContext,
+  encoding: string,
+): Promise<CompoundFigureGroup[]> {
+  const groupsByKey = new Map<string, CompoundFigureGroup>();
+  for (const paperContext of collectRequestPaperContexts(context.request)) {
+    if (typeof paperContext.mineruCacheDir !== "string") continue;
+    const cacheDir = paperContext.mineruCacheDir.trim();
+    if (!cacheDir) continue;
+    let parsed: unknown;
+    try {
+      const raw = await readFile(
+        joinLocalPath(cacheDir, "manifest.json"),
+        encoding,
+      );
+      parsed = JSON.parse(raw);
+    } catch {
+      continue;
+    }
+    const manifest = parsed as {
+      allFigures?: ManifestImageLike[];
+      allTables?: ManifestImageLike[];
+    };
+    const images = [
+      ...(Array.isArray(manifest.allFigures) ? manifest.allFigures : []),
+      ...(Array.isArray(manifest.allTables) ? manifest.allTables : []),
+    ];
+    for (const image of images) {
+      if (typeof image.path !== "string" || !image.path.trim()) continue;
+      const baseLabel =
+        typeof image.baseLabel === "string" && image.baseLabel.trim()
+          ? image.baseLabel.trim()
+          : typeof image.label === "string"
+            ? getManifestFigureBaseLabel(image.label)
+            : "";
+      if (!parseFigureBaseLabel(baseLabel)) continue;
+      const key = `${cacheDir}::${baseLabel}`;
+      const group =
+        groupsByKey.get(key) ||
+        ({
+          baseLabel,
+          cacheDir,
+          paths: [],
+        } satisfies CompoundFigureGroup);
+      group.paths.push(joinLocalPath(cacheDir, image.path.trim()));
+      groupsByKey.set(key, group);
+    }
+  }
+
+  return [...groupsByKey.values()]
+    .map((group) => ({
+      ...group,
+      paths: uniqueStrings(group.paths),
+    }))
+    .filter((group) => group.paths.length > 1);
+}
+
+async function validateMarkdownCompoundFigureEmbeds(
+  content: string,
+  context: AgentToolContext,
+  encoding: string,
+): Promise<CompoundFigureWriteGuardResult | null> {
+  if (!content.trim()) return null;
+  const groups = await readCompoundFigureGroups(context, encoding);
+  for (const group of groups) {
+    const hasFullMention =
+      hasFullFigureMention(content, group.baseLabel) ||
+      hasFullFigureMention(context.request.userText || "", group.baseLabel);
+    if (!hasFullMention) continue;
+    const embeddedCount = countMatchingImageEmbeds(content, group.baseLabel);
+    if (embeddedCount >= group.paths.length) continue;
+    return {
+      baseLabel: group.baseLabel,
+      embeddedCount,
+      availableCount: group.paths.length,
+      availablePaths: group.paths,
+      error:
+        `Compound figure incomplete: ${group.baseLabel} has ${group.paths.length} available same-number panels/images in the MinerU manifest, ` +
+        `but this Markdown content embeds ${embeddedCount} matching image${embeddedCount === 1 ? "" : "s"}. ` +
+        `Embed every available panel/image for the full figure before saving, or explicitly rewrite the note as an explicit panel-only note. ` +
+        `Available paths: ${group.paths.join(", ")}`,
+    };
+  }
+  return null;
 }
 
 function resolveFileNoteWriteInput(
@@ -736,6 +925,32 @@ export function createFileIOTool(): AgentToolDefinition<FileIOInput, unknown> {
 
       // write
       try {
+        if (isMarkdownWritePath(input.filePath)) {
+          const guard = await validateMarkdownCompoundFigureEmbeds(
+            input.content || "",
+            context,
+            input.encoding || "utf-8",
+          );
+          if (guard) {
+            return {
+              action: "write",
+              filePath: input.filePath,
+              ...(requestedFilePath
+                ? {
+                    requestedFilePath,
+                    correctedToNotesDirectory: true,
+                  }
+                : {}),
+              error: guard.error,
+              compoundFigure: {
+                baseLabel: guard.baseLabel,
+                embeddedCount: guard.embeddedCount,
+                availableCount: guard.availableCount,
+                availablePaths: guard.availablePaths,
+              },
+            };
+          }
+        }
         const existedBeforeWrite = await fileExists(input.filePath);
         if (existedBeforeWrite === true && !input.allowOverwrite) {
           return {

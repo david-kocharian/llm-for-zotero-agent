@@ -156,6 +156,9 @@ Written by LLM-for-Zotero.
 ### Step 3 — Include figures
 
 **If the user asked about a specific figure, you MUST include that figure in the note.** For other notes, include figures when they genuinely aid understanding (result plots, diagrams, key tables).
+If the note is about a full compound figure, embed every available same-number panel/image in panel order, not just the first subfigure.
+If any panel/image is unavailable or unreadable, say that explicitly in the note.
+If the note is about one explicit panel such as Figure 1b, embed that panel and avoid implying it represents the full Figure 1.
 
 #### For Zotero notes (`note_write`)
 

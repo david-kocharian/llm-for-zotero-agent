@@ -38,6 +38,9 @@ Use `file_io({ action:'read', filePath:'{mineruCacheDir}/manifest.json' })` to s
 
 **Step 2 — Find the figure in the manifest:**
 The manifest lists figures per section with labels (e.g. "Fig. 1"), image paths, captions, and page numbers. Locate the target figure and note which section it belongs to.
+For full compound figures, inspect every same-number panel/image path before answering.
+For example, if the user asks for Figure 1 and the manifest or section includes Figure 1a, Figure 1b, and Figure 1c, read all of those image paths plus the full caption/figure text.
+If the user asks only for Figure 1b, you may focus on that panel, but do not imply that panel is the whole Figure 1.
 
 **Step 3 — Read the section text:**
 Use `file_io({ action:'read', filePath:'{mineruCacheDir}/full.md', offset:<charStart>, length:<charEnd - charStart> })` to read just the section containing the figure. This gives you the caption and surrounding discussion.
@@ -61,6 +64,7 @@ Fall back to PDF tools:
 - **NEVER** attempt to install packages (PIL, cv2, etc.) to process images.
 - Prefer MinerU cache over raw PDF — it's faster and gives better quality.
 - Always include the figure caption and surrounding context in your analysis, not just the image.
+- For full compound figures, read all same-number panels/images and the complete figure text before drawing conclusions.
 - For tables: the MinerU markdown usually contains the table as structured text — read that directly instead of rendering images.
 
 ### Saving figure analysis to notes
@@ -68,6 +72,7 @@ Fall back to PDF tools:
 When the user asks to save your figure analysis to a note (e.g., "save it", "put that in a note", "create a note", "write to obsidian"), the Write Note skill handles the full workflow. Key rules:
 
 - **Always embed the analyzed figure image** in the note — mandatory, not optional. A note explaining Figure 2 must show Figure 2.
+- For a full compound figure, embed every available same-number panel/image that you analyzed, in panel order. If any panel or image path is missing/unreadable, say that explicitly in the note.
 - Place the image at the start of the relevant section, before the explanation text.
 - If you analyzed multiple figures, embed all of them.
 - If MinerU cache was not available (you used `paper_read({ mode:'visual' })` instead), the figure image cannot be embedded — mention this.

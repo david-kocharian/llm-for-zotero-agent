@@ -397,6 +397,7 @@ function buildFigureMineruInstruction(
   return (
     "TURN RULE: This is a figure/table interpretation task and MinerU cache is available for at least one in-scope paper. " +
     "Use the MinerU cache first: read `manifest.json` with `file_io`, find the requested figure/table entry, read the matching `full.md` section slice by offset/length for caption and surrounding text, then read the extracted image path with `file_io` when a figure image is needed. " +
+    "For full compound figures, read every same-number panel/image path and the full figure text before answering; for explicit panel requests, focus on that panel without treating it as the whole figure. " +
     "Use `paper_read({ mode:'visual', query:'<figure/table label>' })` only when MinerU is absent, the MinerU lookup/image load fails, or the user explicitly asks for rendered/raw PDF pages, page screenshots, page layout, exact pages, or visible-reader inspection.\n" +
     `Available MinerU cache directories:\n${cacheHints}`
   );

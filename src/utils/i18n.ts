@@ -367,16 +367,23 @@ const zhCN: Record<string, string> = {
   "⚠️ enable MinerU to start PDF parsing": "⚠️ 请启用 MinerU 以开始 PDF 解析",
   "Enable MinerU sync before preparing packages.":
     "请先启用 MinerU 同步，再准备同步包。",
-  "No API key needed to start, but a personal key is strongly recommended.":
-    "无需 API 密钥即可开始，但强烈建议配置个人密钥。",
-  "The built-in MinerU API may no longer be supported after June 1, 2026.":
-    "内置 MinerU API 可能会在 2026 年 6 月 1 日后不再受支持。",
+  "An API key is required.": "需要 API 密钥。",
+  "Paste it below to connect directly to MinerU cloud parsing.":
+    "请粘贴到下方，以直连 MinerU 云端解析。",
   "Get your own free API key from": "请从以下网站获取你自己的免费 API 密钥：",
+  "Get a free key from": "请从以下网站获取免费 API 密钥：",
   "and paste it below.": "并粘贴到下方。",
-  "API Key (Recommended)": "API 密钥（推荐）",
+  "MinerU parsing mode": "MinerU 解析模式",
+  Cloud: "云端",
+  "API Key (Required)": "API 密钥（必填）",
   "Paste your free MinerU API key": "粘贴你的免费 MinerU API 密钥",
-  "With your own key: direct connection to mineru.net":
-    "使用自己的密钥：直连 mineru.net",
+  "Connects directly to mineru.net.": "直连 mineru.net。",
+  "Parsing model": "解析模型",
+  "vlm uses a vision-language model — generally better at chapter structure, figures, and formulas; may be slower than pipeline.":
+    "vlm 使用视觉语言模型，通常更擅长章节结构、图片和公式；可能比 pipeline 更慢。",
+  "MinerU API key required. Add it in Settings.":
+    "需要 MinerU API 密钥。请在设置中添加。",
+  "Enter your MinerU API key first": "请先输入 MinerU API 密钥",
   "Use local MinerU server": "使用本地 MinerU 服务",
   "Local API Base URL": "本地 API URL",
   "Uses a self-hosted mineru-api server. Test Connection only checks that the server process is reachable.":

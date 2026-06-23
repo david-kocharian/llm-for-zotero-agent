@@ -29,6 +29,7 @@ function readSourceFiles(): Array<{ path: string; content: string }> {
     join(root, "src/agent/model/agentPersona.ts"),
     join(root, "src/agent/model/messageBuilder.ts"),
     join(root, "src/agent/mcp/server.ts"),
+    join(root, "src/agent/tools/index.ts"),
     join(root, "src/codexAppServer/nativeClient.ts"),
     join(root, "src/agent/runtime.ts"),
     ...collectFiles(join(root, "src/agent/skills"), (path) =>
@@ -218,6 +219,64 @@ describe("tool guidance contracts", function () {
       "file_io({ action:'read', filePath:'{mineruCacheDir}/full.md'",
     );
     assert.include(agentPersona, "read the image files via file_io");
+  });
+
+  it("requires complete compound-figure inspection and note embedding", function () {
+    const sources = readSourceFiles();
+    const byPath = new Map(
+      sources.map((source) => [source.path, source.content] as const),
+    );
+
+    const analyzeFigures = byPath.get("src/agent/skills/analyze-figures.md");
+    const writeNote = byPath.get("src/agent/skills/write-note.md");
+    const agentPersona = byPath.get("src/agent/model/agentPersona.ts");
+    const messageBuilder = byPath.get("src/agent/model/messageBuilder.ts");
+    const paperRead = byPath.get("src/agent/tools/read/paperRead.ts");
+    const noteTools = byPath.get("src/agent/tools/index.ts");
+    const currentNoteTool = byPath.get(
+      "src/agent/tools/write/editCurrentNote.ts",
+    );
+
+    for (const content of [
+      analyzeFigures,
+      writeNote,
+      agentPersona,
+      messageBuilder,
+      paperRead,
+      noteTools,
+      currentNoteTool,
+    ]) {
+      assert.isString(content);
+    }
+
+    assert.include(
+      analyzeFigures!,
+      "For full compound figures, inspect every same-number panel/image path before answering",
+    );
+    assert.include(
+      messageBuilder!,
+      "For full compound figures, read every same-number panel/image path",
+    );
+    assert.include(
+      paperRead!,
+      "For a full compound figure, read every same-number panel/image path",
+    );
+    assert.include(
+      agentPersona!,
+      "For full compound figures, inspect all same-number panels/images",
+    );
+    assert.include(
+      writeNote!,
+      "If the note is about a full compound figure, embed every available same-number panel/image",
+    );
+    assert.include(
+      noteTools!,
+      "For a full compound figure, embed every available same-number panel/image",
+    );
+    assert.include(
+      currentNoteTool!,
+      "For a full compound figure, embed every available same-number panel/image",
+    );
   });
 
   it("does not expose hidden legacy call targets in model-visible guidance", function () {

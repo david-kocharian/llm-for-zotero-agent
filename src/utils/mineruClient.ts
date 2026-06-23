@@ -6,32 +6,28 @@ import {
   type MinerUZipInspectionResult,
 } from "./mineruZip";
 import {
+  DEFAULT_MINERU_CLOUD_MODEL,
   getMineruApiKey,
+  getMineruCloudModel,
   getMineruLocalApiBase,
   getMineruLocalBackend,
   getMineruMode,
   normalizeMineruLocalApiBase,
   toMineruApiBackend,
+  type MineruCloudModel,
   type MineruLocalBackend,
 } from "./mineruConfig";
 import { t } from "./i18n";
 import { buildMultipartRequest } from "./multipart";
 
 const MINERU_DIRECT_API_BASE = "https://mineru.net/api/v4";
-const MINERU_PROXY_API_BASE =
-  "https://llm-for-zotero.ylwwayne.workers.dev/api/v4";
 
-/**
- * When the user provides their own API key, call mineru.net directly.
- * Otherwise, use the community proxy (which injects the shared key server-side).
- */
-function getMineruApiBase(apiKey: string): string {
-  return apiKey ? MINERU_DIRECT_API_BASE : MINERU_PROXY_API_BASE;
+function getMineruApiBase(): string {
+  return MINERU_DIRECT_API_BASE;
 }
 
 function getMineruAuthHeaders(apiKey: string): Record<string, string> {
-  // When using the proxy, no Authorization header needed — the proxy injects it
-  return apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
+  return { Authorization: `Bearer ${apiKey}` };
 }
 const CLOUD_INITIAL_POLL_INTERVAL_MS = 3000;
 const CLOUD_MEDIUM_POLL_INTERVAL_MS = 15 * 1000;
@@ -1112,10 +1108,8 @@ function getCurlPath(): string | null {
   return "/usr/bin/curl";
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function getSubprocess(): any | null {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const CU = (globalThis as any).ChromeUtils;
     if (CU?.importESModule) {
       try {
@@ -1158,7 +1152,6 @@ async function runCurl(args: string[], timeoutMs = 300000): Promise<number> {
         command: curlPath,
         arguments: args,
       });
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const drain = async (pipe: any) => {
         if (!pipe?.readString) return;
         try {
@@ -1445,9 +1438,29 @@ async function httpPutBinary(
   return { status: 0 };
 }
 
+export function buildCloudBatchRequestBody(params: {
+  fileName: string;
+  modelVersion?: MineruCloudModel;
+}): {
+  enable_formula: true;
+  enable_table: true;
+  language: "ch";
+  model_version: MineruCloudModel;
+  files: Array<{ name: string; is_ocr: false }>;
+} {
+  return {
+    enable_formula: true,
+    enable_table: true,
+    language: "ch",
+    model_version: params.modelVersion ?? DEFAULT_MINERU_CLOUD_MODEL,
+    files: [{ name: params.fileName, is_ocr: false }],
+  };
+}
+
 async function parsePdfViaUpload(
   pdfPath: string,
   apiKey: string,
+  modelVersion: MineruCloudModel,
   report: (s: string) => void,
   signal?: AbortSignal,
 ): Promise<MinerUResult> {
@@ -1468,18 +1481,12 @@ async function parsePdfViaUpload(
 
   const batchResult = await httpJson(
     "POST",
-    `${getMineruApiBase(apiKey)}/file-urls/batch`,
+    `${getMineruApiBase()}/file-urls/batch`,
     {
       ...getMineruAuthHeaders(apiKey),
       "Content-Type": "application/json",
     },
-    JSON.stringify({
-      enable_formula: true,
-      enable_table: true,
-      language: "ch",
-      model_version: "pipeline",
-      files: [{ name: fileName, is_ocr: false }],
-    }),
+    JSON.stringify(buildCloudBatchRequestBody({ fileName, modelVersion })),
   );
 
   if (batchResult.status === 429) {
@@ -1494,10 +1501,7 @@ async function parsePdfViaUpload(
       throw new MineruRateLimitError(`MinerU rate limit: ${respMsg}`);
     }
     report(
-      t("Batch request failed: HTTP %s").replace(
-        "%s",
-        `${batchResult.status}`,
-      ),
+      t("Batch request failed: HTTP %s").replace("%s", `${batchResult.status}`),
     );
     return null;
   }
@@ -1567,7 +1571,7 @@ async function parsePdfViaUpload(
 
     const pollResult = await httpJson(
       "GET",
-      `${getMineruApiBase(apiKey)}/extract-results/batch/${batchId}`,
+      `${getMineruApiBase()}/extract-results/batch/${batchId}`,
       getMineruAuthHeaders(apiKey),
     );
 
@@ -1659,6 +1663,7 @@ async function parsePdfViaUpload(
 export async function parsePdfWithMineruCloud(
   pdfPath: string,
   apiKey: string,
+  modelVersion: MineruCloudModel = DEFAULT_MINERU_CLOUD_MODEL,
   onProgress?: MinerUProgressCallback,
   signal?: AbortSignal,
 ): Promise<MinerUResult> {
@@ -1667,7 +1672,17 @@ export async function parsePdfWithMineruCloud(
     onProgress?.(stage);
   };
   try {
-    return await parsePdfViaUpload(pdfPath, apiKey, report, signal);
+    if (!apiKey.trim()) {
+      report(t("MinerU API key required. Add it in Settings."));
+      return null;
+    }
+    return await parsePdfViaUpload(
+      pdfPath,
+      apiKey.trim(),
+      modelVersion,
+      report,
+      signal,
+    );
   } catch (e) {
     if (e instanceof MineruRateLimitError) throw e;
     if (e instanceof MineruCancelledError) throw e;
@@ -1719,6 +1734,7 @@ export async function parsePdfWithMineru(
   return parsePdfWithMineruCloud(
     pdfPath,
     getMineruApiKey(),
+    getMineruCloudModel(),
     onProgress,
     signal,
   );
@@ -1743,7 +1759,7 @@ async function testOssViaCurl(ossUrl: string): Promise<boolean> {
 export async function testMineruConnection(apiKey: string): Promise<void> {
   const result = await httpJson(
     "GET",
-    `${getMineruApiBase(apiKey)}/extract-results/batch/_test`,
+    `${getMineruApiBase()}/extract-results/batch/_test`,
     getMineruAuthHeaders(apiKey),
   );
   if (result.status === 401 || result.status === 403) {
@@ -1802,22 +1818,6 @@ export async function testMineruConnection(apiKey: string): Promise<void> {
     throw new Error(
       "API key is valid, but cannot reach Alibaba Cloud OSS (mineru.oss-cn-shanghai.aliyuncs.com). " +
         "This may be caused by your network environment. MinerU parsing will likely fail.",
-    );
-  }
-}
-
-/**
- * Test the community proxy connection (no user API key needed).
- */
-export async function testProxyConnection(): Promise<void> {
-  const result = await httpJson(
-    "GET",
-    `${MINERU_PROXY_API_BASE}/extract-results/batch/_test`,
-    {},
-  );
-  if (result.status === 401 || result.status === 403) {
-    throw new Error(
-      "Proxy authentication failed — please provide your own API key",
     );
   }
 }

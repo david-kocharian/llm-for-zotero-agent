@@ -987,6 +987,304 @@ describe("primitive agent tools", function () {
     }
   });
 
+  it("file_io rejects Markdown notes that embed only part of an available compound figure", async function () {
+    const tool = createFileIOTool();
+    const encoder = new TextEncoder();
+    const writes: string[] = [];
+    const originalIOUtils = (globalThis as { IOUtils?: unknown }).IOUtils;
+    const manifestPath = "/tmp/llm-for-zotero-mineru/77/manifest.json";
+    const manifest = {
+      sections: [],
+      totalChars: 0,
+      allFigures: [
+        {
+          label: "Figure 2a",
+          baseLabel: "Figure 2",
+          path: "images/fig2a.png",
+          caption: "Figure 2a. Attractor architecture.",
+          section: "Decision making",
+        },
+        {
+          label: "Figure 2b",
+          baseLabel: "Figure 2",
+          path: "images/fig2b.png",
+          caption: "Figure 2b. Integrate-and-fire architecture.",
+          section: "Decision making",
+        },
+        {
+          label: "Figure 2c",
+          baseLabel: "Figure 2",
+          path: "images/fig2c.png",
+          caption: "Figure 2c. Energy landscape.",
+          section: "Decision making",
+        },
+      ],
+      allTables: [],
+    };
+    (globalThis as { IOUtils?: unknown }).IOUtils = {
+      exists: async (path: string) => path === manifestPath,
+      read: async (path: string) => {
+        if (path !== manifestPath) throw new Error(`Unexpected read: ${path}`);
+        return encoder.encode(JSON.stringify(manifest));
+      },
+      write: async (path: string) => {
+        writes.push(path);
+      },
+      makeDirectory: async () => undefined,
+    };
+    const paperContext: PaperContextRef = {
+      itemId: 76,
+      contextItemId: 77,
+      title: "Stochastic Dynamics",
+      firstCreator: "Rolls",
+      year: "2012",
+      mineruCacheDir: "/tmp/llm-for-zotero-mineru/77",
+    };
+    const context: AgentToolContext = {
+      ...baseContext,
+      request: {
+        ...baseContext.request,
+        conversationKey: 43_008,
+        userText: "write a note about figure 1 and figure 2",
+        fullTextPaperContexts: [paperContext],
+      },
+    };
+
+    try {
+      const write = tool.validate({
+        action: "write",
+        filePath: "/tmp/obsidian-vault/Zotero Notes/figures.md",
+        content: [
+          "![Figure 2. Attractor-network decision-making](imgs/paper/figure-2.jpg)",
+          "",
+          "## Figure 2 - Attractor-network decision-making",
+          "",
+          "Panel 2a illustrates an attractor architecture.",
+          "",
+          "Panel 2b shows the integrate-and-fire network architecture.",
+          "",
+          "Panel 2c gives the energy-landscape interpretation.",
+        ].join("\n"),
+      });
+      assert.isTrue(write.ok);
+      if (!write.ok) return;
+
+      const result = (await tool.execute(write.value, context)) as Record<
+        string,
+        unknown
+      >;
+
+      assert.deepInclude(result, {
+        action: "write",
+        filePath: "/tmp/obsidian-vault/Zotero Notes/figures.md",
+      });
+      assert.include(String(result.error || ""), "Compound figure incomplete");
+      assert.include(String(result.error || ""), "Figure 2");
+      assert.include(String(result.error || ""), "3 available");
+      assert.include(String(result.error || ""), "images/fig2a.png");
+      assert.include(String(result.error || ""), "images/fig2b.png");
+      assert.include(String(result.error || ""), "images/fig2c.png");
+      assert.deepEqual(writes, []);
+    } finally {
+      clearUndoStack(context.request.conversationKey);
+      (globalThis as { IOUtils?: unknown }).IOUtils = originalIOUtils;
+    }
+  });
+
+  it("file_io allows Markdown notes that embed every available compound-figure panel", async function () {
+    const tool = createFileIOTool();
+    const encoder = new TextEncoder();
+    const fileContent = new Map<string, string>();
+    const originalIOUtils = (globalThis as { IOUtils?: unknown }).IOUtils;
+    const manifestPath = "/tmp/llm-for-zotero-mineru/77/manifest.json";
+    const manifest = {
+      sections: [],
+      totalChars: 0,
+      allFigures: [
+        {
+          label: "Figure 2a",
+          baseLabel: "Figure 2",
+          path: "images/fig2a.png",
+          caption: "Figure 2a. Attractor architecture.",
+          section: "Decision making",
+        },
+        {
+          label: "Figure 2b",
+          baseLabel: "Figure 2",
+          path: "images/fig2b.png",
+          caption: "Figure 2b. Integrate-and-fire architecture.",
+          section: "Decision making",
+        },
+        {
+          label: "Figure 2c",
+          baseLabel: "Figure 2",
+          path: "images/fig2c.png",
+          caption: "Figure 2c. Energy landscape.",
+          section: "Decision making",
+        },
+      ],
+      allTables: [],
+    };
+    (globalThis as { IOUtils?: unknown }).IOUtils = {
+      exists: async (path: string) => path === manifestPath,
+      read: async (path: string) => {
+        if (path !== manifestPath) throw new Error(`Unexpected read: ${path}`);
+        return encoder.encode(JSON.stringify(manifest));
+      },
+      write: async (path: string, bytes: Uint8Array) => {
+        fileContent.set(path, new TextDecoder().decode(bytes));
+      },
+      makeDirectory: async () => undefined,
+    };
+    const paperContext: PaperContextRef = {
+      itemId: 76,
+      contextItemId: 77,
+      title: "Stochastic Dynamics",
+      firstCreator: "Rolls",
+      year: "2012",
+      mineruCacheDir: "/tmp/llm-for-zotero-mineru/77",
+    };
+    const context: AgentToolContext = {
+      ...baseContext,
+      request: {
+        ...baseContext.request,
+        conversationKey: 43_009,
+        userText: "write a note about figure 2",
+        fullTextPaperContexts: [paperContext],
+      },
+    };
+
+    try {
+      const content = [
+        "![Figure 2a. Attractor architecture](imgs/paper/figure-2a.png)",
+        "![Figure 2b. Integrate-and-fire architecture](imgs/paper/figure-2b.png)",
+        "![Figure 2c. Energy landscape](imgs/paper/figure-2c.png)",
+        "",
+        "## Figure 2 - Attractor-network decision-making",
+        "",
+        "Panel 2a illustrates an attractor architecture.",
+        "Panel 2b shows the integrate-and-fire network architecture.",
+        "Panel 2c gives the energy-landscape interpretation.",
+      ].join("\n");
+      const write = tool.validate({
+        action: "write",
+        filePath: "/tmp/obsidian-vault/Zotero Notes/figures.md",
+        content,
+      });
+      assert.isTrue(write.ok);
+      if (!write.ok) return;
+
+      const result = (await tool.execute(write.value, context)) as Record<
+        string,
+        unknown
+      >;
+
+      assert.notProperty(result, "error");
+      assert.equal(
+        fileContent.get("/tmp/obsidian-vault/Zotero Notes/figures.md"),
+        content,
+      );
+    } finally {
+      clearUndoStack(context.request.conversationKey);
+      (globalThis as { IOUtils?: unknown }).IOUtils = originalIOUtils;
+    }
+  });
+
+  it("file_io allows explicit panel-only Markdown notes for a compound figure", async function () {
+    const tool = createFileIOTool();
+    const encoder = new TextEncoder();
+    const fileContent = new Map<string, string>();
+    const originalIOUtils = (globalThis as { IOUtils?: unknown }).IOUtils;
+    const manifestPath = "/tmp/llm-for-zotero-mineru/77/manifest.json";
+    const manifest = {
+      sections: [],
+      totalChars: 0,
+      allFigures: [
+        {
+          label: "Figure 2a",
+          baseLabel: "Figure 2",
+          path: "images/fig2a.png",
+          caption: "Figure 2a. Attractor architecture.",
+          section: "Decision making",
+        },
+        {
+          label: "Figure 2b",
+          baseLabel: "Figure 2",
+          path: "images/fig2b.png",
+          caption: "Figure 2b. Integrate-and-fire architecture.",
+          section: "Decision making",
+        },
+        {
+          label: "Figure 2c",
+          baseLabel: "Figure 2",
+          path: "images/fig2c.png",
+          caption: "Figure 2c. Energy landscape.",
+          section: "Decision making",
+        },
+      ],
+      allTables: [],
+    };
+    (globalThis as { IOUtils?: unknown }).IOUtils = {
+      exists: async (path: string) => path === manifestPath,
+      read: async (path: string) => {
+        if (path !== manifestPath) throw new Error(`Unexpected read: ${path}`);
+        return encoder.encode(JSON.stringify(manifest));
+      },
+      write: async (path: string, bytes: Uint8Array) => {
+        fileContent.set(path, new TextDecoder().decode(bytes));
+      },
+      makeDirectory: async () => undefined,
+    };
+    const paperContext: PaperContextRef = {
+      itemId: 76,
+      contextItemId: 77,
+      title: "Stochastic Dynamics",
+      firstCreator: "Rolls",
+      year: "2012",
+      mineruCacheDir: "/tmp/llm-for-zotero-mineru/77",
+    };
+    const context: AgentToolContext = {
+      ...baseContext,
+      request: {
+        ...baseContext.request,
+        conversationKey: 43_010,
+        userText: "write a note about Figure 2b",
+        fullTextPaperContexts: [paperContext],
+      },
+    };
+
+    try {
+      const content = [
+        "![Figure 2b. Integrate-and-fire architecture](imgs/paper/figure-2b.png)",
+        "",
+        "## Figure 2b - Integrate-and-fire architecture",
+        "",
+        "Panel 2b shows the integrate-and-fire network architecture.",
+      ].join("\n");
+      const write = tool.validate({
+        action: "write",
+        filePath: "/tmp/obsidian-vault/Zotero Notes/figure-2b.md",
+        content,
+      });
+      assert.isTrue(write.ok);
+      if (!write.ok) return;
+
+      const result = (await tool.execute(write.value, context)) as Record<
+        string,
+        unknown
+      >;
+
+      assert.notProperty(result, "error");
+      assert.equal(
+        fileContent.get("/tmp/obsidian-vault/Zotero Notes/figure-2b.md"),
+        content,
+      );
+    } finally {
+      clearUndoStack(context.request.conversationKey);
+      (globalThis as { IOUtils?: unknown }).IOUtils = originalIOUtils;
+    }
+  });
+
   it("notes directory policy treats save-as paths as explicit targets", function () {
     const originalPrefs = globalScope.Zotero?.Prefs;
     if (!globalScope.Zotero) {

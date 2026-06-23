@@ -3,6 +3,7 @@ import { config } from "../../package.json";
 const MINERU_ENABLED_KEY = `${config.prefsPrefix}.mineruEnabled`;
 const MINERU_API_KEY_KEY = `${config.prefsPrefix}.mineruApiKey`;
 const MINERU_MODE_KEY = `${config.prefsPrefix}.mineruMode`;
+const MINERU_CLOUD_MODEL_KEY = `${config.prefsPrefix}.mineruCloudModel`;
 const MINERU_LOCAL_API_BASE_KEY = `${config.prefsPrefix}.mineruLocalApiBase`;
 const MINERU_LOCAL_BACKEND_KEY = `${config.prefsPrefix}.mineruLocalBackend`;
 const MINERU_AUTO_WATCH_KEY = `${config.prefsPrefix}.mineruAutoWatchCollections`;
@@ -12,11 +13,14 @@ const MINERU_MAX_AUTO_PAGES_KEY = `${config.prefsPrefix}.mineruMaxAutoPages`;
 const MINERU_EXCLUDE_PATTERNS_KEY = `${config.prefsPrefix}.mineruExcludePatterns`;
 
 export const DEFAULT_MINERU_LOCAL_API_BASE = "http://127.0.0.1:8000";
+export const DEFAULT_MINERU_CLOUD_MODEL: MineruCloudModel = "pipeline";
 export const DEFAULT_MINERU_LOCAL_BACKEND: MineruLocalBackend = "pipeline";
 export const DEFAULT_MINERU_MAX_AUTO_PAGES = 100;
 export const MAX_MINERU_FILENAME_PATTERN_LENGTH = 256;
 
 export type MineruMode = "cloud" | "local";
+
+export type MineruCloudModel = "pipeline" | "vlm";
 
 export type MineruLocalBackend = "pipeline" | "vlm" | "hybrid";
 
@@ -32,6 +36,11 @@ export const MINERU_LOCAL_BACKENDS: readonly MineruLocalBackend[] = [
   "pipeline",
   "vlm",
   "hybrid",
+] as const;
+
+export const MINERU_CLOUD_MODELS: readonly MineruCloudModel[] = [
+  "pipeline",
+  "vlm",
 ] as const;
 
 const MINERU_BACKEND_API_VALUES: Record<MineruLocalBackend, string> = {
@@ -72,6 +81,26 @@ export function getMineruMode(): MineruMode {
 
 export function setMineruMode(value: MineruMode): void {
   Zotero.Prefs.set(MINERU_MODE_KEY, normalizeMineruMode(value), true);
+}
+
+export function normalizeMineruCloudModel(value: unknown): MineruCloudModel {
+  return MINERU_CLOUD_MODELS.includes(value as MineruCloudModel)
+    ? (value as MineruCloudModel)
+    : DEFAULT_MINERU_CLOUD_MODEL;
+}
+
+export function getMineruCloudModel(): MineruCloudModel {
+  return normalizeMineruCloudModel(
+    Zotero.Prefs.get(MINERU_CLOUD_MODEL_KEY, true),
+  );
+}
+
+export function setMineruCloudModel(value: MineruCloudModel): void {
+  Zotero.Prefs.set(
+    MINERU_CLOUD_MODEL_KEY,
+    normalizeMineruCloudModel(value),
+    true,
+  );
 }
 
 export function normalizeMineruLocalApiBase(value: unknown): string {
@@ -238,7 +267,11 @@ export function buildMineruFilenameMatcher(
     if (!trimmed || trimmed.length > MAX_MINERU_FILENAME_PATTERN_LENGTH) {
       continue;
     }
-    if (trimmed.startsWith("/") && trimmed.endsWith("/") && trimmed.length > 2) {
+    if (
+      trimmed.startsWith("/") &&
+      trimmed.endsWith("/") &&
+      trimmed.length > 2
+    ) {
       try {
         rules.push({
           kind: "regex",

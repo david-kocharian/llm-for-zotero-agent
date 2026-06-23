@@ -905,6 +905,7 @@ export async function readMineruImageAsBase64(
 
 export type ManifestFigure = {
   label: string;
+  baseLabel: string;
   path: string;
   caption: string;
   page?: number;
@@ -912,6 +913,7 @@ export type ManifestFigure = {
 
 export type ManifestTable = {
   label: string;
+  baseLabel: string;
   path: string;
   caption: string;
   page?: number;
@@ -983,9 +985,21 @@ function isNoiseHeading(text: string): boolean {
 /** Extract a figure/table label like "Fig. 1", "Figure 3", "Table 2" from caption text. */
 function extractFigureLabel(caption: string): string {
   const match = caption.match(
-    /^(Fig(?:ure)?\.?\s*\d+|Table\s*\d+|Supplementary\s+Fig(?:ure)?\.?\s*\d+)/i,
+    /^(Fig(?:ure)?\.?\s*[sS]?\d+[a-z]?|Table\s*[sS]?\d+[a-z]?|Supplementary\s+Fig(?:ure)?\.?\s*[sS]?\d+[a-z]?)/i,
   );
   return match ? match[1] : "";
+}
+
+export function getManifestFigureBaseLabel(label: string): string {
+  const trimmed = label.trim();
+  const match = trimmed.match(
+    /^(Supplementary\s+)?(Fig(?:ure)?\.?|Table)\s*([sS]?\d+)([a-z])?\b/i,
+  );
+  if (!match) return trimmed;
+  const prefix = match[1] ? "Supplementary " : "";
+  const kind = /^table$/i.test(match[2]) ? "Table" : "Figure";
+  const number = match[3].toUpperCase();
+  return `${prefix}${kind} ${number}`;
 }
 
 type ContentListEntry = {
@@ -1063,8 +1077,11 @@ export function buildManifest(
     if (entry.type === "image" && entry.img_path) {
       const captionText = (entry.image_caption || []).join(" ").trim();
       const label = extractFigureLabel(captionText);
+      const effectiveLabel =
+        label || `image-${currentCLSection.figures.length + 1}`;
       currentCLSection.figures.push({
-        label: label || `image-${currentCLSection.figures.length + 1}`,
+        label: effectiveLabel,
+        baseLabel: getManifestFigureBaseLabel(effectiveLabel),
         path: entry.img_path,
         caption: captionText.slice(0, 300),
         page: entry.page_idx,
@@ -1075,8 +1092,11 @@ export function buildManifest(
       const captionText = (entry.table_caption || []).join(" ").trim();
       const footnoteText = (entry.table_footnote || []).join(" ").trim();
       const label = extractFigureLabel(captionText || footnoteText);
+      const effectiveLabel =
+        label || `table-${currentCLSection.tables.length + 1}`;
       currentCLSection.tables.push({
-        label: label || `table-${currentCLSection.tables.length + 1}`,
+        label: effectiveLabel,
+        baseLabel: getManifestFigureBaseLabel(effectiveLabel),
         path: entry.img_path,
         caption: (captionText || footnoteText).slice(0, 300),
         page: entry.page_idx,

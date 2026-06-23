@@ -1,5 +1,7 @@
 import { assert } from "chai";
 import {
+  buildManifest,
+  getManifestFigureBaseLabel,
   MINERU_SOURCE_PROVENANCE_KIND,
   MINERU_SOURCE_PROVENANCE_VERSION,
   normalizeMineruCacheFiles,
@@ -138,6 +140,58 @@ describe("mineruCache", function () {
     delete (globalThis as unknown as { IOUtils?: unknown }).IOUtils;
     delete (globalThis as unknown as { Zotero?: unknown }).Zotero;
     delete (globalThis as unknown as { ztoolkit?: unknown }).ztoolkit;
+  });
+
+  describe("manifest figure grouping", function () {
+    it("normalizes same-number figure panels to a shared base label", function () {
+      assert.equal(getManifestFigureBaseLabel("Fig. 1a"), "Figure 1");
+      assert.equal(getManifestFigureBaseLabel("Figure 1B"), "Figure 1");
+      assert.equal(getManifestFigureBaseLabel("Figure 1"), "Figure 1");
+      assert.equal(getManifestFigureBaseLabel("Table 2c"), "Table 2");
+      assert.equal(
+        getManifestFigureBaseLabel("Supplementary Fig. S7b"),
+        "Supplementary Figure S7",
+      );
+    });
+
+    it("stores base labels for compound figure entries in the manifest", function () {
+      const md = [
+        "# Abstract",
+        "Opening text.",
+        "# Results",
+        "![Fig 1a](images/fig1a.png)",
+        "![Fig 1b](images/fig1b.png)",
+        "# Discussion",
+        "Closing text.",
+      ].join("\n\n");
+
+      const manifest = buildManifest(md, [
+        { type: "text", text_level: 1, text: "Abstract", page_idx: 0 },
+        { type: "text", text_level: 1, text: "Results", page_idx: 1 },
+        {
+          type: "image",
+          img_path: "images/fig1a.png",
+          image_caption: ["Figure 1a. Screening path."],
+          page_idx: 1,
+        },
+        {
+          type: "image",
+          img_path: "images/fig1b.png",
+          image_caption: ["Figure 1b. Validation path."],
+          page_idx: 1,
+        },
+        { type: "text", text_level: 1, text: "Discussion", page_idx: 2 },
+      ]);
+
+      assert.deepEqual(
+        manifest.allFigures.map((figure) => figure.baseLabel),
+        ["Figure 1", "Figure 1"],
+      );
+      assert.deepEqual(
+        manifest.sections[1].figures.map((figure) => figure.path),
+        ["images/fig1a.png", "images/fig1b.png"],
+      );
+    });
   });
 
   it("normalizes long MinerU root/container paths and rewrites references", function () {
