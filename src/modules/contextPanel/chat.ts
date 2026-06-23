@@ -1,4 +1,5 @@
 import { renderMarkdownForNote } from "../../utils/markdown";
+import { HTML_NS } from "../../utils/domHelpers";
 import {
   t,
   getWelcomeHtml,
@@ -880,7 +881,10 @@ export function renderAssistantGeneratedImagesInto(
       title: string,
       onClick: () => Promise<void> | void,
     ): HTMLButtonElement => {
-      const button = doc.createElement("button") as HTMLButtonElement;
+      const button = doc.createElementNS(
+        HTML_NS,
+        "button",
+      ) as HTMLButtonElement;
       button.className = `llm-generated-image-action ${className}`;
       button.type = "button";
       button.title = title;
@@ -1438,6 +1442,12 @@ function canShowForkActionForAssistantTurn(
   });
 }
 
+export function shouldShowAssistantFooterActions(
+  msg: Pick<Message, "streaming" | "compactMarker">,
+): boolean {
+  return !msg.streaming && !msg.compactMarker;
+}
+
 function appendMessageMetaActionButton(params: {
   body?: Element;
   doc: Document;
@@ -1450,7 +1460,10 @@ function appendMessageMetaActionButton(params: {
   userTimestamp?: number;
   assistantTimestamp?: number;
 }): HTMLButtonElement {
-  const button = params.doc.createElement("button") as HTMLButtonElement;
+  const button = params.doc.createElementNS(
+    HTML_NS,
+    "button",
+  ) as HTMLButtonElement;
   button.type = "button";
   button.className = `llm-message-action ${params.className}`;
   button.title = params.title;
@@ -8770,7 +8783,7 @@ function buildInlineEditWidget(
   const headerLabel = doc.createElement("span") as HTMLSpanElement;
   headerLabel.className = "llm-inline-edit-header-label";
   headerLabel.textContent = "Editing";
-  const cancelBtn = doc.createElement("button") as HTMLButtonElement;
+  const cancelBtn = doc.createElementNS(HTML_NS, "button") as HTMLButtonElement;
   cancelBtn.type = "button";
   cancelBtn.className = "llm-inline-edit-header-cancel";
   cancelBtn.textContent = "Cancel";
@@ -8846,7 +8859,7 @@ export function renderForkSourceMarkerInto(
 
   const leftRule = doc.createElement("span") as HTMLSpanElement;
   leftRule.className = "llm-fork-source-marker-rule";
-  const button = doc.createElement("button") as HTMLButtonElement;
+  const button = doc.createElementNS(HTML_NS, "button") as HTMLButtonElement;
   button.type = "button";
   button.className = "llm-fork-source-marker-button";
   button.title = t("Open original conversation");
@@ -9057,7 +9070,10 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         selectedCollectionContexts.length > 0 ||
         selectedTagContexts.length > 0;
       if (hasScreenshotContext) {
-        const screenshotBar = doc.createElement("button") as HTMLButtonElement;
+        const screenshotBar = doc.createElementNS(
+          HTML_NS,
+          "button",
+        ) as HTMLButtonElement;
         screenshotBar.type = "button";
         screenshotBar.className = "llm-user-screenshots-bar";
 
@@ -9091,7 +9107,10 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
 
         const thumbButtons: HTMLButtonElement[] = [];
         screenshotImages.forEach((imageUrl, index) => {
-          const thumbBtn = doc.createElement("button") as HTMLButtonElement;
+          const thumbBtn = doc.createElementNS(
+            HTML_NS,
+            "button",
+          ) as HTMLButtonElement;
           thumbBtn.type = "button";
           thumbBtn.className = "llm-user-screenshot-thumb";
           thumbBtn.title = `Screenshot ${index + 1}`;
@@ -9186,7 +9205,10 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
       }
 
       if (selectedCollectionContexts.length) {
-        const collectionsBar = doc.createElement("button") as HTMLButtonElement;
+        const collectionsBar = doc.createElementNS(
+          HTML_NS,
+          "button",
+        ) as HTMLButtonElement;
         collectionsBar.type = "button";
         collectionsBar.className =
           "llm-user-papers-bar llm-user-collections-bar";
@@ -9278,7 +9300,10 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
       }
 
       if (selectedTagContexts.length) {
-        const tagsBar = doc.createElement("button") as HTMLButtonElement;
+        const tagsBar = doc.createElementNS(
+          HTML_NS,
+          "button",
+        ) as HTMLButtonElement;
         tagsBar.type = "button";
         tagsBar.className = "llm-user-papers-bar llm-user-tags-bar";
 
@@ -9360,7 +9385,10 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         const displayPaperContexts = paperContexts.map(
           resolvePaperContextForCardDisplay,
         );
-        const papersBar = doc.createElement("button") as HTMLButtonElement;
+        const papersBar = doc.createElementNS(
+          HTML_NS,
+          "button",
+        ) as HTMLButtonElement;
         papersBar.type = "button";
         papersBar.className = "llm-user-papers-bar";
 
@@ -9466,7 +9494,10 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         : [];
       hasUserContext = hasUserContext || fileAttachments.length > 0;
       if (fileAttachments.length) {
-        const filesBar = doc.createElement("button") as HTMLButtonElement;
+        const filesBar = doc.createElementNS(
+          HTML_NS,
+          "button",
+        ) as HTMLButtonElement;
         filesBar.type = "button";
         filesBar.className = "llm-user-files-bar";
 
@@ -9619,7 +9650,10 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
             selectedTextPaperContext
               ? formatPaperCitationLabel(selectedTextPaperContext)
               : "";
-          const selectedBar = doc.createElement("button") as HTMLButtonElement;
+          const selectedBar = doc.createElementNS(
+            HTML_NS,
+            "button",
+          ) as HTMLButtonElement;
           selectedBar.type = "button";
           selectedBar.className = "llm-user-selected-text";
           selectedBar.dataset.contextSource = selectedSource;
@@ -10116,7 +10150,7 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
     time.className = "llm-message-time";
     time.textContent = formatTime(msg.timestamp);
     meta.appendChild(time);
-    if (!isUser && !msg.compactMarker) {
+    if (!isUser && shouldShowAssistantFooterActions(msg)) {
       const pairedUserForActions =
         index > 0 && history[index - 1]?.role === "user"
           ? history[index - 1]
@@ -10146,7 +10180,6 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
 
       if (
         index === latestAssistantIndex &&
-        !msg.streaming &&
         msg.text.trim() &&
         msg.runMode !== "agent" &&
         renderProviderProtocol !== "web_sync" // [webchat] no retry in webchat mode
@@ -10189,7 +10222,6 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
 
       const canShowForkAction =
         actionUserTimestamp > 0 &&
-        !msg.streaming &&
         canShowForkActionForAssistantTurn(
           body,
           item,
@@ -10211,7 +10243,7 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
           assistantTimestamp: actionAssistantTimestamp,
         });
       }
-      if (actionUserTimestamp > 0 && !msg.streaming) {
+      if (actionUserTimestamp > 0) {
         appendMessageMetaActionButton({
           body,
           doc,
@@ -10245,7 +10277,10 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         webchatStatusRow.appendChild(status);
 
         // [webchat] Refresh icon — re-scrape current ChatGPT conversation
-        const refreshBtn = doc.createElement("button") as HTMLButtonElement;
+        const refreshBtn = doc.createElementNS(
+          HTML_NS,
+          "button",
+        ) as HTMLButtonElement;
         refreshBtn.className = "llm-message-webchat-refresh";
         refreshBtn.textContent = "\u21BB";
         refreshBtn.title = "Re-fetch this conversation from webchat";
