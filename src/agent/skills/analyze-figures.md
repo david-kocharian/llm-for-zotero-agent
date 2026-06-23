@@ -38,15 +38,19 @@ Use `file_io({ action:'read', filePath:'{mineruCacheDir}/manifest.json' })` to s
 
 **Step 2 — Find the figure in the manifest:**
 The manifest lists figures per section with labels (e.g. "Fig. 1"), image paths, captions, and page numbers. Locate the target figure and note which section it belongs to.
-For full compound figures, inspect every same-number panel/image path before answering.
-For example, if the user asks for Figure 1 and the manifest or section includes Figure 1a, Figure 1b, and Figure 1c, read all of those image paths plus the full caption/figure text.
-If the user asks only for Figure 1b, you may focus on that panel, but do not imply that panel is the whole Figure 1.
+For MinerU figures/tables, adjacent image runs in `full.md` are the primary block boundary.
+For Figure 1, Fig. 1b, or any panel request, read the whole adjacent image block plus the full caption/figure text before answering.
+Panel suffixes and captions are hints only; do not assume image order proves panel identity.
+If the user asks only for Figure 1b, you may focus the explanation on the requested panel evidence, but still inspect the full adjacent block and do not imply one image represents the whole Figure 1.
 
 **Step 3 — Read the section text:**
 Use `file_io({ action:'read', filePath:'{mineruCacheDir}/full.md', offset:<charStart>, length:<charEnd - charStart> })` to read just the section containing the figure. This gives you the caption and surrounding discussion.
 
 **Step 4 — Read the image directly:**
-Use `file_io({ action:'read', filePath:'{mineruCacheDir}/<figure_path>' })` to load the image. The path comes from the manifest's figure entry. Image-capable models can inspect this artifact directly — use the figure image together with the caption and surrounding text.
+Use `file_io({ action:'read', filePath:'{mineruCacheDir}/<figure_path>' })` to load the image.
+The path comes from the manifest's figure entry.
+If the path belongs to a MinerU adjacent image block, `file_io` returns ordered metadata/artifacts for the whole block.
+Image-capable models can inspect the artifacts directly — use the images together with the caption and surrounding text.
 
 **Step 5 — Combine image + text:**
 Use both the image and the section text (caption + discussion) to give a complete answer.
@@ -64,7 +68,8 @@ Fall back to PDF tools:
 - **NEVER** attempt to install packages (PIL, cv2, etc.) to process images.
 - Prefer MinerU cache over raw PDF — it's faster and gives better quality.
 - Always include the figure caption and surrounding context in your analysis, not just the image.
-- For full compound figures, read all same-number panels/images and the complete figure text before drawing conclusions.
+- For MinerU compound figures, read the whole adjacent image block and the complete figure text before drawing conclusions.
+- Text-only models can use ordered paths, captions, section text, and page hints, but must not make unsupported visual claims.
 - For tables: the MinerU markdown usually contains the table as structured text — read that directly instead of rendering images.
 
 ### Saving figure analysis to notes
@@ -72,7 +77,7 @@ Fall back to PDF tools:
 When the user asks to save your figure analysis to a note (e.g., "save it", "put that in a note", "create a note", "write to obsidian"), the Write Note skill handles the full workflow. Key rules:
 
 - **Always embed the analyzed figure image** in the note — mandatory, not optional. A note explaining Figure 2 must show Figure 2.
-- For a full compound figure, embed every available same-number panel/image that you analyzed, in panel order. If any panel or image path is missing/unreadable, say that explicitly in the note.
+- For any multi-image MinerU block, embed every available adjacent image path that you analyzed, in source order. If any image path is missing/unreadable, say that explicitly in the note.
 - Place the image at the start of the relevant section, before the explanation text.
 - If you analyzed multiple figures, embed all of them.
 - If MinerU cache was not available (you used `paper_read({ mode:'visual' })` instead), the figure image cannot be embedded — mention this.

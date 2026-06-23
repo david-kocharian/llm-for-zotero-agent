@@ -10,9 +10,11 @@ import {
   resolveParentItemForNoteTarget,
 } from "../../../modules/contextPanel/notes";
 import { importLocalImagesIntoNote } from "../../../modules/contextPanel/noteImages";
+import { validateMineruFigureBlockEmbedsForCacheDirs } from "../../../modules/contextPanel/mineruFigureBlockCache";
 import { escapeNoteHtml } from "../../../modules/contextPanel/textUtils";
 import { ok, fail, validateObject, normalizePositiveInt } from "../shared";
 import { executeAndRecordUndo } from "./mutateLibraryShared";
+import { collectRequestPaperContexts } from "../requestPaperContexts";
 
 type NotePatch = { find: string; replace: string };
 
@@ -43,6 +45,39 @@ function sanitizeNoteHtml(html: string): string {
 /** Detect whether an HTML string contains inline `style=` attributes. */
 function htmlHasInlineStyles(html: string): boolean {
   return /<[^>]+\bstyle\s*=/i.test(html);
+}
+
+function getRequestMineruCacheDirs(context: AgentToolContext): string[] {
+  return collectRequestPaperContexts(context.request)
+    .map((paperContext) =>
+      typeof paperContext.mineruCacheDir === "string"
+        ? paperContext.mineruCacheDir.trim()
+        : "",
+    )
+    .filter(Boolean);
+}
+
+async function validateNoteFigureBlockEmbeds(
+  input: Pick<EditCurrentNoteInput, "content">,
+  context: AgentToolContext,
+): Promise<null | Record<string, unknown>> {
+  const guard = await validateMineruFigureBlockEmbedsForCacheDirs({
+    content: input.content,
+    requestText: context.request.userText || "",
+    cacheDirs: getRequestMineruCacheDirs(context),
+  });
+  if (!guard) return null;
+  return {
+    status: "rejected",
+    error: guard.message,
+    figureBlock: {
+      blockId: guard.block.blockId,
+      severity: guard.severity,
+      embeddedCount: guard.embeddedCount,
+      availableCount: guard.availableCount,
+      availablePaths: guard.availablePaths,
+    },
+  };
 }
 
 type EditCurrentNoteInput = {
@@ -435,7 +470,8 @@ export function createEditCurrentNoteTool(
         "For standalone notes, call `edit_current_note` with mode 'create', target 'standalone', and `content`. " +
         "Pass Markdown by default. When the user explicitly requests HTML output (e.g. for styled note templates), pass well-formed HTML with inline styles directly. " +
         "When the note discusses a specific figure or table you previously read via file_io, embed the image: `![Figure N](file:///{path})` — auto-imported as a Zotero attachment. " +
-        "For a full compound figure, embed every available same-number panel/image and state clearly if any panel is unavailable.",
+        "For any MinerU figure/table block with adjacent images, embed every available image path from that block in source order, even for panel-specific notes; state clearly if any image path is unavailable. " +
+        "Text-only models may still copy/embed those paths into notes, but must not make unsupported visual claims beyond caption and surrounding-text evidence.",
     },
     presentation: {
       label: "Edit / Create / Append Note",
@@ -722,6 +758,12 @@ export function createEditCurrentNoteTool(
       });
     },
     execute: async (input, context) => {
+      const figureBlockGuard = await validateNoteFigureBlockEmbeds(
+        input,
+        context,
+      );
+      if (figureBlockGuard) return figureBlockGuard;
+
       const hasLocalImages =
         /!\[[^\]]*\]\(file:\/\/|<img\s+[^>]*src\s*=\s*"file:\/\//i.test(
           input.content,

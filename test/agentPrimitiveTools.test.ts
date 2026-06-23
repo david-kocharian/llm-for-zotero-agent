@@ -1078,15 +1078,204 @@ describe("primitive agent tools", function () {
         action: "write",
         filePath: "/tmp/obsidian-vault/Zotero Notes/figures.md",
       });
-      assert.include(String(result.error || ""), "Compound figure incomplete");
+      assert.include(String(result.error || ""), "Incomplete MinerU figure block");
       assert.include(String(result.error || ""), "Figure 2");
-      assert.include(String(result.error || ""), "3 available");
+      assert.include(String(result.error || ""), "3 adjacent");
       assert.include(String(result.error || ""), "images/fig2a.png");
       assert.include(String(result.error || ""), "images/fig2b.png");
       assert.include(String(result.error || ""), "images/fig2c.png");
       assert.deepEqual(writes, []);
     } finally {
       clearUndoStack(context.request.conversationKey);
+      (globalThis as { IOUtils?: unknown }).IOUtils = originalIOUtils;
+    }
+  });
+
+  it("file_io rejects incomplete notes for captionless adjacent MinerU image blocks", async function () {
+    const tool = createFileIOTool();
+    const encoder = new TextEncoder();
+    const writes: string[] = [];
+    const originalIOUtils = (globalThis as { IOUtils?: unknown }).IOUtils;
+    const cacheDir = "/tmp/llm-for-zotero-mineru/88";
+    const fullMdPath = `${cacheDir}/full.md`;
+    const contentListPath = `${cacheDir}/content_list.json`;
+    const fullMd = [
+      "# Results",
+      "A captionless compound figure appears below.",
+      "",
+      "![](images/a.jpg)",
+      "",
+      "![](images/b.jpg)",
+      "",
+      "![](images/c.jpg)",
+      "",
+      "The text resumes.",
+    ].join("\n");
+    const contentList = [
+      { type: "text", text_level: 1, text: "Results", page_idx: 0 },
+      { type: "image", img_path: "images/a.jpg", page_idx: 1 },
+      { type: "image", img_path: "images/b.jpg", page_idx: 1 },
+      { type: "image", img_path: "images/c.jpg", page_idx: 1 },
+    ];
+    (globalThis as { IOUtils?: unknown }).IOUtils = {
+      exists: async (path: string) =>
+        [
+          cacheDir,
+          fullMdPath,
+          contentListPath,
+          `${cacheDir}/images/a.jpg`,
+          `${cacheDir}/images/b.jpg`,
+          `${cacheDir}/images/c.jpg`,
+        ].includes(path),
+      read: async (path: string) => {
+        if (path === fullMdPath) return encoder.encode(fullMd);
+        if (path === contentListPath) {
+          return encoder.encode(JSON.stringify(contentList));
+        }
+        throw new Error(`Unexpected read: ${path}`);
+      },
+      getChildren: async (path: string) =>
+        path === cacheDir ? [contentListPath] : [],
+      write: async (path: string) => {
+        writes.push(path);
+      },
+      makeDirectory: async () => undefined,
+    };
+    const paperContext: PaperContextRef = {
+      itemId: 87,
+      contextItemId: 88,
+      title: "Captionless Blocks",
+      mineruCacheDir: cacheDir,
+    };
+    const context: AgentToolContext = {
+      ...baseContext,
+      request: {
+        ...baseContext.request,
+        conversationKey: 43_011,
+        userText: "write a note with this compound figure",
+        fullTextPaperContexts: [paperContext],
+      },
+    };
+
+    try {
+      const write = tool.validate({
+        action: "write",
+        filePath: "/tmp/obsidian-vault/Zotero Notes/captionless.md",
+        content: [
+          `![Only one panel](file:///${cacheDir}/images/a.jpg)`,
+          "",
+          "This note discusses the compound figure.",
+        ].join("\n"),
+      });
+      assert.isTrue(write.ok);
+      if (!write.ok) return;
+
+      const result = (await tool.execute(write.value, context)) as Record<
+        string,
+        unknown
+      >;
+
+      assert.include(String(result.error || ""), "Incomplete MinerU figure block");
+      assert.include(String(result.error || ""), "images/a.jpg");
+      assert.include(String(result.error || ""), "images/b.jpg");
+      assert.include(String(result.error || ""), "images/c.jpg");
+      assert.deepEqual(writes, []);
+    } finally {
+      clearUndoStack(context.request.conversationKey);
+      (globalThis as { IOUtils?: unknown }).IOUtils = originalIOUtils;
+    }
+  });
+
+  it("file_io image reads surface the whole MinerU image block", async function () {
+    const tool = createFileIOTool();
+    const encoder = new TextEncoder();
+    const originalIOUtils = (globalThis as { IOUtils?: unknown }).IOUtils;
+    const cacheDir = "/tmp/llm-for-zotero-mineru/89";
+    const fullMdPath = `${cacheDir}/full.md`;
+    const contentListPath = `${cacheDir}/content_list.json`;
+    const fullMd = [
+      "# Results",
+      "![](images/a.jpg)",
+      "",
+      "![](images/b.jpg)",
+      "",
+      "![](images/c.jpg)",
+    ].join("\n");
+    const contentList = [
+      { type: "text", text_level: 1, text: "Results", page_idx: 0 },
+      {
+        type: "image",
+        img_path: "images/a.jpg",
+        image_caption: ["Figure 2. Three-panel figure."],
+        page_idx: 1,
+      },
+      { type: "image", img_path: "images/b.jpg", page_idx: 1 },
+      { type: "image", img_path: "images/c.jpg", page_idx: 1 },
+    ];
+    (globalThis as { IOUtils?: unknown }).IOUtils = {
+      exists: async (path: string) =>
+        [
+          cacheDir,
+          fullMdPath,
+          contentListPath,
+          `${cacheDir}/images/a.jpg`,
+          `${cacheDir}/images/b.jpg`,
+          `${cacheDir}/images/c.jpg`,
+        ].includes(path),
+      read: async (path: string) => {
+        if (path === fullMdPath) return encoder.encode(fullMd);
+        if (path === contentListPath) {
+          return encoder.encode(JSON.stringify(contentList));
+        }
+        return new Uint8Array([137, 80, 78, 71]);
+      },
+      getChildren: async (path: string) =>
+        path === cacheDir ? [contentListPath] : [],
+    };
+    const paperContext: PaperContextRef = {
+      itemId: 88,
+      contextItemId: 89,
+      title: "Block Read",
+      mineruCacheDir: cacheDir,
+    };
+    const context: AgentToolContext = {
+      ...baseContext,
+      request: {
+        ...baseContext.request,
+        conversationKey: 43_012,
+        authMode: "codex_app_server",
+        fullTextPaperContexts: [paperContext],
+      },
+    };
+
+    try {
+      const read = tool.validate({
+        action: "read",
+        filePath: `${cacheDir}/images/b.jpg`,
+      });
+      assert.isTrue(read.ok);
+      if (!read.ok) return;
+
+      const result = (await tool.execute(read.value, context)) as {
+        content: Record<string, unknown>;
+        artifacts?: Array<{ storedPath: string }>;
+      };
+
+      const block = result.content.figureBlock as Record<string, unknown>;
+      assert.deepEqual(block.imagePaths, [
+        `${cacheDir}/images/a.jpg`,
+        `${cacheDir}/images/b.jpg`,
+        `${cacheDir}/images/c.jpg`,
+      ]);
+      assert.deepEqual(
+        result.artifacts?.map((artifact) => artifact.storedPath),
+        [
+          `${cacheDir}/images/a.jpg`,
+          `${cacheDir}/images/b.jpg`,
+          `${cacheDir}/images/c.jpg`,
+        ],
+      );
+    } finally {
       (globalThis as { IOUtils?: unknown }).IOUtils = originalIOUtils;
     }
   });
@@ -1190,7 +1379,7 @@ describe("primitive agent tools", function () {
     }
   });
 
-  it("file_io allows explicit panel-only Markdown notes for a compound figure", async function () {
+  it("file_io rejects explicit panel-only Markdown notes for a compound figure block", async function () {
     const tool = createFileIOTool();
     const encoder = new TextEncoder();
     const fileContent = new Map<string, string>();
@@ -1274,10 +1463,10 @@ describe("primitive agent tools", function () {
         unknown
       >;
 
-      assert.notProperty(result, "error");
-      assert.equal(
+      assert.include(String(result.error || ""), "Incomplete MinerU figure block");
+      assert.include(String(result.error || ""), "Figure 2");
+      assert.isUndefined(
         fileContent.get("/tmp/obsidian-vault/Zotero Notes/figure-2b.md"),
-        content,
       );
     } finally {
       clearUndoStack(context.request.conversationKey);
@@ -1656,6 +1845,87 @@ describe("primitive agent tools", function () {
     assert.equal(commandField.label, "Command");
     assert.equal(commandField.value, command);
     assert.equal(commandField.language, "sh");
+  });
+
+  it("run_command refuses obvious Markdown note writes into configured note destinations", async function () {
+    const tool = createRunCommandTool();
+    const existingPaths = new Set<string>();
+    let executed = false;
+    const originalIOUtils = (globalThis as { IOUtils?: unknown }).IOUtils;
+    const originalChromeUtils = (globalThis as { ChromeUtils?: unknown })
+      .ChromeUtils;
+    (globalThis as { IOUtils?: unknown }).IOUtils = {
+      exists: async (path: string) => existingPaths.has(path),
+    };
+    (globalThis as { ChromeUtils?: unknown }).ChromeUtils = {
+      importESModule: () => ({
+        Subprocess: {
+          call: async () => {
+            executed = true;
+            throw new Error("run_command should not execute note writes");
+          },
+        },
+      }),
+    };
+    const context: AgentToolContext = {
+      ...baseContext,
+      request: {
+        ...baseContext.request,
+        conversationKey: 43_015,
+        metadata: {
+          ...(baseContext.request.metadata || {}),
+          fileNoteWritePolicy: {
+            directoryPath: "/tmp/obsidian-vault",
+            defaultFolder: "Zotero Notes",
+            defaultTargetPath: "/tmp/obsidian-vault/Zotero Notes",
+            attachmentsFolder: "assets",
+            attachmentsPath: "/tmp/obsidian-vault/assets",
+            nickname: "vault",
+            enforceDefaultTarget: true,
+          },
+        },
+      },
+    };
+
+    try {
+      const refusedCommands = [
+        'printf "note" > "/tmp/obsidian-vault/Zotero Notes/figure.md"',
+        'printf "note" >> "/tmp/obsidian-vault/Zotero Notes/figure.md"',
+        'printf "note" | tee "/tmp/obsidian-vault/Zotero Notes/figure.md"',
+        'cp "/tmp/source.md" "/tmp/obsidian-vault/Zotero Notes/figure.md"',
+        'mv "/tmp/source.md" "/tmp/obsidian-vault/Zotero Notes/figure.md"',
+      ];
+      for (const command of refusedCommands) {
+        const validated = tool.validate({ command });
+        assert.isTrue(validated.ok, command);
+        if (!validated.ok) return;
+        assert.isTrue(
+          await tool.shouldRequireConfirmation?.(validated.value, context),
+          command,
+        );
+        const result = (await tool.execute(
+          { ...validated.value, allowUnsafe: true },
+          context,
+        )) as Record<string, unknown>;
+        assert.equal(result.exitCode, -1, command);
+        assert.include(String(result.stderr || ""), "Refusing run_command");
+        assert.include(String(result.stderr || ""), "file_io");
+      }
+
+      const unrelated = tool.validate({
+        command: 'printf "note" > "/tmp/not-a-note.md"',
+      });
+      assert.isTrue(unrelated.ok);
+      if (!unrelated.ok) return;
+      assert.isFalse(
+        await tool.shouldRequireConfirmation?.(unrelated.value, context),
+      );
+      assert.isFalse(executed);
+    } finally {
+      (globalThis as { IOUtils?: unknown }).IOUtils = originalIOUtils;
+      (globalThis as { ChromeUtils?: unknown }).ChromeUtils =
+        originalChromeUtils;
+    }
   });
 
   it("run_command and file_io keep unknown writes gated after confirmation", async function () {
@@ -2050,6 +2320,205 @@ describe("primitive agent tools", function () {
       noteId: 55,
       html: "<p>Original body</p>",
     });
+  });
+
+  it("edit_current_note rejects incomplete MinerU figure-block embeds before mutation", async function () {
+    let replaced = false;
+    const tool = createEditCurrentNoteTool({
+      getActiveNoteSnapshot: () => ({
+        noteId: 55,
+        title: "Draft Note",
+        html: "<p>Original body</p>",
+        text: "Original body",
+        libraryID: 1,
+        noteKind: "standalone",
+      }),
+      replaceCurrentNote: async () => {
+        replaced = true;
+        throw new Error("replaceCurrentNote should not run");
+      },
+      restoreNoteHtml: async () => {},
+    } as never);
+    const encoder = new TextEncoder();
+    const originalIOUtils = (globalThis as { IOUtils?: unknown }).IOUtils;
+    const cacheDir = "/tmp/llm-for-zotero-mineru/90";
+    const contentListPath = `${cacheDir}/paper_content_list.json`;
+    const fullMd = [
+      "## Decision making",
+      "",
+      "![](images/fig2a.png)",
+      "",
+      "![](images/fig2b.png)",
+      "",
+      "![](images/fig2c.png)",
+      "",
+      "Figure 2. Attractor network for probabilistic decision-making.",
+    ].join("\n");
+    (globalThis as { IOUtils?: unknown }).IOUtils = {
+      read: async (path: string) => {
+        if (path === `${cacheDir}/full.md`) return encoder.encode(fullMd);
+        if (path === contentListPath) {
+          return encoder.encode(
+            JSON.stringify([
+              {
+                type: "image",
+                img_path: "images/fig2a.png",
+                image_caption: ["Figure 2. Attractor network."],
+              },
+              { type: "image", img_path: "images/fig2b.png" },
+              { type: "image", img_path: "images/fig2c.png" },
+            ]),
+          );
+        }
+        throw new Error(`Unexpected read: ${path}`);
+      },
+      getChildren: async (path: string) =>
+        path === cacheDir ? [contentListPath] : [],
+    };
+    const context: AgentToolContext = {
+      ...baseContext,
+      request: {
+        ...baseContext.request,
+        conversationKey: 43_013,
+        userText: "write a note about Figure 2",
+        activeNoteContext: {
+          noteId: 55,
+          title: "Draft Note",
+          noteKind: "standalone" as const,
+          noteText: "Original body",
+        },
+        fullTextPaperContexts: [
+          {
+            itemId: 90,
+            contextItemId: 90,
+            title: "Stochastic Dynamics",
+            mineruCacheDir: cacheDir,
+          },
+        ],
+      },
+    };
+
+    try {
+      const validated = tool.validate({
+        content: [
+          "![Figure 2c](images/fig2c.png)",
+          "",
+          "Figure 2 explains the attractor-network interpretation.",
+        ].join("\n"),
+      });
+      assert.isTrue(validated.ok);
+      if (!validated.ok) return;
+
+      const result = (await tool.execute(validated.value, context)) as Record<
+        string,
+        unknown
+      >;
+
+      assert.equal(result.status, "rejected");
+      assert.include(String(result.error || ""), "Incomplete MinerU figure block");
+      assert.include(String(result.error || ""), "Figure 2");
+      assert.isFalse(replaced);
+    } finally {
+      clearUndoStack(context.request.conversationKey);
+      (globalThis as { IOUtils?: unknown }).IOUtils = originalIOUtils;
+    }
+  });
+
+  it("edit_current_note allows complete MinerU figure-block embeds", async function () {
+    let replacedContent = "";
+    const tool = createEditCurrentNoteTool({
+      replaceCurrentNote: async ({ content }: { content: string }) => {
+        replacedContent = content;
+        return {
+          noteId: 55,
+          title: "Draft Note",
+          previousHtml: "<p>Original body</p>",
+          previousText: "Original body",
+          nextText: content,
+        };
+      },
+      restoreNoteHtml: async () => {},
+    } as never);
+    const encoder = new TextEncoder();
+    const originalIOUtils = (globalThis as { IOUtils?: unknown }).IOUtils;
+    const cacheDir = "/tmp/llm-for-zotero-mineru/91";
+    const contentListPath = `${cacheDir}/paper_content_list.json`;
+    const fullMd = [
+      "![](images/fig2a.png)",
+      "",
+      "![](images/fig2b.png)",
+      "",
+      "![](images/fig2c.png)",
+      "",
+      "Figure 2. Attractor network for probabilistic decision-making.",
+    ].join("\n");
+    (globalThis as { IOUtils?: unknown }).IOUtils = {
+      read: async (path: string) => {
+        if (path === `${cacheDir}/full.md`) return encoder.encode(fullMd);
+        if (path === contentListPath) {
+          return encoder.encode(
+            JSON.stringify([
+              {
+                type: "image",
+                img_path: "images/fig2a.png",
+                image_caption: ["Figure 2. Attractor network."],
+              },
+              { type: "image", img_path: "images/fig2b.png" },
+              { type: "image", img_path: "images/fig2c.png" },
+            ]),
+          );
+        }
+        throw new Error(`Unexpected read: ${path}`);
+      },
+      getChildren: async (path: string) =>
+        path === cacheDir ? [contentListPath] : [],
+    };
+    const context: AgentToolContext = {
+      ...baseContext,
+      request: {
+        ...baseContext.request,
+        conversationKey: 43_014,
+        userText: "write a note about Figure 2",
+        fullTextPaperContexts: [
+          {
+            itemId: 91,
+            contextItemId: 91,
+            title: "Stochastic Dynamics",
+            mineruCacheDir: cacheDir,
+          },
+        ],
+      },
+    };
+
+    try {
+      const content = [
+        "![Figure 2a](images/fig2a.png)",
+        "",
+        "![Figure 2b](images/fig2b.png)",
+        "",
+        "![Figure 2c](images/fig2c.png)",
+        "",
+        "Figure 2 explains the attractor-network interpretation.",
+      ].join("\n");
+      const validated = tool.validate({ content });
+      assert.isTrue(validated.ok);
+      if (!validated.ok) return;
+
+      const result = (await tool.execute(validated.value, context)) as Record<
+        string,
+        unknown
+      >;
+
+      assert.deepInclude(result, {
+        status: "updated",
+        noteId: 55,
+        title: "Draft Note",
+      });
+      assert.equal(replacedContent, content);
+    } finally {
+      clearUndoStack(context.request.conversationKey);
+      (globalThis as { IOUtils?: unknown }).IOUtils = originalIOUtils;
+    }
   });
 
   it("edit_current_note normalizes HTML note content before review and save", async function () {

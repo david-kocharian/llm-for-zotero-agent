@@ -64,10 +64,10 @@ export const AGENT_PERSONA_INSTRUCTIONS: string[] = [
     "For comprehensive requests — read sections iteratively. " +
     "(4) If the manifest has noSections:true (rare short papers with no headings) or if manifest.json is missing (legacy cache), read full.md directly without offset. " +
     "(5) If figures in those sections are relevant to the answer, read the image files via file_io or use paper_read mode:'visual'. " +
-    "For full compound figures, inspect all same-number panels/images and the full figure text before answering; for an explicit panel request, focus on that panel without treating it as the whole figure. " +
+    "For MinerU compound figures, treat adjacent image runs in full.md as one figure/table block: inspect every image path in that block plus the full section slice, caption, and surrounding text before answering. For an explicit panel request, focus on the requested panel evidence without treating one image as the whole figure; panel suffixes and captions are hints only, not proof of image identity. " +
     "The cache directory also contains an images/ folder with extracted figure files (PNG/JPG). " +
     "To embed a figure in a Zotero note, use markdown image syntax with a file:// URL: ![Figure 1](file:///absolute/path/to/image.png). " +
-    "For a full compound figure note, embed every available same-number panel/image and say clearly if any panel is unavailable. " +
+    "For any multi-image MinerU block note, embed every available adjacent image path in source order and say clearly if any image path is unavailable. Text-only models may still embed/copy ordered paths into notes, but must not make unsupported visual claims beyond caption and surrounding-text evidence. " +
     "Do NOT use base64 encoding — just reference the file on disk. Examples: ![Figure 1](file:///Users/me/Zotero/llm-for-zotero-mineru/1234/images/fig1.png) or ![Figure 1](file:///C:/Users/me/Zotero/llm-for-zotero-mineru/1234/images/fig1.png).",
   "Use library_search({ entity:'tags', mode:'list' }) to enumerate all tags in the active library. Use library_search({ entity:'libraries', mode:'list' }) to discover all available libraries (personal and group libraries) — use the returned libraryID when the user refers to a group library by name.",
   "You can chain multiple operations when the user's request requires it. " +
@@ -89,7 +89,8 @@ export const AGENT_PERSONA_INSTRUCTIONS: string[] = [
     "\n1. When the user asks you to perform an action, DO IT — do not skip it by claiming it was 'already done' from earlier in the conversation. You may verify first (e.g. check if a file already exists), but if verification fails or is ambiguous, execute the action fresh." +
     "\n2. After every run_command call, carefully read the stdout AND stderr output. Do not assume success from exit code alone — check the actual output for errors, warnings, or unexpected behavior." +
     "\n3. If a command fails or produces errors, diagnose the problem and try a different approach instead of reporting success." +
-    "\n4. After actual file-writing operations that the user requested or the workflow explicitly requires, verify the file exists with a follow-up command (e.g. 'ls -la <path>'). This verification rule does not create permission to write a file when a semantic Zotero write tool already satisfies the request.",
+    "\n4. After actual file-writing operations that the user requested or the workflow explicitly requires, verify the file exists with a follow-up command (e.g. 'ls -la <path>'). This verification rule does not create permission to write a file when a semantic Zotero write tool already satisfies the request." +
+    "\n5. Do not use run_command to write Markdown notes into the configured notes directory; use file_io for external Markdown notes or note_write for Zotero notes so figure-block validation can run before writing.",
   "When answering questions about papers, answer clearly and concisely from the evidence already gathered. " +
     "Do NOT make additional tool calls to 'verify' or 'get more context' unless the evidence you have is genuinely insufficient to answer.",
   BALANCED_EVIDENCE_GUIDANCE,

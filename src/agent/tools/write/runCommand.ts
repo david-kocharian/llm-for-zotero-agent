@@ -5,8 +5,12 @@
  *
  * Uses Mozilla's Subprocess module (Gecko runtime).
  */
-import type { AgentToolDefinition } from "../../types";
+import type { AgentToolContext, AgentToolDefinition } from "../../types";
 import { getRuntimePlatformInfo } from "../../../utils/runtimePlatform";
+import {
+  isLocalPathInsideOrEqual,
+  parseNotesDirectoryWritePolicy,
+} from "../../../utils/notesDirectoryConfig";
 import { ok, fail, validateObject } from "../shared";
 import { pushUndoEntry } from "../../store/undoStore";
 
@@ -253,6 +257,12 @@ const APPEND_REDIRECT_PATTERN =
 const OVERWRITE_REDIRECT_TARGET_PATTERN =
   /(?:^|[^<])(?:\d?>|&>)\s*(?:"([^"]+)"|'([^']+)'|([^\s;&|]+))/;
 
+const ANY_REDIRECT_TARGET_PATTERN =
+  /(?:^|[^<])(?:\d*>>|&>>|\d?>|&>)\s*(?:"([^"]+)"|'([^']+)'|([^\s;&|]+))/g;
+
+const TEE_TARGET_PATTERN =
+  /(?:^|[|;&])\s*tee(?:\s+-[A-Za-z]+)*\s+(?:"([^"]+)"|'([^']+)'|([^\s;&|]+))/g;
+
 async function pathExists(path: string): Promise<boolean | null> {
   const IOUtils = (globalThis as any).IOUtils;
   if (IOUtils?.exists) {
@@ -322,6 +332,10 @@ function isNullRedirectTarget(path: string): boolean {
   return normalized === "/dev/null" || normalized === "nul";
 }
 
+function isMarkdownNotePath(path: string): boolean {
+  return /\.(?:md|markdown)$/i.test(path.trim());
+}
+
 function parseRedirectTarget(command: string): ReversibleCommandWrite | null {
   const match = command.match(OVERWRITE_REDIRECT_TARGET_PATTERN);
   if (!match) return null;
@@ -332,6 +346,67 @@ function parseRedirectTarget(command: string): ReversibleCommandWrite | null {
     path,
     description: `Delete created file from shell redirect: ${path}`,
   };
+}
+
+function parseCommandWriteTargets(command: string): string[] {
+  const targets: string[] = [];
+  let match: RegExpExecArray | null;
+  const redirectPattern = new RegExp(
+    ANY_REDIRECT_TARGET_PATTERN.source,
+    ANY_REDIRECT_TARGET_PATTERN.flags,
+  );
+  while ((match = redirectPattern.exec(command)) !== null) {
+    const path = (match[1] || match[2] || match[3] || "").trim();
+    if (path && !isNullRedirectTarget(path)) targets.push(path);
+  }
+
+  const teePattern = new RegExp(
+    TEE_TARGET_PATTERN.source,
+    TEE_TARGET_PATTERN.flags,
+  );
+  while ((match = teePattern.exec(command)) !== null) {
+    const path = (match[1] || match[2] || match[3] || "").trim();
+    if (path && !isNullRedirectTarget(path)) targets.push(path);
+  }
+
+  const words = parseSimpleShellWords(command.trim());
+  if (words?.length) {
+    const [program, ...args] = words;
+    if (
+      (program === "cp" || program === "mv") &&
+      args.length >= 2 &&
+      !args.some((arg) => hasGlobPattern(arg))
+    ) {
+      const positional = args.filter((arg) => !arg.startsWith("-"));
+      const target = positional[positional.length - 1];
+      if (target) targets.push(target);
+    }
+  }
+
+  return Array.from(new Set(targets));
+}
+
+function getNoteWriteBypassRefusal(
+  input: Pick<RunCommandInput, "command" | "cwd">,
+  context: AgentToolContext | undefined,
+): string | null {
+  const policy = parseNotesDirectoryWritePolicy(
+    context?.request.metadata?.fileNoteWritePolicy,
+  );
+  if (!policy) return null;
+  const targets = parseCommandWriteTargets(input.command)
+    .filter((path) => isMarkdownNotePath(path))
+    .map((path) => resolveCommandPath(path, input.cwd));
+  const noteTarget = targets.find(
+    (path) =>
+      isLocalPathInsideOrEqual(path, policy.defaultTargetPath) ||
+      isLocalPathInsideOrEqual(path, policy.directoryPath),
+  );
+  if (!noteTarget) return null;
+  return (
+    `Refusing run_command Markdown note write to configured notes directory: ${noteTarget}. ` +
+    "Use file_io for external Markdown note files or edit_current_note for Zotero notes so MinerU figure-block completeness can be validated before writing."
+  );
 }
 
 function parseReversibleCommandWrite(
@@ -388,8 +463,11 @@ function isSystemAutomationCommand(command: string): boolean {
 
 async function getRunCommandConfirmationReason(
   input: Pick<RunCommandInput, "command" | "cwd">,
+  context?: AgentToolContext,
 ): Promise<string | null> {
   const command = input.command.trim();
+  const noteWriteBypass = getNoteWriteBypassRefusal(input, context);
+  if (noteWriteBypass) return noteWriteBypass;
   if (isNetworkToShellCommand(command)) {
     return "Command downloads code and passes it directly to a shell";
   }
@@ -519,8 +597,8 @@ export function createRunCommandTool(): AgentToolDefinition<
       });
     },
 
-    async shouldRequireConfirmation(input, _context) {
-      return Boolean(await getRunCommandConfirmationReason(input));
+    async shouldRequireConfirmation(input, context) {
+      return Boolean(await getRunCommandConfirmationReason(input, context));
     },
 
     createPendingAction(input) {
@@ -561,7 +639,19 @@ export function createRunCommandTool(): AgentToolDefinition<
       const existedBeforeWrite = reversibleWrite
         ? await pathExists(resolveCommandPath(reversibleWrite.path, input.cwd))
         : null;
-      const confirmationReason = await getRunCommandConfirmationReason(input);
+      const noteWriteRefusal = getNoteWriteBypassRefusal(input, context);
+      if (noteWriteRefusal) {
+        return {
+          exitCode: -1,
+          stdout: "",
+          stderr: noteWriteRefusal,
+          command: input.command,
+        };
+      }
+      const confirmationReason = await getRunCommandConfirmationReason(
+        input,
+        context,
+      );
       if (confirmationReason && !input.allowUnsafe) {
         return {
           exitCode: -1,

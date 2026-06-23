@@ -1,4 +1,13 @@
-import { readMineruImageAsBase64 } from "./mineruCache";
+import {
+  getMineruItemDir,
+  readMineruImageAsBase64,
+} from "./mineruCache";
+import {
+  loadMineruFigureBlocksFromCacheDir,
+  toAbsoluteMineruPath,
+  type LoadedMineruFigureBlocks,
+} from "./mineruFigureBlockCache";
+import { findMineruFigureBlockByImagePath } from "./mineruFigureBlocks";
 
 const MD_IMAGE_PATTERN = /!\[([^\]]*)\]\(([^)]+)\)/g;
 export const MAX_MINERU_CONTEXT_IMAGES = 20;
@@ -6,6 +15,17 @@ export const MAX_MINERU_CONTEXT_IMAGES = 20;
 export type MineruImageRef = {
   alt: string;
   relativePath: string;
+};
+
+export type MineruContextImageInventoryEntry = {
+  requestedPath: string;
+  imagePaths: string[];
+  absoluteImagePaths?: string[];
+  blockId?: string;
+  labelHints?: string[];
+  captionHints?: string[];
+  sectionHeading?: string | null;
+  ambiguous?: boolean;
 };
 
 /**
@@ -26,6 +46,102 @@ export function extractImageRefsFromText(text: string): MineruImageRef[] {
     refs.push({ alt: match[1], relativePath });
   }
   return refs;
+}
+
+function dedupeImageRefs(refs: MineruImageRef[]): MineruImageRef[] {
+  const seen = new Set<string>();
+  const out: MineruImageRef[] = [];
+  for (const ref of refs) {
+    const key = ref.relativePath.replace(/\\/g, "/");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(ref);
+  }
+  return out;
+}
+
+async function loadBlocksForAttachment(
+  attachmentId: number,
+): Promise<LoadedMineruFigureBlocks | null> {
+  const cacheDir = getMineruItemDir(attachmentId);
+  try {
+    const blocks = await loadMineruFigureBlocksFromCacheDir(cacheDir);
+    if (!blocks.length) return null;
+    return { cacheDir, blocks };
+  } catch {
+    return null;
+  }
+}
+
+export async function resolveContextImageInventory(params: {
+  contextText: string;
+  attachmentId: number;
+}): Promise<MineruContextImageInventoryEntry[]> {
+  const refs = extractImageRefsFromText(params.contextText);
+  const loaded = await loadBlocksForAttachment(params.attachmentId);
+  if (!loaded) {
+    return refs.map((ref) => ({
+      requestedPath: ref.relativePath,
+      imagePaths: [ref.relativePath],
+    }));
+  }
+
+  const out: MineruContextImageInventoryEntry[] = [];
+  const seen = new Set<string>();
+  for (const ref of refs) {
+    const block = findMineruFigureBlockByImagePath(
+      ref.relativePath,
+      loaded.blocks,
+    );
+    const imagePaths = block?.imagePaths.length
+      ? block.imagePaths
+      : [ref.relativePath];
+    const key = block?.blockId || imagePaths.join("\n");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      requestedPath: ref.relativePath,
+      imagePaths,
+      absoluteImagePaths: imagePaths.map((path) =>
+        toAbsoluteMineruPath(loaded.cacheDir, path),
+      ),
+      ...(block
+        ? {
+            blockId: block.blockId,
+            labelHints: block.labelHints,
+            captionHints: block.captionHints,
+            sectionHeading: block.sectionHeading,
+            ambiguous: block.ambiguous,
+          }
+        : {}),
+    });
+  }
+  return out;
+}
+
+export async function expandImageRefsToFigureBlocks(params: {
+  contextText: string;
+  attachmentId: number;
+}): Promise<MineruImageRef[]> {
+  const refs = extractImageRefsFromText(params.contextText);
+  const loaded = await loadBlocksForAttachment(params.attachmentId);
+  if (!loaded) return refs;
+
+  const expanded: MineruImageRef[] = [];
+  for (const ref of refs) {
+    const block = findMineruFigureBlockByImagePath(
+      ref.relativePath,
+      loaded.blocks,
+    );
+    if (!block || block.imagePaths.length <= 1) {
+      expanded.push(ref);
+      continue;
+    }
+    for (const imagePath of block.imagePaths) {
+      expanded.push({ alt: ref.alt, relativePath: imagePath });
+    }
+  }
+  return dedupeImageRefs(expanded);
 }
 
 /**
@@ -51,7 +167,10 @@ export async function resolveContextImages(params: {
   attachmentId: number;
   maxImages?: number;
 }): Promise<string[]> {
-  const refs = extractImageRefsFromText(params.contextText);
+  const refs = await expandImageRefsToFigureBlocks({
+    contextText: params.contextText,
+    attachmentId: params.attachmentId,
+  });
   const max = params.maxImages ?? MAX_MINERU_CONTEXT_IMAGES;
   const results: string[] = [];
   for (const ref of refs) {

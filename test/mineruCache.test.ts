@@ -15,6 +15,7 @@ import {
 } from "../src/modules/contextPanel/mineruCache";
 import {
   MAX_MINERU_CONTEXT_IMAGES,
+  resolveContextImageInventory,
   resolveContextImages,
 } from "../src/modules/contextPanel/mineruImages";
 
@@ -191,6 +192,10 @@ describe("mineruCache", function () {
         manifest.sections[1].figures.map((figure) => figure.path),
         ["images/fig1a.png", "images/fig1b.png"],
       );
+      assert.deepEqual(manifest.figureBlocks?.[0]?.imagePaths, [
+        "images/fig1a.png",
+        "images/fig1b.png",
+      ]);
     });
   });
 
@@ -399,6 +404,63 @@ describe("mineruCache", function () {
     assert.equal(MAX_MINERU_CONTEXT_IMAGES, 20);
     assert.lengthOf(images, 20);
     assert.match(images[0], /^data:image\/png;base64,/);
+  });
+
+  it("expands one MinerU image ref to the full adjacent figure block", async function () {
+    setupMemoryIO();
+    const markdown = [
+      "## Results",
+      "",
+      "![Figure 2a](images/fig2a.png)",
+      "",
+      "![Figure 2b](images/fig2b.png)",
+      "",
+      "![Figure 2c](images/fig2c.png)",
+      "",
+      "Figure 2. Attractor network for probabilistic decision-making.",
+    ].join("\n");
+    await writeMineruCacheFiles(78, markdown, [
+      { relativePath: "full.md", data: bytes(markdown) },
+      {
+        relativePath: "paper_content_list.json",
+        data: bytes(
+          JSON.stringify([
+            {
+              type: "image",
+              img_path: "images/fig2a.png",
+              image_caption: ["Figure 2. Attractor network."],
+            },
+            { type: "image", img_path: "images/fig2b.png" },
+            { type: "image", img_path: "images/fig2c.png" },
+          ]),
+        ),
+      },
+      { relativePath: "images/fig2a.png", data: bytes([137, 80, 78, 71, 1]) },
+      { relativePath: "images/fig2b.png", data: bytes([137, 80, 78, 71, 2]) },
+      { relativePath: "images/fig2c.png", data: bytes([137, 80, 78, 71, 3]) },
+    ]);
+
+    const images = await resolveContextImages({
+      contextText: "Please inspect ![Figure 2c](images/fig2c.png).",
+      attachmentId: 78,
+    });
+    const inventory = await resolveContextImageInventory({
+      contextText: "Please inspect ![Figure 2c](images/fig2c.png).",
+      attachmentId: 78,
+    });
+
+    assert.lengthOf(images, 3);
+    assert.deepEqual(inventory[0]?.imagePaths, [
+      "images/fig2a.png",
+      "images/fig2b.png",
+      "images/fig2c.png",
+    ]);
+    assert.deepEqual(inventory[0]?.absoluteImagePaths, [
+      "/tmp/zotero/llm-for-zotero-mineru/78/images/fig2a.png",
+      "/tmp/zotero/llm-for-zotero-mineru/78/images/fig2b.png",
+      "/tmp/zotero/llm-for-zotero-mineru/78/images/fig2c.png",
+    ]);
+    assert.equal(inventory[0]?.requestedPath, "images/fig2c.png");
   });
 
   it("writes lightweight parsed source metadata without fingerprinting the PDF", async function () {

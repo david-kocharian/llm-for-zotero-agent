@@ -12,6 +12,11 @@ import { createPaperReadTool } from "../src/agent/tools/read/paperRead";
 import type { AgentToolContext } from "../src/agent/types";
 
 describe("semantic tool surface", function () {
+  const encoder = new TextEncoder();
+  const globalScope = globalThis as typeof globalThis & {
+    IOUtils?: unknown;
+  };
+
   afterEach(function () {
     setUserSkills([]);
   });
@@ -717,6 +722,7 @@ describe("semantic tool surface", function () {
   });
 
   it("paper_read visual redirects generic MinerU figure requests to cache inspection", async function () {
+    const originalIOUtils = globalScope.IOUtils;
     const paperContext = {
       itemId: 11,
       contextItemId: 22,
@@ -724,6 +730,41 @@ describe("semantic tool surface", function () {
       firstCreator: "Miller",
       year: "2025",
       mineruCacheDir: "/tmp/mineru-paper",
+    };
+    const fullMd = [
+      "## Results",
+      "",
+      "![](images/fig2a.png)",
+      "",
+      "![](images/fig2b.png)",
+      "",
+      "![](images/fig2c.png)",
+      "",
+      "Figure 2. Attractor network for probabilistic decision-making.",
+    ].join("\n");
+    const contentListPath = "/tmp/mineru-paper/paper_content_list.json";
+    globalScope.IOUtils = {
+      read: async (path: string) => {
+        if (path === "/tmp/mineru-paper/full.md") {
+          return encoder.encode(fullMd);
+        }
+        if (path === contentListPath) {
+          return encoder.encode(
+            JSON.stringify([
+              {
+                type: "image",
+                img_path: "images/fig2a.png",
+                image_caption: ["Figure 2. Attractor network."],
+              },
+              { type: "image", img_path: "images/fig2b.png" },
+              { type: "image", img_path: "images/fig2c.png" },
+            ]),
+          );
+        }
+        throw new Error(`Unexpected read: ${path}`);
+      },
+      getChildren: async (path: string) =>
+        path === "/tmp/mineru-paper" ? [contentListPath] : [],
     };
     let prepareCalls = 0;
     const tool = createPaperReadTool(
@@ -747,26 +788,43 @@ describe("semantic tool surface", function () {
     );
     const validated = tool.validate({
       mode: "visual",
-      query: "Explain Figure 1",
+      query: "Explain Figure 2c",
     });
     assert.equal(validated.ok, true);
     if (!validated.ok) return;
-    const output = (await tool.execute(validated.value, {
-      ...baseContext,
-      request: {
-        ...baseContext.request,
-        userText: "Explain Figure 1",
-        selectedPaperContexts: [paperContext],
-      },
-    })) as Record<string, unknown>;
+    try {
+      const output = (await tool.execute(validated.value, {
+        ...baseContext,
+        request: {
+          ...baseContext.request,
+          userText: "Explain Figure 2c",
+          selectedPaperContexts: [paperContext],
+        },
+      })) as Record<string, unknown>;
 
-    assert.equal(prepareCalls, 0);
-    assert.equal(output.status, "mineru_cache_available");
-    assert.equal(output.backend, "mineru");
-    assert.equal(output.mineruCacheDir, "/tmp/mineru-paper");
-    assert.include(String(output.guidance || ""), "read manifest.json");
-    assert.include(String(output.guidance || ""), "read the extracted figure image");
-    assert.notProperty(output, "artifacts");
+      assert.equal(prepareCalls, 0);
+      assert.equal(output.status, "mineru_cache_available");
+      assert.equal(output.backend, "mineru");
+      assert.equal(output.mineruCacheDir, "/tmp/mineru-paper");
+      assert.include(String(output.guidance || ""), "adjacent image runs");
+      assert.include(String(output.guidance || ""), "panel suffixes are hints");
+      assert.equal(output.panelHint, "c");
+      const block = (
+        output.figureBlocks as Array<{ imagePaths: string[] }> | undefined
+      )?.[0];
+      assert.deepEqual(block?.imagePaths, [
+        "/tmp/mineru-paper/images/fig2a.png",
+        "/tmp/mineru-paper/images/fig2b.png",
+        "/tmp/mineru-paper/images/fig2c.png",
+      ]);
+      assert.notProperty(output, "artifacts");
+    } finally {
+      if (originalIOUtils === undefined) {
+        delete globalScope.IOUtils;
+      } else {
+        globalScope.IOUtils = originalIOUtils;
+      }
+    }
   });
 
   it("paper_read visual still renders explicit PDF pages for MinerU papers", async function () {

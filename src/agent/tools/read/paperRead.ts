@@ -15,6 +15,11 @@ import {
   formatPaperSourceLabel,
 } from "../../../modules/contextPanel/paperAttribution";
 import {
+  loadMineruFigureBlocksFromCacheDir,
+  toAbsoluteMineruPath,
+} from "../../../modules/contextPanel/mineruFigureBlockCache";
+import { resolveMineruFigureBlocksForQuery } from "../../../modules/contextPanel/mineruFigureBlocks";
+import {
   buildQuoteCitation,
   mergeQuoteCitations,
 } from "../../../modules/contextPanel/quoteCitations";
@@ -206,11 +211,11 @@ function isExplicitPdfVisualRequest(
   );
 }
 
-function buildMineruVisualRedirect(params: {
+async function buildMineruVisualRedirect(params: {
   input: PaperReadInput;
   context: AgentToolContext;
   zoteroGateway: ZoteroGateway;
-}): Record<string, unknown> | null {
+}): Promise<Record<string, unknown> | null> {
   if (
     isExplicitPdfVisualRequest(params.input, params.context.request.userText)
   ) {
@@ -233,15 +238,49 @@ function buildMineruVisualRedirect(params: {
   );
   const mineruCacheDir = normalizeString(paperContext?.mineruCacheDir);
   if (!paperContext || !mineruCacheDir) return null;
+  const query = params.input.query || params.context.request.userText || "";
+  let resolvedBlocks: Array<Record<string, unknown>> = [];
+  let panelHint: string | undefined;
+  try {
+    const blocks = await loadMineruFigureBlocksFromCacheDir(mineruCacheDir);
+    const resolution = resolveMineruFigureBlocksForQuery(query, blocks);
+    panelHint = resolution.panelHint;
+    resolvedBlocks = resolution.blocks.map((block) => ({
+      blockId: block.blockId,
+      kind: block.kind,
+      imagePaths: block.imagePaths.map((path) =>
+        toAbsoluteMineruPath(mineruCacheDir, path),
+      ),
+      labelHints: block.labelHints,
+      captionHints: block.captionHints,
+      sectionHeading: block.sectionHeading,
+      markdownStart: block.markdownStart,
+      markdownEnd: block.markdownEnd,
+      contextStart: block.contextStart,
+      contextEnd: block.contextEnd,
+      confidence: block.confidence,
+      ambiguous: block.ambiguous,
+    }));
+  } catch {
+    resolvedBlocks = [];
+  }
+  const firstResolvedImagePath =
+    Array.isArray(resolvedBlocks[0]?.imagePaths) &&
+    (resolvedBlocks[0]?.imagePaths as unknown[]).length
+      ? String((resolvedBlocks[0]?.imagePaths as unknown[])[0])
+      : "";
   return {
     mode: "visual",
     status: "mineru_cache_available",
     backend: "mineru",
-    query: params.input.query || params.context.request.userText,
+    query,
     paperContext,
     mineruCacheDir,
+    ...(resolvedBlocks.length
+      ? { figureBlocks: resolvedBlocks, ...(panelHint ? { panelHint } : {}) }
+      : {}),
     guidance:
-      "MinerU cache is available for this paper, so do not render PDF pages for this generic figure/table request. Inspect the MinerU cache first: read manifest.json to find the requested figure/table, read the matching full.md section slice for caption and surrounding discussion, then read the extracted figure image with file_io. For a full compound figure, read every same-number panel/image path and the complete figure text before answering. Use paper_read mode:'visual' only if MinerU lookup or image loading fails, or if the user explicitly asks for raw/rendered PDF pages, page screenshots, page layout, exact pages, or visible-reader inspection.",
+      "MinerU cache is available for this paper, so do not render PDF pages for this generic figure/table request. Treat adjacent image runs in full.md as one figure/table block. For Figure 2, Fig. 2c, or any panel request, read the full section slice, caption/surrounding text, and every image path in the resolved block before answering; panel suffixes are hints only, not proof of image identity. Use file_io on any one block image path to receive metadata/artifacts for the whole block. Use paper_read mode:'visual' only if MinerU lookup or image loading fails, or if the user explicitly asks for raw/rendered PDF pages, page screenshots, page layout, exact pages, or visible-reader inspection.",
     nextSteps: [
       `file_io({ action:'read', filePath:'${joinLocalPath(
         mineruCacheDir,
@@ -251,10 +290,10 @@ function buildMineruVisualRedirect(params: {
         mineruCacheDir,
         "full.md",
       )}', offset:<charStart>, length:<charEnd - charStart> })`,
-      `file_io({ action:'read', filePath:'${joinLocalPath(
-        mineruCacheDir,
-        "<figure_path>",
-      )}' })`,
+      `file_io({ action:'read', filePath:'${
+        firstResolvedImagePath ||
+        joinLocalPath(mineruCacheDir, "<figure_path>")
+      }' })`,
     ],
   };
 }
@@ -796,7 +835,7 @@ export function createPaperReadTool(
     async execute(input, context) {
       if (input.mode === "visual" || input.mode === "capture") {
         if (input.mode === "visual") {
-          const mineruRedirect = buildMineruVisualRedirect({
+          const mineruRedirect = await buildMineruVisualRedirect({
             input,
             context,
             zoteroGateway,

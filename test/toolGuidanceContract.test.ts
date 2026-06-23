@@ -251,31 +251,31 @@ describe("tool guidance contracts", function () {
 
     assert.include(
       analyzeFigures!,
-      "For full compound figures, inspect every same-number panel/image path before answering",
+      "adjacent image runs in `full.md` are the primary block boundary",
     );
     assert.include(
       messageBuilder!,
-      "For full compound figures, read every same-number panel/image path",
+      "treat adjacent image runs in full.md as one block",
     );
     assert.include(
       paperRead!,
-      "For a full compound figure, read every same-number panel/image path",
+      "Treat adjacent image runs in full.md as one figure/table block",
     );
     assert.include(
       agentPersona!,
-      "For full compound figures, inspect all same-number panels/images",
+      "treat adjacent image runs in full.md as one figure/table block",
     );
     assert.include(
       writeNote!,
-      "If the note is about a full compound figure, embed every available same-number panel/image",
+      "embed every available image path from that adjacent block in source order",
     );
     assert.include(
       noteTools!,
-      "For a full compound figure, embed every available same-number panel/image",
+      "For any multi-image MinerU block, embed every available adjacent image path",
     );
     assert.include(
       currentNoteTool!,
-      "For a full compound figure, embed every available same-number panel/image",
+      "For any MinerU figure/table block with adjacent images, embed every available image path",
     );
   });
 

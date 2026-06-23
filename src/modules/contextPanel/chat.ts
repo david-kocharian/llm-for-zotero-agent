@@ -210,6 +210,7 @@ import {
 import { resolveMultiContextPlan } from "./multiContextPlanner";
 import {
   MAX_MINERU_CONTEXT_IMAGES,
+  resolveContextImageInventory,
   resolveContextImages,
   buildImageResolver,
 } from "./mineruImages";
@@ -3508,42 +3509,62 @@ async function buildContextPlanForRequest(params: {
     .map((msg) => sanitizeText(msg).trim())
     .filter(Boolean)
     .join("\n\n");
-  const combinedContext = [noteContext, planContext, uploadedPdfContext]
-    .filter(Boolean)
-    .join("\n\n");
 
   // Extract MinerU figure images from the context (if applicable).
-  // Skip only for models explicitly treated as text-only.
+  // Text-only models receive the ordered path inventory instead.
   const effectiveModel = params.effectiveRequestConfig.model || "";
+  const textOnlyModel = isTextOnlyModel(effectiveModel);
   let mineruImages: string[] = [];
-  if (planContext && !isTextOnlyModel(effectiveModel)) {
-    // Collect all MinerU-cached attachment IDs from context papers
+  const mineruInventoryBlocks: string[] = [];
+  if (planContext) {
     const mineruAttachmentIds: number[] = [];
-    if (activeContextItem) {
-      const activePdfCtx = pdfTextCache.get(activeContextItem.id);
-      if (activePdfCtx?.sourceType === "mineru") {
-        mineruAttachmentIds.push(activeContextItem.id);
-      }
-    }
-    // Also include @-referenced papers with MinerU cache
+    const pushMineruAttachmentId = (attachmentId: number | undefined) => {
+      if (!attachmentId || mineruAttachmentIds.includes(attachmentId)) return;
+      const pdfCtx = pdfTextCache.get(attachmentId);
+      if (pdfCtx?.sourceType === "mineru") mineruAttachmentIds.push(attachmentId);
+    };
+    pushMineruAttachmentId(activeContextItem?.id);
     for (const paper of [
       ...params.paperContexts,
       ...params.fullTextPaperContexts,
     ]) {
-      if (
-        paper.contextItemId &&
-        !mineruAttachmentIds.includes(paper.contextItemId)
-      ) {
-        const pdfCtx = pdfTextCache.get(paper.contextItemId);
-        if (pdfCtx?.sourceType === "mineru") {
-          mineruAttachmentIds.push(paper.contextItemId);
-        }
-      }
+      pushMineruAttachmentId(paper.contextItemId);
     }
     // Resolve images from all MinerU papers with a shared total cap.
     for (const attachmentId of mineruAttachmentIds) {
-      if (mineruImages.length >= MAX_MINERU_CONTEXT_IMAGES) break;
       try {
+        if (textOnlyModel) {
+          const inventory = await resolveContextImageInventory({
+            contextText: planContext,
+            attachmentId,
+          });
+          if (inventory.length) {
+            mineruInventoryBlocks.push(
+              [
+                `MinerU image block inventory for attachment ${attachmentId}:`,
+                "Use these ordered source paths for note embedding/copying; do not make visual claims unless supported by captions or surrounding text.",
+                ...inventory.flatMap((entry, index) => {
+                  const paths =
+                    entry.absoluteImagePaths?.length
+                      ? entry.absoluteImagePaths
+                      : entry.imagePaths;
+                  return [
+                    `Block ${index + 1}${entry.labelHints?.length ? ` (${entry.labelHints.join("; ")})` : ""}: requested ${entry.requestedPath}`,
+                    ...paths.map((path, pathIndex) => `  ${pathIndex + 1}. ${path}`),
+                    ...(entry.captionHints?.length
+                      ? [`  Caption hints: ${entry.captionHints.join(" | ")}`]
+                      : []),
+                    ...(entry.ambiguous
+                      ? ["  Ambiguity: block boundary or panel mapping is uncertain."]
+                      : []),
+                  ];
+                }),
+              ].join("\n"),
+            );
+          }
+          continue;
+        }
+        if (mineruImages.length >= MAX_MINERU_CONTEXT_IMAGES) break;
         const images = await resolveContextImages({
           contextText: planContext,
           attachmentId,
@@ -3555,6 +3576,15 @@ async function buildContextPlanForRequest(params: {
       }
     }
   }
+  const mineruInventoryText = mineruInventoryBlocks.join("\n\n");
+  const combinedContext = [
+    noteContext,
+    planContext,
+    uploadedPdfContext,
+    mineruInventoryText,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 
   return {
     combinedContext,

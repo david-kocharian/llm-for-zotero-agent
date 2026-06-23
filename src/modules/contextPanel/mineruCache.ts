@@ -1,4 +1,14 @@
 import { getLocalParentPath, joinLocalPath } from "../../utils/localPath";
+import {
+  buildMineruFigureBlocks,
+  extractFigureLabel,
+  getManifestFigureBaseLabel,
+  type MineruContentListEntry,
+  type MineruFigureBlock,
+} from "./mineruFigureBlocks";
+
+export { getManifestFigureBaseLabel } from "./mineruFigureBlocks";
+export type ContentListEntry = MineruContentListEntry;
 
 const MINERU_CACHE_DIR_NAME = "llm-for-zotero-mineru";
 export const MINERU_SOURCE_PROVENANCE_FILE = "_llm_source.json";
@@ -933,6 +943,7 @@ export type MineruManifest = {
   sections: ManifestSection[];
   allFigures: (ManifestFigure & { section: string })[];
   allTables: (ManifestTable & { section: string })[];
+  figureBlocks?: MineruFigureBlock[];
   totalPages?: number;
   totalChars: number;
   noSections?: boolean;
@@ -982,39 +993,6 @@ function isNoiseHeading(text: string): boolean {
   return false;
 }
 
-/** Extract a figure/table label like "Fig. 1", "Figure 3", "Table 2" from caption text. */
-function extractFigureLabel(caption: string): string {
-  const match = caption.match(
-    /^(Fig(?:ure)?\.?\s*[sS]?\d+[a-z]?|Table\s*[sS]?\d+[a-z]?|Supplementary\s+Fig(?:ure)?\.?\s*[sS]?\d+[a-z]?)/i,
-  );
-  return match ? match[1] : "";
-}
-
-export function getManifestFigureBaseLabel(label: string): string {
-  const trimmed = label.trim();
-  const match = trimmed.match(
-    /^(Supplementary\s+)?(Fig(?:ure)?\.?|Table)\s*([sS]?\d+)([a-z])?\b/i,
-  );
-  if (!match) return trimmed;
-  const prefix = match[1] ? "Supplementary " : "";
-  const kind = /^table$/i.test(match[2]) ? "Table" : "Figure";
-  const number = match[3].toUpperCase();
-  return `${prefix}${kind} ${number}`;
-}
-
-type ContentListEntry = {
-  type: string;
-  text?: string;
-  text_level?: number;
-  page_idx?: number;
-  img_path?: string;
-  image_caption?: string[];
-  image_footnote?: string[];
-  table_body?: string;
-  table_caption?: string[];
-  table_footnote?: string[];
-};
-
 /**
  * Build a manifest from full.md + content_list.json.
  *
@@ -1026,6 +1004,11 @@ export function buildManifest(
   mdContent: string,
   contentList: ContentListEntry[],
 ): MineruManifest {
+  const figureBlocks = buildMineruFigureBlocks({
+    fullMd: mdContent,
+    contentList,
+  });
+
   // ── Step 1: Extract section offsets from full.md ──
   const headingPattern = /^#\s+(.+)$/gm;
   const mdHeadings: { heading: string; charStart: number }[] = [];
@@ -1142,6 +1125,7 @@ export function buildManifest(
       sections,
       allFigures: [],
       allTables: [],
+      figureBlocks,
       totalPages: totalPages || undefined,
       totalChars: mdContent.length,
       noSections: true,
@@ -1191,6 +1175,7 @@ export function buildManifest(
     sections,
     allFigures,
     allTables,
+    figureBlocks,
     totalPages: totalPages || undefined,
     totalChars: mdContent.length,
   };
@@ -1200,7 +1185,9 @@ export function buildManifest(
  * Find the content_list.json file in a MinerU cache directory.
  * The filename is `{uuid}_content_list.json` where uuid varies per paper.
  */
-async function findContentListPath(itemDir: string): Promise<string | null> {
+export async function findMineruContentListPath(
+  itemDir: string,
+): Promise<string | null> {
   const io = getIOUtils();
   const ioAny = io as Record<string, unknown> | undefined;
   const getChildren =
@@ -1228,6 +1215,21 @@ async function findContentListPath(itemDir: string): Promise<string | null> {
   return null;
 }
 
+export async function readMineruContentListFromDir(
+  itemDir: string,
+): Promise<ContentListEntry[]> {
+  const contentListPath = await findMineruContentListPath(itemDir);
+  if (!contentListPath) return [];
+  const clBytes = await readFileBytes(contentListPath);
+  if (!clBytes) return [];
+  try {
+    const parsed = JSON.parse(new TextDecoder("utf-8").decode(clBytes));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Build and write manifest.json for a cached paper.
  * Reads full.md and content_list.json from the cache directory.
@@ -1242,18 +1244,7 @@ export async function buildAndWriteManifest(
   if (!mdBytes) return null;
   const mdContent = new TextDecoder("utf-8").decode(mdBytes);
 
-  const contentListPath = await findContentListPath(itemDir);
-  let contentList: ContentListEntry[] = [];
-  if (contentListPath) {
-    const clBytes = await readFileBytes(contentListPath);
-    if (clBytes) {
-      try {
-        contentList = JSON.parse(new TextDecoder("utf-8").decode(clBytes));
-      } catch {
-        // Invalid JSON — proceed without content_list
-      }
-    }
-  }
+  const contentList = await readMineruContentListFromDir(itemDir);
 
   const manifest = buildManifest(mdContent, contentList);
 

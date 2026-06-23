@@ -156,9 +156,11 @@ Written by LLM-for-Zotero.
 ### Step 3 — Include figures
 
 **If the user asked about a specific figure, you MUST include that figure in the note.** For other notes, include figures when they genuinely aid understanding (result plots, diagrams, key tables).
-If the note is about a full compound figure, embed every available same-number panel/image in panel order, not just the first subfigure.
-If any panel/image is unavailable or unreadable, say that explicitly in the note.
-If the note is about one explicit panel such as Figure 1b, embed that panel and avoid implying it represents the full Figure 1.
+For MinerU figures/tables, treat adjacent image runs in `full.md` as one figure block.
+If the note is about any image inside a multi-image MinerU block, embed every available image path from that adjacent block in source order, even when the user names one explicit panel such as Figure 1b.
+Panel suffixes and captions are hints only; do not assume image order proves panel identity.
+If any image path is unavailable or unreadable, say that explicitly in the note.
+Text-only models may still copy/embed ordered image paths into notes, but must not make unsupported visual claims beyond caption and surrounding-text evidence.
 
 #### For Zotero notes (`note_write`)
 
