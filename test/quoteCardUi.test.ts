@@ -115,6 +115,33 @@ describe("quote card UI contract", function () {
     assert.include(chatSource, "await finalizeAssistantMessageQuoteCitations");
   });
 
+  it("decorates citation blockquotes after all assistant markdown surfaces are mounted", function () {
+    const chatSource = source("src/modules/contextPanel/chat.ts");
+    const answerRenderStart = chatSource.indexOf(
+      "if (hasAnswerText && !agentUsesInterleavedText)",
+    );
+    const headerInsertion = chatSource.indexOf(
+      "for (let i = bubbleHeaderNodes.length - 1; i >= 0; i -= 1)",
+    );
+    const generatedImagesRender = chatSource.indexOf(
+      "if (hasGeneratedImages)",
+      headerInsertion,
+    );
+    const finalDecoration = chatSource.indexOf(
+      "decorateCompletedAssistantCitationLinks({",
+      headerInsertion,
+    );
+
+    assert.isAtLeast(answerRenderStart, 0);
+    assert.isAbove(headerInsertion, answerRenderStart);
+    assert.isAbove(generatedImagesRender, headerInsertion);
+    assert.isAbove(finalDecoration, generatedImagesRender);
+    assert.notInclude(
+      chatSource.slice(answerRenderStart, headerInsertion),
+      "decorateAssistantCitationLinks({",
+    );
+  });
+
   it("awaits quote finalization in agent completion paths", function () {
     const agentSource = source(
       "src/modules/contextPanel/agentMode/agentEngine.ts",

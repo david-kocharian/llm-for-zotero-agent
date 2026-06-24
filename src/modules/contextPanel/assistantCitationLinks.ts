@@ -3217,7 +3217,13 @@ export function decorateAssistantCitationLinks(params: {
   assistantMessage: Message;
   pairedUserMessage?: Message | null;
 }): void {
-  if (!params.assistantMessage.text.trim()) return;
+  if (
+    !sanitizeText(
+      params.bubble.textContent || params.assistantMessage.text || "",
+    ).trim()
+  ) {
+    return;
+  }
   const ownerDoc = params.bubble.ownerDocument;
   if (!ownerDoc) return;
   const quoteCitations = normalizeQuoteCitations(

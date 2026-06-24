@@ -1338,6 +1338,50 @@ export function shouldDecorateInterleavedAgentTraceCitations(params: {
   );
 }
 
+function decorateCompletedAssistantCitationLinks(params: {
+  body: Element;
+  panelItem: Zotero.Item;
+  bubble: HTMLDivElement;
+  assistantMessage: Message;
+  pairedUserMessage: Message | null;
+}): void {
+  const { body, panelItem, bubble, assistantMessage, pairedUserMessage } =
+    params;
+  if (assistantMessage.streaming || assistantMessage.compactMarker) return;
+  if (!sanitizeText(bubble.textContent || assistantMessage.text || "").trim()) {
+    return;
+  }
+  try {
+    ztoolkit.log(
+      "LLM: calling decorateAssistantCitationLinks",
+      "msgLen =",
+      assistantMessage.text.length,
+      "bubbleHTML =",
+      String(bubble.innerHTML || "").length,
+      "hasPairedUser =",
+      Boolean(pairedUserMessage),
+      "pairedPaperContexts =",
+      pairedUserMessage?.paperContexts?.length ?? "none",
+    );
+    renderQuoteCitationPlaceholders({
+      body,
+      panelItem,
+      bubble,
+      assistantMessage,
+      pairedUserMessage,
+    });
+    decorateAssistantCitationLinks({
+      body,
+      panelItem,
+      bubble,
+      assistantMessage,
+      pairedUserMessage,
+    });
+  } catch (decorateErr) {
+    ztoolkit.log("LLM citation decoration error:", decorateErr);
+  }
+}
+
 function attachAssistantResponseContextMenu(params: {
   body: Element;
   doc: Document;
@@ -3521,7 +3565,8 @@ async function buildContextPlanForRequest(params: {
     const pushMineruAttachmentId = (attachmentId: number | undefined) => {
       if (!attachmentId || mineruAttachmentIds.includes(attachmentId)) return;
       const pdfCtx = pdfTextCache.get(attachmentId);
-      if (pdfCtx?.sourceType === "mineru") mineruAttachmentIds.push(attachmentId);
+      if (pdfCtx?.sourceType === "mineru")
+        mineruAttachmentIds.push(attachmentId);
     };
     pushMineruAttachmentId(activeContextItem?.id);
     for (const paper of [
@@ -3544,18 +3589,21 @@ async function buildContextPlanForRequest(params: {
                 `MinerU image block inventory for attachment ${attachmentId}:`,
                 "Use these ordered source paths for note embedding/copying; do not make visual claims unless supported by captions or surrounding text.",
                 ...inventory.flatMap((entry, index) => {
-                  const paths =
-                    entry.absoluteImagePaths?.length
-                      ? entry.absoluteImagePaths
-                      : entry.imagePaths;
+                  const paths = entry.absoluteImagePaths?.length
+                    ? entry.absoluteImagePaths
+                    : entry.imagePaths;
                   return [
                     `Block ${index + 1}${entry.labelHints?.length ? ` (${entry.labelHints.join("; ")})` : ""}: requested ${entry.requestedPath}`,
-                    ...paths.map((path, pathIndex) => `  ${pathIndex + 1}. ${path}`),
+                    ...paths.map(
+                      (path, pathIndex) => `  ${pathIndex + 1}. ${path}`,
+                    ),
                     ...(entry.captionHints?.length
                       ? [`  Caption hints: ${entry.captionHints.join(" | ")}`]
                       : []),
                     ...(entry.ambiguous
-                      ? ["  Ambiguity: block boundary or panel mapping is uncertain."]
+                      ? [
+                          "  Ambiguity: block boundary or panel mapping is uncertain.",
+                        ]
                       : []),
                   ];
                 }),
@@ -9932,39 +9980,6 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
             ztoolkit.log("LLM render error:", err);
             bubble.textContent = safeText;
           }
-        if (!msg.streaming && !msg.compactMarker) {
-          try {
-            const pairedUserMessage =
-              history[index - 1]?.role === "user" ? history[index - 1] : null;
-            ztoolkit.log(
-              "LLM: calling decorateAssistantCitationLinks",
-              "msgLen =",
-              msg.text.length,
-              "bubbleHTML =",
-              String(bubble.innerHTML || "").length,
-              "hasPairedUser =",
-              Boolean(pairedUserMessage),
-              "pairedPaperContexts =",
-              pairedUserMessage?.paperContexts?.length ?? "none",
-            );
-            renderQuoteCitationPlaceholders({
-              body,
-              panelItem: item,
-              bubble,
-              assistantMessage: msg,
-              pairedUserMessage,
-            });
-            decorateAssistantCitationLinks({
-              body,
-              panelItem: item,
-              bubble,
-              assistantMessage: msg,
-              pairedUserMessage,
-            });
-          } catch (decorateErr) {
-            ztoolkit.log("LLM citation decoration error:", decorateErr);
-          }
-        }
       }
 
       const bubbleHeaderNodes: HTMLElement[] = [];
@@ -10109,46 +10124,13 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         });
       }
 
-      if (
-        shouldDecorateInterleavedAgentTraceCitations({
-          agentTraceEl,
-          agentUsesInterleavedText,
-          streaming: msg.streaming,
-        })
-      ) {
-        try {
-          ztoolkit.log(
-            "LLM: calling decorateAssistantCitationLinks for interleaved agent trace",
-            "msgLen =",
-            msg.text.length,
-            "bubbleHTML =",
-            String(bubble.innerHTML || "").length,
-            "hasPairedUser =",
-            Boolean(previousUserMessage),
-            "pairedPaperContexts =",
-            previousUserMessage?.paperContexts?.length ?? "none",
-          );
-          renderQuoteCitationPlaceholders({
-            body,
-            panelItem: item,
-            bubble,
-            assistantMessage: msg,
-            pairedUserMessage: previousUserMessage,
-          });
-          decorateAssistantCitationLinks({
-            body,
-            panelItem: item,
-            bubble,
-            assistantMessage: msg,
-            pairedUserMessage: previousUserMessage,
-          });
-        } catch (decorateErr) {
-          ztoolkit.log(
-            "LLM interleaved citation decoration error:",
-            decorateErr,
-          );
-        }
-      }
+      decorateCompletedAssistantCitationLinks({
+        body,
+        panelItem: item,
+        bubble,
+        assistantMessage: msg,
+        pairedUserMessage: previousUserMessage,
+      });
 
       if (
         !hasAnswerText &&
