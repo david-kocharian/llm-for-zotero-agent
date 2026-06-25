@@ -79,12 +79,12 @@ describe("mineruConfig", function () {
       assert.equal(normalizeMineruCloudModel("vlm"), "vlm");
     });
 
-    it("falls back to pipeline for unknown or empty values", function () {
-      assert.equal(DEFAULT_MINERU_CLOUD_MODEL, "pipeline");
-      assert.equal(normalizeMineruCloudModel(""), "pipeline");
-      assert.equal(normalizeMineruCloudModel(undefined), "pipeline");
-      assert.equal(normalizeMineruCloudModel("MinerU-HTML"), "pipeline");
-      assert.equal(normalizeMineruCloudModel("vlm-auto-engine"), "pipeline");
+    it("falls back to vlm for unknown or empty values", function () {
+      assert.equal(DEFAULT_MINERU_CLOUD_MODEL, "vlm");
+      assert.equal(normalizeMineruCloudModel(""), "vlm");
+      assert.equal(normalizeMineruCloudModel(undefined), "vlm");
+      assert.equal(normalizeMineruCloudModel("MinerU-HTML"), "vlm");
+      assert.equal(normalizeMineruCloudModel("vlm-auto-engine"), "vlm");
     });
   });
 

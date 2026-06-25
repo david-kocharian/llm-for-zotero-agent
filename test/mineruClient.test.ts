@@ -169,10 +169,10 @@ describe("mineruClient", function () {
       );
     });
 
-    it("keeps pipeline as the default cloud batch model", function () {
+    it("keeps vlm as the default cloud batch model", function () {
       assert.equal(
         buildCloudBatchRequestBody({ fileName: "paper.pdf" }).model_version,
-        "pipeline",
+        "vlm",
       );
     });
 

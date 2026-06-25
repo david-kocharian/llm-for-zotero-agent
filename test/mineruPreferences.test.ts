@@ -4,11 +4,13 @@ import { readFileSync } from "fs";
 describe("MinerU preferences", function () {
   let preferences = "";
   let preferenceScript = "";
+  let prefs = "";
   let i18n = "";
 
   before(function () {
     preferences = readFileSync("addon/content/preferences.xhtml", "utf8");
     preferenceScript = readFileSync("src/modules/preferenceScript.ts", "utf8");
+    prefs = readFileSync("addon/prefs.js", "utf8");
     i18n = readFileSync("src/utils/i18n.ts", "utf8");
   });
 
@@ -38,6 +40,7 @@ describe("MinerU preferences", function () {
     assert.include(preferences, '<html:option value="pipeline">pipeline');
     assert.include(preferences, '<html:option value="vlm">vlm (recommended)');
     assert.include(preferences, "vlm uses a vision-language model");
+    assert.include(prefs, 'pref("mineruCloudModel", "vlm");');
   });
 
   it("marks MinerU cloud keys as required and removes keyless proxy copy", function () {

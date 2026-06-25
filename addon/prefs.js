@@ -55,6 +55,7 @@ pref("obsidianNoteTemplate", "");
 pref("notesDirectoryNickname", "");
 pref("locale", "auto");
 pref("mineruMode", "cloud");
+pref("mineruCloudModel", "vlm");
 pref("mineruLocalApiBase", "http://127.0.0.1:8000");
 pref("mineruLocalBackend", "pipeline");
 pref("mineruAutoWatchCollections", "");

@@ -13,7 +13,7 @@ const MINERU_MAX_AUTO_PAGES_KEY = `${config.prefsPrefix}.mineruMaxAutoPages`;
 const MINERU_EXCLUDE_PATTERNS_KEY = `${config.prefsPrefix}.mineruExcludePatterns`;
 
 export const DEFAULT_MINERU_LOCAL_API_BASE = "http://127.0.0.1:8000";
-export const DEFAULT_MINERU_CLOUD_MODEL: MineruCloudModel = "pipeline";
+export const DEFAULT_MINERU_CLOUD_MODEL: MineruCloudModel = "vlm";
 export const DEFAULT_MINERU_LOCAL_BACKEND: MineruLocalBackend = "pipeline";
 export const DEFAULT_MINERU_MAX_AUTO_PAGES = 100;
 export const MAX_MINERU_FILENAME_PATTERN_LENGTH = 256;
