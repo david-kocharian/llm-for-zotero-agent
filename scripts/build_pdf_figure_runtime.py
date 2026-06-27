@@ -22,7 +22,6 @@ VALID_PLATFORMS = {
     "macos-x64",
     "linux-arm64",
     "linux-x64",
-    "windows-arm64",
     "windows-x64",
 }
 

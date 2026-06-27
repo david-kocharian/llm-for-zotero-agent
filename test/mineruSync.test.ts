@@ -24,6 +24,8 @@ import {
   getMineruAvailabilityForAttachment,
   MINERU_SYNC_ATTACHMENT_TITLE_PREFIX,
   MINERU_SYNC_METADATA_FILE,
+  MINERU_SYNC_PACKAGE_KIND,
+  MINERU_SYNC_PACKAGE_VERSION,
   publishMineruCachePackageForAttachment,
   repairMineruCaches,
   repairSyncedMineruCacheForAttachment,
@@ -333,6 +335,14 @@ describe("mineruSync", function () {
     assert.isTrue(shouldIncludeMineruCachePackageEntry("full.md"));
     assert.isTrue(shouldIncludeMineruCachePackageEntry("manifest.json"));
     assert.isTrue(shouldIncludeMineruCachePackageEntry("content_list.json"));
+    assert.isTrue(
+      shouldIncludeMineruCachePackageEntry("legacy_uuid_content_list.json"),
+    );
+    assert.isTrue(
+      shouldIncludeMineruCachePackageEntry(
+        "auto/legacy_uuid_content_list.json",
+      ),
+    );
     assert.isFalse(shouldIncludeMineruCachePackageEntry("images/figure.png"));
     assert.isFalse(shouldIncludeMineruCachePackageEntry("layout.json"));
     assert.isFalse(shouldIncludeMineruCachePackageEntry("middle.json"));
@@ -894,6 +904,91 @@ describe("mineruSync", function () {
       await readCachedMineruMd(pdf.id),
       "# Intro\n# Results\ncontent",
     );
+  });
+
+  it("restores legacy synced packages with native MinerU content-list filenames", async function () {
+    const io = setupMemoryIO();
+    const items = new Map<number, MockItem>();
+    const parent = createParent();
+    const pdf = createAttachment({
+      id: 177,
+      key: "PDFLEGACYCL",
+      parentID: parent.id,
+      contentType: "application/pdf",
+      filename: "legacy-content-list.pdf",
+    });
+    parent.attachmentIDs!.push(pdf.id);
+    items.set(parent.id, parent);
+    items.set(pdf.id, pdf);
+    setupZotero(items, io);
+    setMineruSyncEnabled(true);
+
+    const zipBytes = zipSync(
+      {
+        [MINERU_SYNC_METADATA_FILE]: bytes(
+          JSON.stringify({
+            kind: MINERU_SYNC_PACKAGE_KIND,
+            version: MINERU_SYNC_PACKAGE_VERSION,
+            createdAt: "2026-06-27T00:00:00.000Z",
+            addonName: "LLM for Zotero",
+            addonVersion: "test",
+            sourceAttachmentKey: "PDFLEGACYCL",
+            sourceAttachmentFilename: "legacy-content-list.pdf",
+            parentItemKey: "PARENTKEY",
+          }),
+        ),
+        "full.md": bytes(
+          "# Intro\nsummary\n# Methods\n![Fig](images/fig1.png)\n# Results\ncontent",
+        ),
+        "auto/legacy_uuid_content_list.json": bytes(
+          JSON.stringify([
+            { type: "text", text_level: 1, text: "Intro", page_idx: 0 },
+            { type: "text", text_level: 1, text: "Methods", page_idx: 0 },
+            {
+              type: "image",
+              img_path: "images/fig1.png",
+              image_caption: ["Fig. 1 legacy caption"],
+              page_idx: 0,
+            },
+            { type: "text", text_level: 1, text: "Results", page_idx: 1 },
+          ]),
+        ),
+      },
+      { level: 6 },
+    );
+    attachPackage({
+      io,
+      items,
+      parent,
+      id: 178,
+      key: "PKGLEGACYCL",
+      sourceKey: "PDFLEGACYCL",
+      bytes: zipBytes,
+    });
+
+    const restored = await restoreSyncedMineruCacheForAttachment(
+      pdf as unknown as Zotero.Item,
+    );
+
+    assert.equal(restored.status, "restored");
+    const itemDir = getMineruItemDir(pdf.id);
+    assert.isTrue(io.files.has(normalizePath(`${itemDir}/content_list.json`)));
+    assert.isFalse(
+      io.files.has(
+        normalizePath(`${itemDir}/auto/legacy_uuid_content_list.json`),
+      ),
+    );
+    const manifest = JSON.parse(
+      decoder.decode(io.files.get(normalizePath(`${itemDir}/manifest.json`))!),
+    );
+    assert.deepInclude(manifest.allFigures, {
+      label: "Fig. 1",
+      baseLabel: "Figure 1",
+      path: "images/fig1.png",
+      caption: "Fig. 1 legacy caption",
+      page: 0,
+      section: "Methods",
+    });
   });
 
   it("lazily restores a MinerU cache dir from a synced package and reuses the local cache", async function () {

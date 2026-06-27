@@ -150,11 +150,54 @@ const PUBLISHER_METADATA_PATTERNS = [
   /^(?:references?|bibliography)(?:\s+and\s+notes?)?\b/i,
 ];
 
-function collectMatchedText(value: string, pattern: RegExp): string {
-  pattern.lastIndex = 0;
-  const matches = value.match(pattern) || [];
-  pattern.lastIndex = 0;
-  return matches.join("");
+function collectMatchedRanges(
+  value: string,
+  patterns: RegExp[],
+): Array<{ start: number; end: number }> {
+  const ranges: Array<{ start: number; end: number }> = [];
+  for (const pattern of patterns) {
+    const flags = pattern.flags.includes("g")
+      ? pattern.flags
+      : `${pattern.flags}g`;
+    const matcher = new RegExp(pattern.source, flags);
+    let match: RegExpExecArray | null;
+    while ((match = matcher.exec(value)) !== null) {
+      const matchedText = match[0] || "";
+      if (!matchedText) {
+        matcher.lastIndex += 1;
+        continue;
+      }
+      ranges.push({
+        start: match.index,
+        end: match.index + matchedText.length,
+      });
+    }
+  }
+  return ranges;
+}
+
+function mergedRangeLength(
+  ranges: Array<{ start: number; end: number }>,
+): number {
+  const sorted = ranges
+    .filter((range) => range.end > range.start)
+    .sort((left, right) => left.start - right.start || left.end - right.end);
+  let total = 0;
+  let current: { start: number; end: number } | null = null;
+  for (const range of sorted) {
+    if (!current) {
+      current = { ...range };
+      continue;
+    }
+    if (range.start <= current.end) {
+      current.end = Math.max(current.end, range.end);
+      continue;
+    }
+    total += current.end - current.start;
+    current = { ...range };
+  }
+  if (current) total += current.end - current.start;
+  return total;
 }
 
 export function isQuoteWorthySourceText(value: unknown): boolean {
@@ -168,11 +211,12 @@ export function isQuoteWorthySourceText(value: unknown): boolean {
     return false;
   }
 
-  const urlText = collectMatchedText(text, URL_TEXT_PATTERN);
-  const doiText = collectMatchedText(text, DOI_TEXT_PATTERN);
-  const hasUrlOrDoi = Boolean(
-    urlText || doiText || DOI_DOMAIN_PATTERN.test(text),
-  );
+  const locatorRanges = collectMatchedRanges(text, [
+    URL_TEXT_PATTERN,
+    DOI_TEXT_PATTERN,
+    DOI_DOMAIN_PATTERN,
+  ]);
+  const hasUrlOrDoi = locatorRanges.length > 0;
   if (!hasUrlOrDoi) return true;
 
   const withoutLocators = text
@@ -181,7 +225,7 @@ export function isQuoteWorthySourceText(value: unknown): boolean {
     .replace(DOI_DOMAIN_PATTERN, " ")
     .replace(/\s+/g, " ")
     .trim();
-  const locatorChars = urlText.length + doiText.length;
+  const locatorChars = mergedRangeLength(locatorRanges);
   if (withoutLocators.length < 80) return false;
   if (locatorChars > 0 && locatorChars / Math.max(text.length, 1) > 0.35) {
     return false;

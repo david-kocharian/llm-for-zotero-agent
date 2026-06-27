@@ -1207,7 +1207,12 @@ def render_page(pdf_path: Path, page_number: int, dpi: int, poppler_bin: Path) -
             ],
             poppler_bin=poppler_bin,
         )
-        path = sorted(Path(tmp_name).glob("page-*.png"))[0]
+        paths = sorted(Path(tmp_name).glob("page-*.png"))
+        if not paths:
+            raise RuntimeError(
+                f"pdftoppm did not produce a PNG for page {page_number}"
+            )
+        path = paths[0]
         return Image.open(path).convert("RGB")
 
 
@@ -2384,13 +2389,30 @@ def run_direct_mode(args: argparse.Namespace) -> int:
         pdf_path=pdf_path,
         mineru_dir=mineru_dir,
     )
-    result = evaluate_case(
-        case,
-        work_dir,
-        Path(args.poppler_bin),
-        int(args.dpi),
-        use_mineru_targets=bool(args.use_mineru_targets),
-    )
+    try:
+        result = evaluate_case(
+            case,
+            work_dir,
+            Path(args.poppler_bin),
+            int(args.dpi),
+            use_mineru_targets=bool(args.use_mineru_targets),
+        )
+    except Exception as error:
+        payload = {
+            "status": "error",
+            "algorithmVersion": DIRECT_EXTRACTOR_VERSION,
+            "pdfPath": str(pdf_path),
+            "mineruDir": str(mineru_dir),
+            "expectedFigures": [],
+            "missingFigures": [],
+            "figures": [],
+            "warnings": [f"Source-PDF figure extraction failed: {error}"],
+        }
+        encoded = json.dumps(payload, indent=2)
+        if args.json_out:
+            Path(args.json_out).expanduser().write_text(encoded)
+        print(encoded)
+        return 0
     if not result:
         target_source = "PDF text or MinerU cache" if args.use_mineru_targets else "PDF text"
         payload = {

@@ -2097,7 +2097,7 @@ describe("primitive agent tools", function () {
         const validated = tool.validate({ command });
         assert.isTrue(validated.ok, command);
         if (!validated.ok) return;
-        assert.isTrue(
+        assert.isFalse(
           await tool.shouldRequireConfirmation?.(validated.value, context),
           command,
         );

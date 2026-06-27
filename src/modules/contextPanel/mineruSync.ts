@@ -388,13 +388,35 @@ function normalizePackagePath(value: string): string | null {
   return parts.join("/");
 }
 
+function isMineruContentListPackageBasename(value: string): boolean {
+  return value === "content_list.json" || value.endsWith("_content_list.json");
+}
+
+function isLegacyMineruContentListPackageEntry(relativePath: string): boolean {
+  const parts = relativePath.split("/").filter(Boolean);
+  if (!parts.length) return false;
+  if (parts[0]?.toLowerCase() === "__macosx") return false;
+  if (parts.includes(".DS_Store")) return false;
+  if (parts.length === 1) {
+    return isMineruContentListPackageBasename(parts[0]);
+  }
+  return (
+    parts.length === 2 &&
+    parts[0]?.toLowerCase() === "auto" &&
+    isMineruContentListPackageBasename(parts[1])
+  );
+}
+
 export function shouldIncludeMineruCachePackageEntry(
   relativePath: string,
 ): boolean {
   const normalized = normalizePackagePath(relativePath);
   if (!normalized) return false;
   if (normalized === MINERU_LOCAL_SYNC_STATE_FILE) return false;
-  return isDurableMineruCacheArtifactPath(normalized);
+  return (
+    isDurableMineruCacheArtifactPath(normalized) ||
+    isLegacyMineruContentListPackageEntry(normalized)
+  );
 }
 
 function isMineruSourceProvenanceEntryPath(relativePath: string): boolean {

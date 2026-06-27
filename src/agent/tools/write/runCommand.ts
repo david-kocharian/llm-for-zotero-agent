@@ -463,11 +463,8 @@ function isSystemAutomationCommand(command: string): boolean {
 
 async function getRunCommandConfirmationReason(
   input: Pick<RunCommandInput, "command" | "cwd">,
-  context?: AgentToolContext,
 ): Promise<string | null> {
   const command = input.command.trim();
-  const noteWriteBypass = getNoteWriteBypassRefusal(input, context);
-  if (noteWriteBypass) return noteWriteBypass;
   if (isNetworkToShellCommand(command)) {
     return "Command downloads code and passes it directly to a shell";
   }
@@ -597,8 +594,9 @@ export function createRunCommandTool(): AgentToolDefinition<
       });
     },
 
-    async shouldRequireConfirmation(input, context) {
-      return Boolean(await getRunCommandConfirmationReason(input, context));
+    async shouldRequireConfirmation(input, _context) {
+      if (getNoteWriteBypassRefusal(input, _context)) return false;
+      return Boolean(await getRunCommandConfirmationReason(input));
     },
 
     createPendingAction(input) {
@@ -648,10 +646,7 @@ export function createRunCommandTool(): AgentToolDefinition<
           command: input.command,
         };
       }
-      const confirmationReason = await getRunCommandConfirmationReason(
-        input,
-        context,
-      );
+      const confirmationReason = await getRunCommandConfirmationReason(input);
       if (confirmationReason && !input.allowUnsafe) {
         return {
           exitCode: -1,

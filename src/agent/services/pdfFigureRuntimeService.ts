@@ -63,7 +63,6 @@ export type PdfFigureRuntimePlatformKey =
   | "macos-x64"
   | "linux-arm64"
   | "linux-x64"
-  | "windows-arm64"
   | "windows-x64";
 
 export type PdfFigureExtractionRuntime = {
@@ -240,7 +239,9 @@ function getArchitecture(): "arm64" | "x64" {
 export function getPdfFigureRuntimePlatformKey(): PdfFigureRuntimePlatformKey {
   const platform = getRuntimePlatformInfo().platform;
   const arch = getArchitecture();
-  if (platform === "windows") return `windows-${arch}`;
+  // Windows-on-ARM runs the packaged x64 runtime under emulation until a
+  // native Windows ARM runtime is built and validated.
+  if (platform === "windows") return "windows-x64";
   if (platform === "linux") return `linux-${arch}`;
   return `macos-${arch}`;
 }

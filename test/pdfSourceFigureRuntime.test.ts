@@ -1,6 +1,7 @@
 import { assert } from "chai";
 import { zipSync } from "fflate";
 import { PdfPageService } from "../src/agent/services/pdfPageService";
+import { getPdfFigureRuntimePlatformKey } from "../src/agent/services/pdfFigureRuntimeService";
 
 const encoder = new TextEncoder();
 
@@ -273,6 +274,97 @@ describe("PdfPageService source-PDF figure runtime", function () {
     assert.equal(capturedCall?.command, `${runtimeRoot}/bin/python3`);
     const popplerArg = capturedCall?.arguments.indexOf("--poppler-bin") ?? -1;
     assert.equal(capturedCall?.arguments[popplerArg + 1], `${runtimeRoot}/bin`);
+  });
+
+  it("uses the x64 managed runtime on Windows ARM", function () {
+    globalScope.Zotero = {
+      ...(globalScope.Zotero as Record<string, unknown>),
+      isMac: false,
+      isWin: true,
+    };
+    globalScope.Services = {
+      appinfo: { XPCOMABI: "aarch64-msvc" },
+    };
+
+    assert.equal(getPdfFigureRuntimePlatformKey(), "windows-x64");
+  });
+
+  it("uses packaged extractor scripts from Windows file URLs", async function () {
+    const runtimeRoot =
+      "C:\\zotero\\llm-for-zotero-runtimes\\pdf-figure-extractor\\1\\windows-x64";
+    files.clear();
+    dirs.clear();
+    addDir(dirs, "C:\\");
+    addDir(dirs, "C:\\addon");
+    addDir(dirs, "C:\\zotero");
+    files.set("C:/paper.pdf", encoder.encode("%PDF-1.7\n"));
+    files.set(
+      "C:/addon/scripts/pdf_figure_extract.py",
+      encoder.encode("print('windows extract')\n"),
+    );
+    globalScope.rootURI = "file:///C:/addon/";
+    globalScope._globalThis = { rootURI: "file:///C:/addon/" };
+    globalScope.Zotero = {
+      DataDirectory: { dir: "C:\\zotero" },
+      isMac: false,
+      isWin: true,
+      Items: {
+        get: (id: number) =>
+          id === 22
+            ? {
+                ...attachmentItem,
+                getFilePath: () => "C:\\paper.pdf",
+              }
+            : null,
+      },
+      Prefs: {
+        get: () => "",
+      },
+    };
+    globalScope.Services = {
+      appinfo: { XPCOMABI: "aarch64-msvc" },
+    };
+    let fetchedUrl = "";
+    globalScope.fetch = async (url: string) => {
+      fetchedUrl = url;
+      return {
+        ok: true,
+        status: 200,
+        arrayBuffer: async () =>
+          zipSync({
+            "runtime.json": encoder.encode(
+              JSON.stringify({
+                kind: "llm-for-zotero/pdf-figure-runtime",
+                version: "1",
+                platform: "windows-x64",
+                pythonPath: "python.exe",
+                popplerBinDir: "Library/bin",
+              }),
+            ),
+            "python.exe": encoder.encode("@echo off\r\n"),
+            "Library/bin/pdftoppm.exe": encoder.encode("@echo off\r\n"),
+            "Library/bin/pdftohtml.exe": encoder.encode("@echo off\r\n"),
+            "Library/bin/pdfinfo.exe": encoder.encode("@echo off\r\n"),
+          }).buffer,
+      };
+    };
+
+    await extractWithService();
+
+    assert.equal(
+      fetchedUrl,
+      "https://github.com/yilewang/llm-for-zotero/releases/download/pdf-figure-runtime-v1/llm-for-zotero-pdf-figure-runtime-v1-windows-x64.zip",
+    );
+    assert.equal(
+      capturedCall?.arguments[0],
+      "C:\\addon\\scripts\\pdf_figure_extract.py",
+    );
+    assert.equal(capturedCall?.command, `${runtimeRoot}\\python.exe`);
+    const popplerArg = capturedCall?.arguments.indexOf("--poppler-bin") ?? -1;
+    assert.equal(
+      capturedCall?.arguments[popplerArg + 1],
+      `${runtimeRoot}\\Library\\bin`,
+    );
   });
 
   it("ignores runtime package preferences and always uses the project release URL", async function () {

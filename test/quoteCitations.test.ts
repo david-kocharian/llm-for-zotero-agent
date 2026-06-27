@@ -9,6 +9,7 @@ import {
   findUnresolvedQuoteCitationPlaceholderIds,
   isCanonicalQuoteSourceLabel,
   isNonSourceQuoteLabel,
+  isQuoteWorthySourceText,
   isSectionOnlyCitationLabel,
   normalizeQuoteCitationPlaceholdersForDisplay,
   replaceQuoteCitationPlaceholdersForMarkdown,
@@ -824,6 +825,14 @@ describe("quoteCitations", function () {
       "> Full article and list of author affiliations: https://doi.org/10.1126/science.adw7707",
     );
     assert.include(rendered, "<blockquote>");
+  });
+
+  it("counts overlapping DOI URLs once when deciding quote worthiness", function () {
+    const quoteText =
+      "Representational drift persisted across sessions after matching stimulus identity and behavioral context carefully. " +
+      "https://doi.org/10.1234/abcdefghijklmnopqrstuv";
+
+    assert.isTrue(isQuoteWorthySourceText(quoteText));
   });
 
   it("preserves non-quote-worthy blockquotes with continuation text", function () {

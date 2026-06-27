@@ -33,8 +33,6 @@ jobs:
             conda_platform: linux-aarch64
           - platform_key: linux-x64
             conda_platform: linux-64
-          - platform_key: windows-arm64
-            conda_platform: win-64
           - platform_key: windows-x64
             conda_platform: win-64
 

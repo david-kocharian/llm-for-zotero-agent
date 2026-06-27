@@ -26,7 +26,7 @@ import type { AgentRuntimeRequest, AgentToolArtifact } from "../types";
 import { PdfService, resolveContextItemFromPaperContext } from "./pdfService";
 import { ZoteroGateway } from "./zoteroGateway";
 import { findAttachment } from "../tools/shared";
-import { joinLocalPath } from "../../utils/localPath";
+import { fileUrlToPath, joinLocalPath } from "../../utils/localPath";
 import {
   resolvePdfFigureExtractionRuntime,
   resolveSystemPdfFigurePdftohtmlPath as resolvePdftohtmlPath,
@@ -1303,18 +1303,6 @@ async function writeUtf8File(path: string, text: string): Promise<void> {
   await io.write(path, new TextEncoder().encode(text));
 }
 
-function fileUriToPath(uri: string): string {
-  try {
-    const url = new URL(uri);
-    if (url.protocol === "file:") {
-      return decodeURIComponent(url.pathname);
-    }
-  } catch {
-    // Fall through to a simple file:// decode.
-  }
-  return decodeURIComponent(uri.replace(/^file:\/\//i, ""));
-}
-
 export function resolveAddonRootUri(): string {
   const direct = sanitizeText((globalThis as any).rootURI);
   if (direct) return direct;
@@ -1349,14 +1337,16 @@ async function materializePackagedFigureExtractorScript(): Promise<{
 }> {
   const rootUri = getAddonRootUri();
   if (rootUri && /^file:/i.test(rootUri)) {
-    const rootPath = fileUriToPath(rootUri);
-    const scriptPath = joinLocalPath(
-      rootPath,
-      "scripts",
-      "pdf_figure_extract.py",
-    );
-    if (await pathExists(scriptPath)) {
-      return { scriptPath };
+    const rootPath = fileUrlToPath(rootUri);
+    if (rootPath) {
+      const scriptPath = joinLocalPath(
+        rootPath,
+        "scripts",
+        "pdf_figure_extract.py",
+      );
+      if (await pathExists(scriptPath)) {
+        return { scriptPath };
+      }
     }
   }
   if (!rootUri) {

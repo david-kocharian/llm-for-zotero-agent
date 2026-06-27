@@ -1,8 +1,10 @@
 import importlib.util
+import io
 import json
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 
 from PIL import Image, ImageDraw
@@ -276,6 +278,70 @@ class CaptionWindowTests(unittest.TestCase):
                 pages=set(),
             )
         )
+
+    def test_render_page_reports_missing_pdftoppm_png(self):
+        original_run = self.extractor.run
+
+        try:
+            self.extractor.run = lambda *args, **kwargs: None
+
+            with self.assertRaisesRegex(RuntimeError, "did not produce a PNG"):
+                self.extractor.render_page(
+                    Path("/tmp/nonexistent.pdf"),
+                    1,
+                    144,
+                    Path("/tmp/poppler"),
+                )
+        finally:
+            self.extractor.run = original_run
+
+    def test_direct_mode_writes_json_error_for_extraction_failure(self):
+        original_evaluate_case = self.extractor.evaluate_case
+
+        def fail_evaluate_case(*args, **kwargs):
+            raise RuntimeError("render failed for page 99")
+
+        try:
+            self.extractor.evaluate_case = fail_evaluate_case
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                pdf_path = root / "paper.pdf"
+                mineru_dir = root / "mineru"
+                out_dir = root / "out"
+                crop_dir = root / "crops"
+                json_out = root / "figures.json"
+                pdf_path.write_bytes(b"%PDF-1.7\n")
+                mineru_dir.mkdir()
+                crop_dir.mkdir()
+                args = self.extractor.argparse.Namespace(
+                    pdf=str(pdf_path),
+                    mineru_dir=str(mineru_dir),
+                    out=str(out_dir),
+                    clean_out=False,
+                    attachment_id=7,
+                    attachment_key="PDFKEY",
+                    source_filename="paper.pdf",
+                    poppler_bin=str(root / "poppler"),
+                    dpi=144,
+                    use_mineru_targets=True,
+                    pages="",
+                    query="Figure 1",
+                    crop_dir=str(crop_dir),
+                    json_out=str(json_out),
+                )
+
+                with redirect_stdout(io.StringIO()):
+                    exit_code = self.extractor.run_direct_mode(args)
+
+                self.assertEqual(exit_code, 0)
+                payload = json.loads(json_out.read_text())
+                self.assertEqual(payload["status"], "error")
+                self.assertEqual(payload["figures"], [])
+                self.assertEqual(payload["expectedFigures"], [])
+                self.assertEqual(payload["missingFigures"], [])
+                self.assertIn("render failed for page 99", payload["warnings"][0])
+        finally:
+            self.extractor.evaluate_case = original_evaluate_case
 
 
 if __name__ == "__main__":

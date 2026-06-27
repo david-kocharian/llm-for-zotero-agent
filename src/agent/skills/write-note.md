@@ -155,7 +155,8 @@ Written by LLM-for-Zotero.
 
 ### Step 3 — Include figures
 
-**If the user asked about a specific figure, include that figure in the note when an extracted PDF crop is available.** For other notes, include figures when they genuinely aid understanding (result plots, diagrams, key tables).
+**If the user asked about a specific figure, include that figure in the note when an extracted PDF crop is available.**
+For other notes, include figures when they genuinely aid understanding (result plots, diagrams, key tables).
 For MinerU-ready papers, first call `paper_read({ mode:'figures', query:'<figure request>' })`.
 Treat `paper_read({ mode:'figures' })` as the authority for figure crop cache reuse/regeneration.
 Use its returned crop paths/artifacts as-is and do not inspect or validate `figure_crops` metadata before writing.
@@ -171,7 +172,8 @@ This failure path does not restrict images the user manually attached or pasted;
 
 #### For Zotero notes (`note_write`)
 
-- Use `![Caption](file:///{extractedCropPath})`. The `note_write` tool auto-imports `file://` images as Zotero embedded attachments.
+- Use `![Caption](file:///{extractedCropPath})`.
+  The `note_write` tool auto-imports `file://` images as Zotero embedded attachments.
 - Place figures inline near the relevant discussion.
 
 #### For file-based notes (`file_io`)
@@ -180,13 +182,19 @@ This failure path does not restrict images the user manually attached or pasted;
 
 - NEVER use `file:///...` URLs. They are blocked inline for security.
 - NEVER use absolute filesystem paths like `/Users/...`, `~/...`, or `C:\...`.
-- NEVER use `|width` syntax inside `![alt](url)`. Width suffixes only work inside `![[wikilink]]` embeds, which we do NOT use here. The `|` ends up as literal text and the image is not resized.
+- NEVER use `|width` syntax inside `![alt](url)`.
+  Width suffixes only work inside `![[wikilink]]` embeds, which we do NOT use here.
+  The `|` ends up as literal text and the image is not resized.
 
 **Algorithm — follow exactly:**
 
-1. Create the destination directory: `run_command` with `mkdir -p "{attachmentsPath}/{sanitized-paper-title}"`. The folder is named after the **paper title only** (no subtopic, no date) so multiple notes about the same paper share the same images folder.
-2. Copy extracted PDF crop files returned by `paper_read({ mode:'figures' })` to `{attachmentsPath}/{sanitized-paper-title}/` using `run_command`. Copy images BEFORE writing the note file.
-3. Compute the **relative path from the note's directory to the image file**. Use `..` to climb to the common ancestor, then descend to the image. Count path segments deterministically — don't guess.
+1. Create the destination directory: `run_command` with `mkdir -p "{attachmentsPath}/{sanitized-paper-title}"`.
+   The folder is named after the **paper title only** (no subtopic, no date) so multiple notes about the same paper share the same images folder.
+2. Copy extracted PDF crop files returned by `paper_read({ mode:'figures' })` to `{attachmentsPath}/{sanitized-paper-title}/` using `run_command`.
+   Copy images BEFORE writing the note file.
+3. Compute the **relative path from the note's directory to the image file**.
+   Use `..` to climb to the common ancestor, then descend to the image.
+   Count path segments deterministically — don't guess.
 4. Embed with `![<caption>](<relative-path>)`. Nothing else.
 
 **Worked example:**
@@ -203,8 +211,10 @@ Write:        ![Figure 2. RSA toolbox schematic](../imgs/Nili2014/figure-2.jpg)
 
 - `![Figure 2](file:///Users/.../figure-2.jpg)` — `file://` renders as a broken-image icon in Obsidian.
 - `![Figure 2](/Users/.../figure-2.jpg)` — absolute path is outside the vault; viewers refuse.
-- `![Figure 2|400](../imgs/foo.jpg)` — `|400` becomes literal alt text; image is not resized.
-- `![[imgs/foo/figure-2.jpg]]` — wiki-link embed; we use standard markdown only.
+- `![Figure 2|400](../imgs/foo.jpg)` — `|400` becomes literal alt text.
+  The image is not resized.
+- `![[imgs/foo/figure-2.jpg]]` — wiki-link embed.
+  We use standard markdown only.
 
 **If the extracted PDF crop cannot be found**, write a text-only note when the user asked for a note.
 Switch to text-only mode and do not include any figure image artifact.
