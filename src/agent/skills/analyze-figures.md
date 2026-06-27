@@ -47,6 +47,13 @@ For Figure 1, Fig. 1b, or any panel request, inspect the whole extracted figure 
 Panel suffixes and captions are hints only; do not assume image order proves panel identity.
 If the user asks only for Figure 1b, focus the explanation on the requested panel evidence but do not imply one panel represents the whole Figure 1.
 
+**If figure extraction fails or returns no crops:**
+Switch to text-only mode for the paper figure task.
+Do not include figure images in analysis, note taking, or follow-up artifacts.
+Do not use MinerU source images, rendered PDF pages, OCR, shell commands, or package installation as a replacement figure path.
+Base the answer or note only on captions, figure legends, and surrounding paper text, and state that limitation explicitly.
+This does not restrict images the user manually attached or pasted; user-provided image inputs can still be inspected normally.
+
 ### When MinerU cache is NOT available
 
 Figure extraction is not available.
@@ -62,19 +69,23 @@ Use rendered PDF pages only if the user explicitly asks for raw page/layout insp
 - **NEVER** attempt to install packages (PIL, cv2, etc.) to process images.
 - Use MinerU as the semantic index, not as the source of final figure images.
 - Use extracted PDF crops for figure/image questions.
+- If figure extraction fails or returns no crops, switch to text-only mode and do not include a figure image artifact.
 - Always include the figure caption and surrounding context in your analysis, not just the image.
 - For compound figures, inspect the whole extracted figure crop and the complete figure text before drawing conclusions.
 - Text-only models can use ordered paths, captions, section text, and page hints, but must not make unsupported visual claims.
 - For tables: the MinerU markdown usually contains the table as structured text — read that directly instead of rendering images.
+- User-provided image inputs are unaffected by the paper figure-extraction failure path.
 
 ### Saving figure analysis to notes
 
 When the user asks to save your figure analysis to a note (e.g., "save it", "put that in a note", "create a note", "write to obsidian"), the Write Note skill handles the full workflow. Key rules:
 
-- **Always embed the analyzed figure image** in the note — mandatory, not optional. A note explaining Figure 2 must show Figure 2.
+- Embed the analyzed figure image when an extracted PDF crop is available.
 - Embed extracted PDF crop paths returned by `paper_read({ mode:'figures' })`.
 - Do not embed MinerU source image paths.
 - Place the image at the start of the relevant section, before the explanation text.
 - If you analyzed multiple figures, embed all of them.
-- If `paper_read({ mode:'figures' })` returns `no_figures`, `mineru_required`, `error`, zero figures, or no image artifact, do not call `note_write` for that figure note and do not create a text-only substitute.
-- In that failure state, tell the user that no extracted PDF crop is available.
+- If `paper_read({ mode:'figures' })` returns `no_figures`, `mineru_required`, `error`, zero figures, or no image artifact, switch to text-only mode when the user asked for a note.
+- In that failure state, do not include figure images or extracted-image placeholders.
+- In that failure state, explicitly state that figure extraction failed or no extracted crops are available.
+- In that failure state, explicitly state that the explanations are based on captions, figure legends, and surrounding paper text.

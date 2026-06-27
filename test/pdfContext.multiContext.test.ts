@@ -10,6 +10,7 @@ import {
   renderEvidencePack,
 } from "../src/modules/contextPanel/pdfContext";
 import {
+  buildManifest,
   readManifest,
   writeMineruCacheFiles,
 } from "../src/modules/contextPanel/mineruCache";
@@ -723,6 +724,59 @@ describe("pdfContext multi-context helpers", function () {
     );
     assert.isAbove(context!.chunks.length, 0);
     assert.equal(context!.fullLength, mdContent.length);
+  });
+
+  it("strips legacy MinerU source image embeds from PDF context chunks", async function () {
+    const io = setupMemoryIO();
+    const attachmentId = 1204;
+    const contentList = [
+      { type: "text", text_level: 1, text: "Introduction", page_idx: 0 },
+      { type: "text", text_level: 1, text: "Results", page_idx: 1 },
+      {
+        type: "image",
+        img_path: "images/raw-result.png",
+        image_caption: ["Figure 1. Legacy figure caption."],
+        page_idx: 1,
+      },
+      { type: "text", text_level: 1, text: "Conclusion", page_idx: 2 },
+    ];
+    const rawMd = [
+      "# Introduction",
+      "Intro text.",
+      "# Results",
+      "![](images/raw-result.png)",
+      "Result text.",
+      "Figure 1. Legacy figure caption.",
+      "# Conclusion",
+      "Conclusion text.",
+    ].join("\n\n");
+
+    await writeMineruCacheFiles(attachmentId, rawMd, [
+      { relativePath: "paper/full.md", data: bytes(rawMd) },
+      {
+        relativePath: "paper/content_list.json",
+        data: bytes(JSON.stringify(contentList)),
+      },
+    ]);
+    io.files.set(
+      `/tmp/zotero/llm-for-zotero-mineru/${attachmentId}/full.md`,
+      bytes(rawMd),
+    );
+    io.files.set(
+      `/tmp/zotero/llm-for-zotero-mineru/${attachmentId}/manifest.json`,
+      bytes(JSON.stringify(buildManifest(rawMd, contentList))),
+    );
+
+    await ensurePDFTextCached(mockPdfAttachment(attachmentId));
+    const context = pdfTextCache.get(attachmentId);
+    assert.exists(context);
+    const rendered = buildFullPaperContext(fullPaperRef(attachmentId), context);
+
+    assert.include(rendered, "Result text.");
+    assert.include(rendered, "Figure 1. Legacy figure caption.");
+    assert.notInclude(rendered, "images/raw-result.png");
+    assert.notInclude(rendered, "![](");
+    assert.notInclude(context!.chunks.join("\n"), "images/raw-result.png");
   });
 
   it("rebuilds stale MinerU manifests before chunking", async function () {

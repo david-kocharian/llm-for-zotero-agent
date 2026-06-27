@@ -64,5 +64,3 @@ pref("mineruGlobalAutoParse", false);
 pref("mineruSyncEnabled", false);
 pref("mineruMaxAutoPages", 100);
 pref("mineruExcludePatterns", "");
-pref("figureExtractionRuntimePackageUrl", "");
-pref("figureExtractionRuntimeAllowSystemFallback", false);

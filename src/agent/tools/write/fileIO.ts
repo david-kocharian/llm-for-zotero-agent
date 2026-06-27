@@ -17,9 +17,8 @@ import {
 import { pushUndoEntry } from "../../store/undoStore";
 import { FILE_IO_CONTENT_FIELDS } from "../../toolArgumentFields";
 import { isMalformedToolArgumentsDiagnostic } from "../../toolArgumentDiagnostics";
-import {
-  validateMineruFigureBlockEmbedsForCacheDirs,
-} from "../../../modules/contextPanel/mineruFigureBlockCache";
+import { validateMineruFigureBlockEmbedsForCacheDirs } from "../../../modules/contextPanel/mineruFigureBlockCache";
+import { stripMineruSourceImageEmbedsFromMarkdown } from "../../../modules/contextPanel/mineruCache";
 import { collectRequestPaperContexts } from "../requestPaperContexts";
 
 type FileIOInput = {
@@ -169,6 +168,14 @@ function isObviousMineruReadPath(value: string): boolean {
   );
 }
 
+function isMineruFullMarkdownReadPath(value: string): boolean {
+  const normalized = normalizePathForPrefix(value);
+  return (
+    normalized.includes("llm-for-zotero-mineru/") &&
+    getFileNameFromPath(normalized).toLowerCase() === "full.md"
+  );
+}
+
 export function summarizeFileIOCall(args: unknown): string | null {
   const a =
     args && typeof args === "object" ? (args as Record<string, unknown>) : {};
@@ -264,8 +271,16 @@ function isMarkdownWritePath(filePath: string): boolean {
   return /\.(?:md|markdown)$/i.test(filePath.trim());
 }
 
-function getRequestMineruCacheDirs(context: AgentToolContext): string[] {
-  return collectRequestPaperContexts(context.request)
+function getRequestMineruPaperContexts(context: AgentToolContext) {
+  return collectRequestPaperContexts(context.request).filter((paperContext) =>
+    Boolean(paperContext.mineruCacheDir?.trim()),
+  );
+}
+
+function getRequestMineruCacheDirs(
+  paperContexts: ReturnType<typeof getRequestMineruPaperContexts>,
+): string[] {
+  return paperContexts
     .map((paperContext) =>
       typeof paperContext.mineruCacheDir === "string"
         ? paperContext.mineruCacheDir.trim()
@@ -279,10 +294,12 @@ async function validateMarkdownFigureBlockEmbeds(
   context: AgentToolContext,
   encoding: string,
 ) {
+  const paperContexts = getRequestMineruPaperContexts(context);
   return validateMineruFigureBlockEmbedsForCacheDirs({
     content,
     requestText: context.request.userText || "",
-    cacheDirs: getRequestMineruCacheDirs(context),
+    cacheDirs: getRequestMineruCacheDirs(paperContexts),
+    paperContexts,
     encoding,
   });
 }
@@ -352,7 +369,9 @@ function getRequestMineruCacheRelativePath(
   context: AgentToolContext,
 ): string | null {
   const normalizedFilePath = normalizePathForPrefix(filePath);
-  for (const cacheDir of getRequestMineruCacheDirs(context)) {
+  for (const cacheDir of getRequestMineruCacheDirs(
+    getRequestMineruPaperContexts(context),
+  )) {
     const normalizedCacheDir = normalizePathForPrefix(cacheDir);
     if (!normalizedCacheDir) continue;
     if (normalizedFilePath === normalizedCacheDir) return "";
@@ -492,7 +511,7 @@ export function createFileIOTool(): AgentToolDefinition<FileIOInput, unknown> {
       instruction:
         "Use file_io to read or write files on the user's filesystem. " +
         "For ordinary Zotero paper summaries, methods, key points, and targeted Q&A, use paper_read instead of direct MinerU cache reads. " +
-        "Use file_io for explicit filesystem tasks or direct MinerU manifest/section cache inspection. For figure interpretation or note figure embeds, use paper_read mode:'figures' and its extracted PDF crop paths rather than MinerU source image paths. " +
+        "Use file_io for explicit filesystem tasks or direct MinerU manifest/section cache inspection. For figure interpretation or note figure embeds, use paper_read mode:'figures' and its extracted PDF crop paths rather than MinerU source image paths. If figure extraction fails or returns no crops and the user asked for a file note, switch to text-only mode: do not include figure images, rendered PDF page screenshots, MinerU source images, or extracted-image placeholders; explicitly state that extraction failed or no extracted crops are available and base explanations on captions, figure legends, and surrounding paper text. User-provided image inputs are unaffected. " +
         "Common uses: write a Python/R script before running it with run_command, read a CSV/JSON data file, " +
         "save analysis results to the user's Desktop, export formatted bibliographies. " +
         "Always use absolute paths.",
@@ -759,7 +778,10 @@ export function createFileIOTool(): AgentToolDefinition<FileIOInput, unknown> {
           const raw = await readFile(input.filePath, input.encoding || "utf-8");
           const start = input.offset || 0;
           const end = input.length ? start + input.length : raw.length;
-          const text = raw.slice(start, end);
+          const rawText = raw.slice(start, end);
+          const text = isMineruFullMarkdownReadPath(input.filePath)
+            ? stripMineruSourceImageEmbedsFromMarkdown(rawText)
+            : rawText;
           return {
             content: {
               action: "read",

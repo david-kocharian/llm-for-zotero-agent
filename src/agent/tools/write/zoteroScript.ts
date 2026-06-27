@@ -280,6 +280,14 @@ function hasUndoInstrumentation(script: string): boolean {
   return /\benv\s*\.\s*(?:snapshot|addUndoStep)\s*\(/.test(script);
 }
 
+function attemptsDirectNoteWrite(script: string): boolean {
+  return (
+    /\bnew\s+Zotero\s*\.\s*Item\s*\(\s*["']note["']\s*\)/i.test(script) ||
+    /\.\s*setNote\s*\(/.test(script) ||
+    /\bZotero\s*\.\s*Notes\b/.test(script)
+  );
+}
+
 // ── Guidance ────────────────────────────────────────────────────────────────
 
 const ZOTERO_SCRIPT_GUIDANCE = `## zotero_script — Zotero Runtime JavaScript
@@ -345,7 +353,8 @@ env.log(\`Total: \${count} items\`);
 3. Use \`env.log(msg)\` to report progress — this output is shown to the user
 4. The script body is an async function — top-level await is supported
 5. Do NOT use \`eraseTx()\` — use Zotero trash instead (item.deleted = true; await item.saveTx())
-6. Write straightforward code — no dry-run branching needed. The script runs directly, and undo_last_action uses snapshots/custom undo steps to revert it.`;
+6. Do NOT create or edit Zotero notes here. Use note_write for all Zotero note creation, edits, and appends so note validation still runs.
+7. Write straightforward code — no dry-run branching needed. The script runs directly, and undo_last_action uses snapshots/custom undo steps to revert it.`;
 
 // ── Tool definition ─────────────────────────────────────────────────────────
 
@@ -455,6 +464,11 @@ export function createZoteroScriptTool(): AgentToolDefinition<
       if (mode === "write" && !hasUndoInstrumentation(script)) {
         return fail(
           "mode 'write' scripts must call env.snapshot(item) before mutating Zotero items, or env.addUndoStep(fn) for custom changes, so undo_last_action can revert the operation",
+        );
+      }
+      if (mode === "write" && attemptsDirectNoteWrite(script)) {
+        return fail(
+          "zotero_script write mode cannot create or edit Zotero notes directly. Use note_write so note validation and figure-crop/text-only fallback rules run before saving.",
         );
       }
       const timeoutRaw =

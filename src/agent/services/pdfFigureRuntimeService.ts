@@ -1,5 +1,4 @@
 import { unzipSync } from "fflate";
-import { config } from "../../../package.json";
 import { getLocalParentPath, joinLocalPath } from "../../utils/localPath";
 import { getRuntimePlatformInfo } from "../../utils/runtimePlatform";
 
@@ -7,17 +6,10 @@ export const PDF_FIGURE_RUNTIME_VERSION = "1";
 
 const PDF_FIGURE_RUNTIME_KIND = "llm-for-zotero/pdf-figure-runtime";
 const PDF_FIGURE_RUNTIME_DIR_NAME = "llm-for-zotero-runtimes";
-const PDF_FIGURE_RUNTIME_PACKAGE_URL_KEY = `${config.prefsPrefix}.figureExtractionRuntimePackageUrl`;
-const PDF_FIGURE_RUNTIME_ALLOW_SYSTEM_FALLBACK_KEY = `${config.prefsPrefix}.figureExtractionRuntimeAllowSystemFallback`;
 const PDFTOPPM_CANDIDATE_PATHS = [
   "/opt/homebrew/bin/pdftoppm",
   "/usr/local/bin/pdftoppm",
   "/usr/bin/pdftoppm",
-];
-const PYTHON3_CANDIDATE_PATHS = [
-  "/opt/homebrew/bin/python3",
-  "/usr/local/bin/python3",
-  "/usr/bin/python3",
 ];
 
 type IOUtilsLike = {
@@ -75,7 +67,7 @@ export type PdfFigureRuntimePlatformKey =
   | "windows-x64";
 
 export type PdfFigureExtractionRuntime = {
-  source: "managed" | "system";
+  source: "managed";
   pythonPath: string;
   popplerBinDir: string;
   pathListSeparator: ":" | ";";
@@ -214,33 +206,6 @@ function readPreference(key: string): unknown {
   } catch {
     return undefined;
   }
-}
-
-function isTruthyPreference(value: unknown): boolean {
-  if (value === true) return true;
-  const normalized = sanitizeText(value).toLowerCase();
-  return normalized === "true" || normalized === "1" || normalized === "yes";
-}
-
-function getBuildEnv(): string {
-  try {
-    if (typeof __env__ !== "undefined") return __env__;
-  } catch {
-    // The test runner does not define esbuild globals.
-  }
-  return sanitizeText((globalThis as { __env__?: unknown }).__env__);
-}
-
-function isSystemFallbackEnabled(): boolean {
-  if (
-    isTruthyPreference(
-      readPreference(PDF_FIGURE_RUNTIME_ALLOW_SYSTEM_FALLBACK_KEY),
-    )
-  ) {
-    return true;
-  }
-  const env = getBuildEnv();
-  return env === "development" || env === "test";
 }
 
 function getBaseRuntimeDir(): string {
@@ -419,51 +384,6 @@ export async function resolveSystemPdfFigurePdftohtmlPath(): Promise<
   return null;
 }
 
-function readPythonPreference(): string {
-  const preferenceKeys = [
-    "extensions.zotero.llmforzotero.pythonPath",
-    "extensions.zotero.llmforzotero.figureExtractionPythonPath",
-    "llmforzotero.pythonPath",
-  ];
-  for (const key of preferenceKeys) {
-    const value = sanitizeText(readPreference(key));
-    if (value) return value;
-  }
-  return "";
-}
-
-async function resolveSystemPython3Path(): Promise<string | null> {
-  const preferencePath = readPythonPreference();
-  const candidates = [
-    ...(preferencePath ? [preferencePath] : []),
-    ...PYTHON3_CANDIDATE_PATHS,
-  ];
-  for (const candidate of candidates) {
-    if (await pathExists(candidate)) return candidate;
-  }
-  return null;
-}
-
-async function resolveSystemRuntime(): Promise<PdfFigureExtractionRuntime | null> {
-  const pythonPath = await resolveSystemPython3Path();
-  if (!pythonPath) return null;
-  const pdftoppmPath = await resolveSystemPdfFigurePdftoppmPath();
-  if (!pdftoppmPath) return null;
-  const popplerBinDir = getLocalParentPath(pdftoppmPath);
-  const platformKey = getPdfFigureRuntimePlatformKey();
-  for (const executable of popplerExecutableNames(platformKey)) {
-    if (!(await pathExists(joinLocalPath(popplerBinDir, executable)))) {
-      return null;
-    }
-  }
-  return {
-    source: "system",
-    pythonPath,
-    popplerBinDir,
-    pathListSeparator: getPathListSeparator(),
-  };
-}
-
 export function buildDefaultPdfFigureRuntimePackageUrl(
   platformKey: PdfFigureRuntimePlatformKey,
 ): string {
@@ -473,15 +393,7 @@ export function buildDefaultPdfFigureRuntimePackageUrl(
 function getRuntimePackageUrl(
   platformKey: PdfFigureRuntimePlatformKey,
 ): string {
-  const override = sanitizeText(
-    readPreference(PDF_FIGURE_RUNTIME_PACKAGE_URL_KEY),
-  );
-  const template =
-    override || buildDefaultPdfFigureRuntimePackageUrl(platformKey);
-  if (/^(?:off|false|disabled|none)$/i.test(template)) return "";
-  return template
-    .replace(/\{platform\}/g, platformKey)
-    .replace(/\{version\}/g, PDF_FIGURE_RUNTIME_VERSION);
+  return buildDefaultPdfFigureRuntimePackageUrl(platformKey);
 }
 
 async function downloadRuntimePackageBytes(url: string): Promise<Uint8Array> {
@@ -628,9 +540,6 @@ async function installManagedRuntime(
   platformKey = getPdfFigureRuntimePlatformKey(),
 ): Promise<PdfFigureExtractionRuntime> {
   const packageUrl = getRuntimePackageUrl(platformKey);
-  if (!packageUrl) {
-    throw new Error("Managed runtime package URL is disabled");
-  }
   const rootDir = getManagedPdfFigureRuntimeRoot(platformKey);
   const zipBytes = await downloadRuntimePackageBytes(packageUrl);
   const extracted = extractRuntimeZipEntries(zipBytes);
@@ -665,15 +574,14 @@ async function installManagedRuntime(
 }
 
 export async function resolvePdfFigureExtractionRuntime(): Promise<PdfFigureExtractionRuntime> {
-  const platformKey = getPdfFigureRuntimePlatformKey();
+  return resolveManagedPdfFigureExtractionRuntime();
+}
+
+export async function resolveManagedPdfFigureExtractionRuntime(
+  platformKey = getPdfFigureRuntimePlatformKey(),
+): Promise<PdfFigureExtractionRuntime> {
   const installed = await resolveInstalledManagedRuntime(platformKey);
   if (installed) return installed;
-
-  if (isSystemFallbackEnabled()) {
-    const systemRuntime = await resolveSystemRuntime();
-    if (systemRuntime) return systemRuntime;
-  }
-
   if (!managedInstallTask) {
     managedInstallTask = installManagedRuntime(platformKey).finally(() => {
       managedInstallTask = null;

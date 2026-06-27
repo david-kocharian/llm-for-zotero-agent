@@ -1,8 +1,11 @@
 import { joinLocalPath } from "../../utils/localPath";
+import type { PaperContextRef } from "../../shared/types";
 import {
   buildMineruFigureBlocks,
+  allowsTextOnlyFigureNoteAfterExtractionFailure,
   findMineruFigureBlockByImagePath,
   getManifestFigureBaseLabel,
+  requiresCompleteFigureCropCoverage,
   validateFigureBlockEmbeds,
   type FigureBlockEmbedValidationResult,
   type MineruFigureBlock,
@@ -15,6 +18,9 @@ import {
 import {
   PDF_FIGURE_CROP_DIR,
   PDF_FIGURE_CROP_METADATA_FILE,
+  getPdfFigureCropCacheFreshness,
+  type PdfFigureCropFreshness,
+  type PdfFigureCropFreshnessReason,
   type PdfFigureCropCache,
 } from "./pdfFigureCropCache";
 
@@ -26,6 +32,69 @@ export type LoadedMineruFigureBlocks = {
   cacheDir: string;
   blocks: MineruFigureBlock[];
 };
+
+type CropCacheState = {
+  cache: PdfFigureCropCache | null;
+  freshness: PdfFigureCropFreshness;
+};
+
+function normalizeCacheDir(value: string): string {
+  return `${value || ""}`.trim();
+}
+
+function findPaperContextForCacheDir(
+  cacheDir: string,
+  paperContexts: PaperContextRef[] | undefined,
+): PaperContextRef | undefined {
+  const normalized = normalizeCacheDir(cacheDir);
+  return (paperContexts || []).find(
+    (paperContext) =>
+      normalizeCacheDir(paperContext.mineruCacheDir || "") === normalized,
+  );
+}
+
+function figureCropMetadataBlock(cacheDir: string): MineruFigureBlock {
+  return {
+    blockId: `figure-crop-metadata:${cacheDir}`,
+    kind: "figure",
+    imagePaths: [],
+    markdownStart: 0,
+    markdownEnd: 0,
+    contextStart: 0,
+    contextEnd: 0,
+    labelHints: ["source-PDF figure crop metadata"],
+    captionHints: [],
+    sectionHeading: null,
+    confidence: "high",
+    ambiguous: false,
+  };
+}
+
+function cropMetadataIssueMessage(
+  reason: PdfFigureCropFreshnessReason,
+): string {
+  const issue =
+    reason === "missing" ? "metadata is missing" : "metadata is stale";
+  return (
+    `Cannot save an all-figures note because source-PDF figure crop ${issue}. ` +
+    `Call paper_read mode:'figures' again before saving a complete all-figures note, ` +
+    `or ask explicitly for a partial note.`
+  );
+}
+
+function buildCropMetadataGuard(
+  cacheDir: string,
+  reason: PdfFigureCropFreshnessReason,
+): FigureBlockEmbedValidationResult {
+  return {
+    block: figureCropMetadataBlock(cacheDir),
+    embeddedCount: 0,
+    availableCount: 0,
+    availablePaths: [],
+    severity: "block",
+    message: cropMetadataIssueMessage(reason),
+  };
+}
 
 function getIOUtils(): IOUtilsLike | undefined {
   return (globalThis as unknown as { IOUtils?: IOUtilsLike }).IOUtils;
@@ -169,6 +238,36 @@ async function readJsonFile<T>(
   }
 }
 
+async function readCropCacheState(params: {
+  cacheDir: string;
+  encoding: string;
+  paperContexts?: PaperContextRef[];
+}): Promise<CropCacheState> {
+  const manifest = await readJsonFile<MineruManifest>(
+    joinLocalPath(params.cacheDir, "manifest.json"),
+    params.encoding,
+  );
+  const rawCache = await readJsonFile<PdfFigureCropCache>(
+    joinLocalPath(
+      params.cacheDir,
+      PDF_FIGURE_CROP_DIR,
+      PDF_FIGURE_CROP_METADATA_FILE,
+    ),
+    params.encoding,
+  );
+  const freshness = getPdfFigureCropCacheFreshness(rawCache, {
+    manifest,
+    paperContext: findPaperContextForCacheDir(
+      params.cacheDir,
+      params.paperContexts,
+    ),
+  });
+  return {
+    cache: freshness.ok ? rawCache : null,
+    freshness,
+  };
+}
+
 export function toAbsoluteMineruPath(
   cacheDir: string,
   relativePath: string,
@@ -261,22 +360,40 @@ export async function validateMineruFigureBlockEmbedsForCacheDirs(params: {
   content: string;
   requestText: string;
   cacheDirs: string[];
+  paperContexts?: PaperContextRef[];
   encoding?: string;
 }): Promise<FigureBlockEmbedValidationResult | null> {
   if (!params.content.trim()) return null;
   const seenCacheDirs = new Set<string>();
+  const cacheStates = new Map<string, CropCacheState>();
+  const encoding = params.encoding || "utf-8";
+  const requiresCompleteCoverage = requiresCompleteFigureCropCoverage(
+    params.content,
+    params.requestText,
+  );
+  const allowsTextOnlyAfterFailure =
+    allowsTextOnlyFigureNoteAfterExtractionFailure(
+      params.content,
+      params.requestText,
+    );
   for (const rawCacheDir of params.cacheDirs) {
     const cacheDir = rawCacheDir.trim();
     if (!cacheDir || seenCacheDirs.has(cacheDir)) continue;
     seenCacheDirs.add(cacheDir);
-    const cropCache = await readJsonFile<PdfFigureCropCache>(
-      joinLocalPath(
-        cacheDir,
-        PDF_FIGURE_CROP_DIR,
-        PDF_FIGURE_CROP_METADATA_FILE,
-      ),
-      params.encoding || "utf-8",
-    );
+    const cropState = await readCropCacheState({
+      cacheDir,
+      encoding,
+      paperContexts: params.paperContexts,
+    });
+    cacheStates.set(cacheDir, cropState);
+    if (
+      requiresCompleteCoverage &&
+      !allowsTextOnlyAfterFailure &&
+      !cropState.freshness.ok
+    ) {
+      return buildCropMetadataGuard(cacheDir, cropState.freshness.reason);
+    }
+    const cropCache = cropState.cache;
     if (!cropCache?.missingFigures?.length) continue;
     const result = validateFigureBlockEmbeds({
       content: params.content,
@@ -300,14 +417,16 @@ export async function validateMineruFigureBlockEmbedsForCacheDirs(params: {
     params.encoding,
   );
   for (const entry of loaded) {
-    const cropCache = await readJsonFile<PdfFigureCropCache>(
-      joinLocalPath(
-        entry.cacheDir,
-        PDF_FIGURE_CROP_DIR,
-        PDF_FIGURE_CROP_METADATA_FILE,
-      ),
-      params.encoding || "utf-8",
-    );
+    let cropState = cacheStates.get(entry.cacheDir);
+    if (!cropState) {
+      cropState = await readCropCacheState({
+        cacheDir: entry.cacheDir,
+        encoding,
+        paperContexts: params.paperContexts,
+      });
+      cacheStates.set(entry.cacheDir, cropState);
+    }
+    const cropCache = cropState.cache;
     const result = validateFigureBlockEmbeds({
       content: params.content,
       requestText: params.requestText,

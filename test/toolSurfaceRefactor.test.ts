@@ -721,6 +721,66 @@ describe("semantic tool surface", function () {
     }
   });
 
+  it("paper_read MinerU overview strips legacy source image embeds", async function () {
+    const originalIOUtils = globalScope.IOUtils;
+    const paperContext = {
+      itemId: 11,
+      contextItemId: 22,
+      title: "MinerU Paper",
+      firstCreator: "Miller",
+      year: "2025",
+      mineruCacheDir: "/tmp/mineru-paper",
+    };
+    globalScope.IOUtils = {
+      read: async () =>
+        encoder.encode(
+          [
+            "# MinerU Paper",
+            "",
+            "Abstract text.",
+            "",
+            "![](images/raw-abstract.jpg)",
+            "",
+            "# Discussion",
+            "",
+            "Discussion text.",
+            "",
+            "![panel](images/raw-discussion.png)",
+          ].join("\n"),
+        ),
+    };
+    try {
+      const tool = createPaperReadTool(
+        {} as never,
+        {} as never,
+        {} as never,
+        {
+          listPaperContexts: () => [paperContext],
+          resolvePaperContextTarget: () => paperContext,
+        } as never,
+      );
+      const validated = tool.validate({ mode: "overview" });
+      assert.equal(validated.ok, true);
+      if (!validated.ok) return;
+      const output = await tool.execute(validated.value, baseContext);
+      const result = (output as { results?: Array<Record<string, unknown>> })
+        .results?.[0];
+      const text = String(result?.text || "");
+      assert.equal(result?.backend, "mineru");
+      assert.include(text, "Abstract text.");
+      assert.include(text, "Discussion text.");
+      assert.notInclude(text, "images/raw-abstract.jpg");
+      assert.notInclude(text, "images/raw-discussion.png");
+      assert.notInclude(text, "![](");
+    } finally {
+      if (originalIOUtils === undefined) {
+        delete globalScope.IOUtils;
+      } else {
+        globalScope.IOUtils = originalIOUtils;
+      }
+    }
+  });
+
   it("paper_read visual redirects generic MinerU figure requests to cache inspection", async function () {
     const originalIOUtils = globalScope.IOUtils;
     const paperContext = {
@@ -1189,6 +1249,143 @@ describe("semantic tool surface", function () {
       (output.artifacts || []).map((artifact) => artifact.storedPath),
       ["/tmp/mineru-paper/figure_crops/crops/figure-1.png"],
     );
+  });
+
+  it("paper_read figures returns cached PDF crops before source-PDF extraction", async function () {
+    const originalIOUtils = globalScope.IOUtils;
+    const cropPath = "/tmp/mineru-paper/figure_crops/crops/figure-1.png";
+    const paperContext = {
+      itemId: 11,
+      contextItemId: 22,
+      title: "MinerU Figure Paper",
+      firstCreator: "Miller",
+      year: "2025",
+      mineruCacheDir: "/tmp/mineru-paper",
+    };
+    const files = new Map<string, Uint8Array>([
+      [
+        "/tmp/mineru-paper/manifest.json",
+        encoder.encode(
+          JSON.stringify({
+            sections: [],
+            allFigures: [
+              {
+                label: "Figure 1",
+                baseLabel: "Figure 1",
+                page: 2,
+                caption: "Figure 1. A cached crop.",
+              },
+            ],
+            allTables: [],
+          }),
+        ),
+      ],
+      [cropPath, encoder.encode("png")],
+      [
+        "/tmp/mineru-paper/figure_crops/figure_geometry.json",
+        encoder.encode(
+          JSON.stringify({
+            version: 1,
+            attachmentId: 22,
+            manifestHash: "legacy",
+            pdfFingerprint: "legacy",
+            renderScale: 1.8,
+            algorithmVersion: 1,
+            generatedAt: 1,
+            expectedFigures: [
+              {
+                label: "Figure 1",
+                baseLabel: "Figure 1",
+                pageNumber: 2,
+                status: "ok",
+                cropPath: "/var/folders/tmp/old-crop.png",
+              },
+            ],
+            missingFigures: [],
+            entries: [
+              {
+                id: "figure-1",
+                label: "Figure 1",
+                baseLabel: "Figure 1",
+                pageNumber: 2,
+                cropPath,
+                captionText: "Figure 1. A cached crop.",
+                rect: { left: 10, top: 20, width: 300, height: 200 },
+                confidence: 0.96,
+                source: "pdf-image-object",
+                warnings: [],
+                mineruImagePaths: [],
+              },
+            ],
+          }),
+        ),
+      ],
+    ]);
+    globalScope.IOUtils = {
+      read: async (path: string) => {
+        const bytes = files.get(path);
+        if (!bytes) throw new Error(`missing ${path}`);
+        return bytes;
+      },
+      write: async (path: string, bytes: Uint8Array) => {
+        files.set(path, bytes);
+      },
+      makeDirectory: async () => undefined,
+    };
+    let rawCalled = false;
+    try {
+      const registry = createBuiltInToolRegistry({
+        zoteroGateway: {
+          listPaperContexts: () => [paperContext],
+          resolvePaperContextTarget: () => paperContext,
+        } as never,
+        pdfService: {} as never,
+        pdfPageService: {
+          extractFiguresFromSourcePdf: async () => {
+            rawCalled = true;
+            throw new Error("source extraction should not run");
+          },
+        } as never,
+        retrievalService: {} as never,
+      });
+      const tool = registry.getTool("paper_read");
+      assert.exists(tool);
+      const validated = tool!.validate({
+        mode: "figures",
+        query: "Explain Figure 1",
+      });
+      assert.equal(validated.ok, true);
+      if (!validated.ok) return;
+
+      const output = (await tool!.execute(validated.value, {
+        ...baseContext,
+        request: {
+          ...baseContext.request,
+          userText: "Explain Figure 1",
+          selectedPaperContexts: [paperContext],
+        },
+      })) as {
+        content?: { status?: string; figures?: Array<{ cropPath?: string }> };
+        artifacts?: Array<{ storedPath?: string }>;
+      };
+
+      assert.isFalse(rawCalled);
+      assert.equal(output.content?.status, "ok");
+      assert.deepEqual(
+        output.content?.figures?.map((figure) => figure.cropPath),
+        [cropPath],
+      );
+      assert.deepEqual(
+        output.artifacts?.map((artifact) => artifact.storedPath),
+        [cropPath],
+      );
+    } finally {
+      if (originalIOUtils === undefined) {
+        delete globalScope.IOUtils;
+      } else {
+        globalScope.IOUtils = originalIOUtils;
+      }
+    }
   });
 
   it("paper_read visual renders PDF pages when MinerU cache is absent", async function () {

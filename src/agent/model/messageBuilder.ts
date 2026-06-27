@@ -397,6 +397,7 @@ function buildFigureMineruInstruction(
   return (
     "TURN RULE: This is a figure/table interpretation task and MinerU cache is available for at least one in-scope paper. " +
     "For figure/image questions, call `paper_read({ mode:'figures', query:'<figure label or all figures>' })` first. This returns precise PDF crops plus captions/provenance. " +
+    "If figure extraction fails or returns no crops, switch to text-only mode for analysis, note taking, and follow-up artifacts: do not include figure images, rendered PDF page screenshots, MinerU source images, or extracted-image placeholders; explicitly state that extraction failed or no extracted crops are available and base explanations on captions, figure legends, and surrounding paper text. Manual user-provided image inputs are unaffected. " +
     "For table questions, call `paper_read({ mode:'targeted', query:'<table label and surrounding discussion>' })` because MinerU table evidence is text/structure, not figure crops. " +
     "Use `full.md`/manifest text for captions and surrounding textual evidence, but do not read or embed MinerU image paths for ordinary figure interpretation. " +
     "For explicit panel requests, inspect the whole extracted figure crop and treat panel suffixes as hints. " +

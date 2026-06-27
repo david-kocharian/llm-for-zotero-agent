@@ -1,10 +1,12 @@
 import { joinLocalPath } from "../../utils/localPath";
+import type { PaperContextRef } from "../../shared/types";
 import type {
   PdfFigureCandidateSource,
   PdfFigureRect,
 } from "./pdfFigureGeometry";
 
 export const PDF_FIGURE_CROP_CACHE_VERSION = 2;
+export const PDF_FIGURE_CROP_ALGORITHM_VERSION = 9;
 export const PDF_FIGURE_CROP_DIR = "figure_crops";
 export const PDF_FIGURE_CROP_METADATA_FILE = "figure_geometry.json";
 
@@ -48,6 +50,89 @@ export type PdfFigureCropCache = {
   missingFigures?: ExpectedPdfFigure[];
   entries: ExtractedPdfFigure[];
 };
+
+export type PdfFigureCropFreshnessReason =
+  | "missing"
+  | "invalid"
+  | "version"
+  | "algorithm"
+  | "manifest"
+  | "attachment"
+  | "pdf";
+
+export type PdfFigureCropFreshness =
+  | { ok: true }
+  | { ok: false; reason: PdfFigureCropFreshnessReason };
+
+type PdfFigureCropFingerprintInput = Pick<
+  PaperContextRef,
+  "itemId" | "contextItemId" | "attachmentTitle" | "title"
+>;
+
+function normalizePositiveInt(value: unknown): number {
+  const number = Math.floor(Number(value));
+  return Number.isFinite(number) && number > 0 ? number : 0;
+}
+
+export function buildPdfFigureCropStableHash(value: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `fnv1a32-${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+export function buildPdfFigureCropManifestHash(manifest: unknown): string {
+  return buildPdfFigureCropStableHash(JSON.stringify(manifest || {}));
+}
+
+export function buildPdfFigureCropPdfFingerprint(
+  paperContext: PdfFigureCropFingerprintInput,
+): string {
+  return buildPdfFigureCropStableHash(
+    [
+      paperContext.itemId,
+      paperContext.contextItemId,
+      paperContext.attachmentTitle,
+      paperContext.title,
+    ].join("|"),
+  );
+}
+
+export function getPdfFigureCropCacheFreshness(
+  cache: PdfFigureCropCache | null | undefined,
+  params: {
+    manifest?: unknown;
+    paperContext?: PdfFigureCropFingerprintInput;
+  } = {},
+): PdfFigureCropFreshness {
+  if (!cache) return { ok: false, reason: "missing" };
+  if (!Array.isArray(cache.entries)) return { ok: false, reason: "invalid" };
+  if (cache.version !== PDF_FIGURE_CROP_CACHE_VERSION) {
+    return { ok: false, reason: "version" };
+  }
+  if (cache.algorithmVersion !== PDF_FIGURE_CROP_ALGORITHM_VERSION) {
+    return { ok: false, reason: "algorithm" };
+  }
+  if (cache.manifestHash !== buildPdfFigureCropManifestHash(params.manifest)) {
+    return { ok: false, reason: "manifest" };
+  }
+  const contextItemId = normalizePositiveInt(
+    params.paperContext?.contextItemId,
+  );
+  if (contextItemId && cache.attachmentId !== contextItemId) {
+    return { ok: false, reason: "attachment" };
+  }
+  if (
+    params.paperContext &&
+    cache.pdfFingerprint !==
+      buildPdfFigureCropPdfFingerprint(params.paperContext)
+  ) {
+    return { ok: false, reason: "pdf" };
+  }
+  return { ok: true };
+}
 
 function getIOUtils(): any {
   return (globalThis as any).IOUtils;
@@ -159,6 +244,28 @@ export async function readPdfFigureCropCacheFromDir(
   } catch {
     return null;
   }
+}
+
+export async function pdfFigureCropFileExists(path: string): Promise<boolean> {
+  const normalized = `${path || ""}`.trim();
+  if (!normalized) return false;
+  const io = getIOUtils();
+  if (io?.exists) {
+    try {
+      return Boolean(await io.exists(normalized));
+    } catch {
+      // Fall through to read-based probing.
+    }
+  }
+  const osFile = getOSFile();
+  if (osFile?.exists) {
+    try {
+      return Boolean(await osFile.exists(normalized));
+    } catch {
+      // Fall through to read-based probing.
+    }
+  }
+  return Boolean(await readFileBytes(normalized));
 }
 
 export async function writePdfFigureCropCacheToDir(

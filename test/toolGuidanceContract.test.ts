@@ -264,9 +264,11 @@ describe("tool guidance contracts", function () {
     assert.include(writeNote!, "Embed extracted PDF crop paths");
     assert.include(noteTools!, "embed the extracted PDF crop path");
     assert.include(noteTools!, "returns no_figures");
-    assert.include(noteTools!, "do not call note_write for that figure note");
-    assert.include(writeNote!, "do not call `note_write` or `file_io`");
-    assert.include(analyzeFigures!, "do not call `note_write`");
+    assert.include(noteTools!, "switch to text-only mode");
+    assert.include(writeNote!, "switch to text-only mode");
+    assert.include(analyzeFigures!, "switch to text-only mode");
+    assert.include(agentPersona!, "user manually attached or pasted");
+    assert.include(messageBuilder!, "user-provided image inputs are unaffected");
     assert.include(currentNoteTool!, "Do not embed MinerU source image paths");
   });
 

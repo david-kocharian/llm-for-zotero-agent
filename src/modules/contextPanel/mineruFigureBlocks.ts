@@ -751,14 +751,71 @@ function explicitlyAllowsPartialFigureNote(text: string): boolean {
   );
 }
 
+export function allowsTextOnlyFigureNoteAfterExtractionFailure(
+  content: string,
+  requestText: string,
+): boolean {
+  if (extractEmbeddedImages(content).length) return false;
+  const combined = `${requestText}\n${content}`;
+  const isFigureRequest =
+    requestsAllFigures(combined) || extractQueryRefs(combined).length > 0;
+  if (!isFigureRequest) return false;
+  const acknowledgesExtractionFailure =
+    /\bfigure\s+extraction\b.{0,120}\b(?:fail(?:ed|ure)?|unavailable|not available|could not|cannot|can't|no extracted)\b/i.test(
+      combined,
+    ) ||
+    /\b(?:fail(?:ed|ure)?|unavailable|not available|could not|cannot|can't|no extracted)\b.{0,120}\bfigure\s+extraction\b/i.test(
+      combined,
+    ) ||
+    /\bno\s+extracted\s+(?:PDF\s+)?(?:figure\s+)?crops?\s+(?:are\s+)?(?:available|embedded)\b/i.test(
+      combined,
+    );
+  if (!acknowledgesExtractionFailure) return false;
+  const statesNoEmbeddedCrops =
+    /\bno\s+(?:extracted\s+)?(?:PDF\s+)?(?:(?:image|figure)\s+)?crops?\s+(?:are\s+)?(?:available|embedded|included)\b/i.test(
+      combined,
+    ) ||
+    /\b(?:(?:image|figure)\s+)?crops?\s+(?:are\s+)?(?:not|unavailable|missing)\s+(?:available|embedded|included)?\b/i.test(
+      combined,
+    );
+  return (
+    (/\btext[-\s]?only\b/i.test(combined) || statesNoEmbeddedCrops) &&
+    /\b(?:based on|using|from)\b.{0,120}\b(?:captions?|figure legends?|legends?|surrounding (?:paper )?text|paper text|full text)\b/i.test(
+      combined,
+    )
+  );
+}
+
+export function requiresCompleteFigureCropCoverage(
+  content: string,
+  requestText: string,
+): boolean {
+  const combined = `${requestText}\n${content}`;
+  return (
+    requestsAllFigures(combined) && !explicitlyAllowsPartialFigureNote(combined)
+  );
+}
+
 function isMainExpectedFigure(figure: ExpectedPdfFigure): boolean {
   const parsed = parseBaseLabel(figure.baseLabel || figure.label);
   return Boolean(
     parsed &&
+    parsed.kind === "Figure" &&
+    !parsed.supplementary &&
+    !parsed.number.startsWith("S"),
+  );
+}
+
+function isMainFigureBlock(block: MineruFigureBlock): boolean {
+  return block.labelHints.some((label) => {
+    const parsed = parseBaseLabel(getManifestFigureBaseLabel(label));
+    return Boolean(
+      parsed &&
       parsed.kind === "Figure" &&
       !parsed.supplementary &&
       !parsed.number.startsWith("S"),
-  );
+    );
+  });
 }
 
 function validateMissingExpectedFigures(args: {
@@ -767,9 +824,9 @@ function validateMissingExpectedFigures(args: {
   blocks: MineruFigureBlock[];
   missingFigures: ExpectedPdfFigure[];
 }): FigureBlockEmbedValidationResult | null {
-  const combined = `${args.requestText}\n${args.content}`;
-  if (!requestsAllFigures(combined)) return null;
-  if (explicitlyAllowsPartialFigureNote(combined)) return null;
+  if (!requiresCompleteFigureCropCoverage(args.content, args.requestText)) {
+    return null;
+  }
   const missing = args.missingFigures.find(isMainExpectedFigure);
   if (!missing) return null;
   const baseLabel = missing.baseLabel || missing.label;
@@ -825,6 +882,19 @@ export function validateFigureBlockEmbeds(args: {
 }): FigureBlockEmbedValidationResult | null {
   const embeds = extractEmbeddedImages(args.content);
   const extractedFigures = args.extractedFigures || [];
+  if (
+    extractedFigures.length === 0 &&
+    allowsTextOnlyFigureNoteAfterExtractionFailure(
+      args.content,
+      args.requestText,
+    )
+  ) {
+    return null;
+  }
+  const requiresCompleteCoverage = requiresCompleteFigureCropCoverage(
+    args.content,
+    args.requestText,
+  );
   const missingExpectedGuard = validateMissingExpectedFigures({
     content: args.content,
     requestText: args.requestText,
@@ -849,15 +919,21 @@ export function validateFigureBlockEmbeds(args: {
       }
     }
     const embeddedCount = coveredImagePaths.size;
+    const requiredByAllFiguresRequest =
+      requiresCompleteCoverage && isMainFigureBlock(block);
     const discussed =
       hasBlockEmbedMention ||
-      contentMentionsBlock(args.content, args.requestText, block);
+      contentMentionsBlock(args.content, args.requestText, block) ||
+      requiredByAllFiguresRequest;
     if (!discussed) continue;
     if (block.ambiguous && statesAmbiguity(args.content, block)) continue;
     const severity: "block" | "advisory" = block.ambiguous
       ? "advisory"
       : "block";
     const label = block.labelHints[0] || block.sectionHeading || "figure block";
+    const reason = requiredByAllFiguresRequest
+      ? "is required by this all-figures note"
+      : "is discussed";
     return {
       block,
       embeddedCount,
@@ -869,7 +945,7 @@ export function validateFigureBlockEmbeds(args: {
         .map((figure) => figure.cropPath),
       severity,
       message:
-        `Missing extracted PDF figure crop: ${label} is discussed, but this note ${
+        `Missing extracted PDF figure crop: ${label} ${reason}, but this note ${
           embeddedCount > 0
             ? `embeds ${embeddedCount} MinerU source image${embeddedCount === 1 ? "" : "s"}`
             : "embeds no extracted PDF crop for it"

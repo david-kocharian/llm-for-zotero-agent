@@ -47,8 +47,16 @@ function htmlHasInlineStyles(html: string): boolean {
   return /<[^>]+\bstyle\s*=/i.test(html);
 }
 
-function getRequestMineruCacheDirs(context: AgentToolContext): string[] {
-  return collectRequestPaperContexts(context.request)
+function getRequestMineruPaperContexts(context: AgentToolContext) {
+  return collectRequestPaperContexts(context.request).filter((paperContext) =>
+    Boolean(paperContext.mineruCacheDir?.trim()),
+  );
+}
+
+function getRequestMineruCacheDirs(
+  paperContexts: ReturnType<typeof getRequestMineruPaperContexts>,
+): string[] {
+  return paperContexts
     .map((paperContext) =>
       typeof paperContext.mineruCacheDir === "string"
         ? paperContext.mineruCacheDir.trim()
@@ -61,10 +69,12 @@ async function validateNoteFigureBlockEmbeds(
   input: Pick<EditCurrentNoteInput, "content">,
   context: AgentToolContext,
 ): Promise<null | Record<string, unknown>> {
+  const paperContexts = getRequestMineruPaperContexts(context);
   const guard = await validateMineruFigureBlockEmbedsForCacheDirs({
     content: input.content,
     requestText: context.request.userText || "",
-    cacheDirs: getRequestMineruCacheDirs(context),
+    cacheDirs: getRequestMineruCacheDirs(paperContexts),
+    paperContexts,
   });
   if (!guard) return null;
   return {
@@ -470,9 +480,10 @@ export function createEditCurrentNoteTool(
         "For standalone notes, call `edit_current_note` with mode 'create', target 'standalone', and `content`. " +
         "Pass Markdown by default. When the user explicitly requests HTML output (e.g. for styled note templates), pass well-formed HTML with inline styles directly. " +
         "When the note discusses a specific figure or table, first use `paper_read({ mode:'figures' })` and embed the extracted PDF crop path: `![Figure N](file:///{path})` — auto-imported as a Zotero attachment. " +
-        "If paper_read mode:'figures' returns no_figures, mineru_required, error, zero figures, or no image artifact, do not call `edit_current_note` for that figure note and do not create a text-only substitute. " +
+        "If paper_read mode:'figures' returns no_figures, mineru_required, error, zero figures, or no image artifact, switch to text-only mode when the user asked for a note: do not include figure images, rendered PDF page screenshots, MinerU source images, or extracted-image placeholders; explicitly state that figure extraction failed or no extracted crops are available, and that explanations are based on captions, figure legends, and surrounding paper text. " +
         "Do not embed MinerU source image paths for figure notes. " +
-        "Text-only models may still copy/embed extracted crop paths into notes, but must not make unsupported visual claims beyond caption and surrounding-text evidence.",
+        "User-provided image inputs are unaffected. " +
+        "Text-only models may still copy/embed extracted crop paths into notes when crops are available, but must not make unsupported visual claims beyond caption and surrounding-text evidence.",
     },
     presentation: {
       label: "Edit / Create / Append Note",

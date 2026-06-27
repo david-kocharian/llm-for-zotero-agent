@@ -44,6 +44,7 @@ import {
   buildAndWriteManifest,
   ensureManifest,
   readCachedMineruMd,
+  stripMineruSourceImageEmbedsFromMarkdown,
 } from "./mineruCache";
 import type { MineruManifest, ManifestSection } from "./mineruCache";
 import { ensureMineruRuntimeCacheForAttachment } from "./mineruSync";
@@ -439,7 +440,9 @@ async function cachePDFText(
         ? await readCachedMineruMd(item.id)
         : null;
     if (cachedMd) {
-      pdfText = convertHtmlTablesToMarkdown(cachedMd);
+      pdfText = convertHtmlTablesToMarkdown(
+        stripMineruSourceImageEmbedsFromMarkdown(cachedMd),
+      );
       sourceType = "mineru";
     }
 
@@ -514,7 +517,11 @@ async function cachePDFText(
             rawMd,
             manifest.sections,
           );
-          chunks = rawChunks.map((chunk) => convertHtmlTablesToMarkdown(chunk));
+          chunks = rawChunks.map((chunk) =>
+            convertHtmlTablesToMarkdown(
+              stripMineruSourceImageEmbedsFromMarkdown(chunk),
+            ),
+          );
           // Update chunkMeta text fields to reflect converted content
           for (let i = 0; i < chunks.length; i++) {
             chunkMeta[i].text = chunks[i];

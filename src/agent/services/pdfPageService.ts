@@ -31,6 +31,7 @@ import {
   resolvePdfFigureExtractionRuntime,
   resolveSystemPdfFigurePdftohtmlPath as resolvePdftohtmlPath,
   resolveSystemPdfFigurePdftoppmPath as resolvePdftoppmPath,
+  type PdfFigureExtractionRuntime,
 } from "./pdfFigureRuntimeService";
 
 export type PdfVisualMode = "general" | "figure" | "equation";
@@ -112,6 +113,20 @@ type RenderablePdfPage = {
   getViewport: (params: { scale: number }) => {
     width: number;
     height: number;
+    viewBox?: number[];
+    scale?: number;
+    rotation?: number;
+    offsetX?: number;
+    offsetY?: number;
+    transform?: number[];
+    rawDims?: {
+      pageWidth: number;
+      pageHeight: number;
+      pageX: number;
+      pageY: number;
+    };
+    userUnit?: number;
+    dontFlip?: boolean;
   };
   getTextContent?: () => Promise<{
     items?: Array<{
@@ -126,6 +141,20 @@ type RenderablePdfPage = {
     | {
         promise?: Promise<unknown>;
       };
+};
+
+type CloneIntoFn = <T extends object>(
+  value: T,
+  targetScope: unknown,
+  options?: {
+    cloneFunctions?: boolean;
+    wrapReflectors?: boolean;
+  },
+) => T;
+
+type WindowConstructors = {
+  Object?: ObjectConstructor;
+  Array?: ArrayConstructor;
 };
 
 export type PdfFigurePageRender = {
@@ -224,6 +253,157 @@ function unwrapWrappedJsObject<T>(value: T): T {
   } catch (_error) {
     return value;
   }
+}
+
+function getCloneInto(): CloneIntoFn | undefined {
+  const globalWithClone = globalThis as unknown as {
+    cloneInto?: CloneIntoFn;
+    Components?: { utils?: { cloneInto?: CloneIntoFn } };
+  };
+  return (
+    globalWithClone.cloneInto || globalWithClone.Components?.utils?.cloneInto
+  );
+}
+
+function getPdfRenderWindow(canvasDoc: Document, reader: any): Window | null {
+  try {
+    const canvasWindow = unwrapWrappedJsObject(
+      canvasDoc.defaultView || null,
+    ) as Window | null;
+    const iframeWindow = unwrapWrappedJsObject(
+      reader?._iframeWindow || null,
+    ) as Window | null;
+    return canvasWindow || iframeWindow || null;
+  } catch {
+    return null;
+  }
+}
+
+function getWindowConstructors(windowObject: Window | null | undefined) {
+  const unwrapped = unwrapWrappedJsObject(windowObject || null) as
+    | (Window & WindowConstructors)
+    | null;
+  return {
+    Object: unwrapped?.Object,
+    Array: unwrapped?.Array,
+  };
+}
+
+function scopeViewportForRender(
+  viewport: ReturnType<RenderablePdfPage["getViewport"]>,
+  canvasDoc: Document,
+  reader: any,
+): ReturnType<RenderablePdfPage["getViewport"]> {
+  try {
+    const renderWindow = getPdfRenderWindow(canvasDoc, reader);
+    const cloneIntoFn = getCloneInto();
+    const payload = {
+      viewBox: Array.isArray(viewport.viewBox)
+        ? [...viewport.viewBox]
+        : viewport.viewBox,
+      scale: viewport.scale,
+      rotation: viewport.rotation,
+      offsetX: viewport.offsetX,
+      offsetY: viewport.offsetY,
+      transform: Array.isArray(viewport.transform)
+        ? [...viewport.transform]
+        : viewport.transform,
+      width: viewport.width,
+      height: viewport.height,
+      rawDims: viewport.rawDims
+        ? {
+            pageWidth: viewport.rawDims.pageWidth,
+            pageHeight: viewport.rawDims.pageHeight,
+            pageX: viewport.rawDims.pageX,
+            pageY: viewport.rawDims.pageY,
+          }
+        : viewport.rawDims,
+      userUnit: viewport.userUnit,
+      dontFlip: viewport.dontFlip,
+    };
+
+    if (renderWindow && typeof cloneIntoFn === "function") {
+      try {
+        return cloneIntoFn(payload, renderWindow, {
+          cloneFunctions: false,
+          wrapReflectors: true,
+        }) as ReturnType<RenderablePdfPage["getViewport"]>;
+      } catch {
+        // Fall back to manual scoping below.
+      }
+    }
+
+    const renderConstructors = getWindowConstructors(renderWindow);
+    const canvasConstructors = getWindowConstructors(canvasDoc.defaultView);
+    const ScopedObject = renderConstructors.Object || canvasConstructors.Object;
+    const ScopedArray = renderConstructors.Array || canvasConstructors.Array;
+    if (
+      typeof ScopedObject !== "function" ||
+      typeof ScopedArray !== "function"
+    ) {
+      return viewport;
+    }
+    const scopedViewport = new ScopedObject() as ReturnType<
+      RenderablePdfPage["getViewport"]
+    >;
+    scopedViewport.width = payload.width;
+    scopedViewport.height = payload.height;
+    scopedViewport.viewBox = Array.isArray(payload.viewBox)
+      ? ScopedArray.from(payload.viewBox)
+      : payload.viewBox;
+    scopedViewport.scale = payload.scale;
+    scopedViewport.rotation = payload.rotation;
+    scopedViewport.offsetX = payload.offsetX;
+    scopedViewport.offsetY = payload.offsetY;
+    scopedViewport.transform = Array.isArray(payload.transform)
+      ? ScopedArray.from(payload.transform)
+      : payload.transform;
+    scopedViewport.rawDims = payload.rawDims
+      ? {
+          pageWidth: payload.rawDims.pageWidth,
+          pageHeight: payload.rawDims.pageHeight,
+          pageX: payload.rawDims.pageX,
+          pageY: payload.rawDims.pageY,
+        }
+      : payload.rawDims;
+    scopedViewport.userUnit = payload.userUnit;
+    scopedViewport.dontFlip = payload.dontFlip;
+    return scopedViewport;
+  } catch {
+    return viewport;
+  }
+}
+
+function buildPdfRenderParamsForCanvas(params: {
+  canvasContext: CanvasRenderingContext2D;
+  viewport: ReturnType<RenderablePdfPage["getViewport"]>;
+  canvasDoc: Document;
+  reader: any;
+}) {
+  const rawContext = unwrapWrappedJsObject(params.canvasContext);
+  const rawViewport = unwrapWrappedJsObject(params.viewport);
+  const renderViewport = scopeViewportForRender(
+    rawViewport,
+    params.canvasDoc,
+    params.reader,
+  );
+  const renderParams = {
+    canvasContext: rawContext,
+    viewport: renderViewport,
+  };
+  const renderWindow = getPdfRenderWindow(params.canvasDoc, params.reader);
+  const cloneIntoFn = getCloneInto();
+  if (renderWindow && typeof cloneIntoFn === "function") {
+    try {
+      return cloneIntoFn(renderParams, renderWindow, {
+        cloneFunctions: false,
+        wrapReflectors: true,
+      });
+    } catch {
+      // Fall through to unwrapped render params.
+    }
+  }
+  return renderParams;
 }
 
 export function resolveRenderablePdfPage(
@@ -1306,6 +1486,22 @@ function normalizeRawFigureExtractionResult(
   };
 }
 
+function buildFigureExtractorEnvironment(params: {
+  runtime: PdfFigureExtractionRuntime;
+  workDir: string;
+}): Record<string, string> {
+  const environment: Record<string, string> = {
+    PATH: [
+      params.runtime.popplerBinDir,
+      ...(params.runtime.pathListSeparator === ":"
+        ? ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
+        : []),
+    ].join(params.runtime.pathListSeparator),
+    XDG_CACHE_HOME: params.workDir,
+  };
+  return environment;
+}
+
 async function removeTempDirectory(path: string): Promise<void> {
   const io = (globalThis as any).IOUtils;
   try {
@@ -1571,9 +1767,10 @@ function viewportDimension(
   return Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
-async function renderPdfFigurePageToCanvas(params: {
+export async function renderPdfFigurePageToCanvas(params: {
   pdfPage: RenderablePdfPage;
   canvasDoc: Document;
+  reader?: any;
   pageIndex: number;
   pageLabel: string;
   scale: number;
@@ -1587,12 +1784,13 @@ async function renderPdfFigurePageToCanvas(params: {
   if (!context) {
     throw new Error("Could not create a canvas for PDF figure extraction");
   }
-  await awaitPdfRenderTask(
-    params.pdfPage.render({
-      canvasContext: context,
-      viewport,
-    }),
-  );
+  const renderParams = buildPdfRenderParamsForCanvas({
+    canvasContext: context,
+    viewport,
+    canvasDoc: params.canvasDoc,
+    reader: params.reader,
+  });
+  await awaitPdfRenderTask(params.pdfPage.render(renderParams));
   const textContent =
     typeof params.pdfPage.getTextContent === "function"
       ? await params.pdfPage.getTextContent()
@@ -1643,14 +1841,11 @@ export class PdfPageService {
     if (!target.storedPath) {
       throw new Error("Could not resolve the source PDF file path");
     }
-    const runtime = await resolvePdfFigureExtractionRuntime();
     const Subprocess = await loadSubprocessModule();
     if (!Subprocess?.call) {
       throw new Error("Subprocess is not available for figure extraction");
     }
     const materialized = await materializePackagedFigureExtractorScript();
-    const workDir = await makeTempDirectory("llm-for-zotero-raw-figures");
-    const jsonOut = joinLocalPath(workDir, "figures.json");
     const cropDir = getPdfFigureCropImageDirForCacheDir(params.mineruCacheDir);
     const pages = Array.isArray(params.pages)
       ? params.pages
@@ -1658,64 +1853,70 @@ export class PdfPageService {
           .map((page) => `${Math.floor(page) + 1}`)
           .join(",")
       : "";
+    const runExtractor = async (
+      runtime: PdfFigureExtractionRuntime,
+    ): Promise<SourcePdfFigureExtractionResult> => {
+      const workDir = await makeTempDirectory("llm-for-zotero-raw-figures");
+      const jsonOut = joinLocalPath(workDir, "figures.json");
+      try {
+        const args = [
+          materialized.scriptPath,
+          "--pdf",
+          target.storedPath,
+          "--mineru-dir",
+          params.mineruCacheDir,
+          "--query",
+          params.query || "",
+          "--crop-dir",
+          cropDir,
+          "--out",
+          joinLocalPath(workDir, "work"),
+          "--json-out",
+          jsonOut,
+          "--dpi",
+          `${Math.max(72, Math.min(600, Math.floor(params.dpi || 216)))}`,
+          "--attachment-id",
+          `${target.contextItemId}`,
+          "--source-filename",
+          target.attachmentName || target.title || "paper.pdf",
+          "--poppler-bin",
+          runtime.popplerBinDir,
+          "--clean-out",
+        ];
+        if (pages) {
+          args.push("--pages", pages);
+        }
+        const proc = await Subprocess.call({
+          command: runtime.pythonPath,
+          arguments: args,
+          stdout: "pipe",
+          stderr: "pipe",
+          environment: buildFigureExtractorEnvironment({ runtime, workDir }),
+          environmentAppend: true,
+        });
+        const [stdout, stderr] = await Promise.all([
+          drainSubprocessPipe(proc.stdout),
+          drainSubprocessPipe(proc.stderr),
+        ]);
+        const { exitCode } = await proc.wait();
+        if (exitCode !== 0) {
+          const message =
+            sanitizeText(stderr || stdout) || `exit code ${exitCode}`;
+          throw new Error(
+            `raw source-PDF figure extraction failed: ${message}`,
+          );
+        }
+        const jsonText = await readUtf8File(jsonOut);
+        return normalizeRawFigureExtractionResult(JSON.parse(jsonText));
+      } finally {
+        await removeTempDirectory(workDir);
+      }
+    };
+
     try {
-      const args = [
-        materialized.scriptPath,
-        "--pdf",
-        target.storedPath,
-        "--mineru-dir",
-        params.mineruCacheDir,
-        "--query",
-        params.query || "",
-        "--crop-dir",
-        cropDir,
-        "--out",
-        joinLocalPath(workDir, "work"),
-        "--json-out",
-        jsonOut,
-        "--dpi",
-        `${Math.max(72, Math.min(600, Math.floor(params.dpi || 216)))}`,
-        "--attachment-id",
-        `${target.contextItemId}`,
-        "--source-filename",
-        target.attachmentName || target.title || "paper.pdf",
-        "--poppler-bin",
-        runtime.popplerBinDir,
-        "--clean-out",
-      ];
-      if (pages) {
-        args.push("--pages", pages);
-      }
-      const proc = await Subprocess.call({
-        command: runtime.pythonPath,
-        arguments: args,
-        stdout: "pipe",
-        stderr: "pipe",
-        environment: {
-          PATH: [
-            runtime.popplerBinDir,
-            ...(runtime.pathListSeparator === ":"
-              ? ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
-              : []),
-          ].join(runtime.pathListSeparator),
-          XDG_CACHE_HOME: workDir,
-        },
-        environmentAppend: true,
-      });
-      const [stdout, stderr] = await Promise.all([
-        drainSubprocessPipe(proc.stdout),
-        drainSubprocessPipe(proc.stderr),
-      ]);
-      const { exitCode } = await proc.wait();
-      if (exitCode !== 0) {
-        const message =
-          sanitizeText(stderr || stdout) || `exit code ${exitCode}`;
-        throw new Error(`raw source-PDF figure extraction failed: ${message}`);
-      }
-      const jsonText = await readUtf8File(jsonOut);
-      return normalizeRawFigureExtractionResult(JSON.parse(jsonText));
+      const runtime = await resolvePdfFigureExtractionRuntime();
+      return await runExtractor(runtime);
     } finally {
-      await removeTempDirectory(workDir);
       if (materialized.cleanupDir) {
         await removeTempDirectory(materialized.cleanupDir);
       }
@@ -2217,6 +2418,7 @@ export class PdfPageService {
           renderedPage = await renderPdfFigurePageToCanvas({
             pdfPage,
             canvasDoc,
+            reader,
             pageIndex,
             pageLabel,
             scale,

@@ -404,6 +404,214 @@ describe("mineruFigureBlocks", function () {
     );
   });
 
+  it("requires every main figure block for an all-figures note", function () {
+    const blocks = build(
+      [
+        "# Results",
+        "![Figure 1](images/fig1.jpg)",
+        "",
+        "![Figure 2](images/fig2.jpg)",
+      ].join("\n"),
+      [
+        { type: "text", text_level: 1, text: "Results", page_idx: 0 },
+        {
+          type: "image",
+          img_path: "images/fig1.jpg",
+          image_caption: ["Figure 1. First result."],
+          page_idx: 1,
+        },
+        {
+          type: "image",
+          img_path: "images/fig2.jpg",
+          image_caption: ["Figure 2. Second result."],
+          page_idx: 2,
+        },
+      ],
+    );
+
+    const narrowCache = validateFigureBlockEmbeds({
+      content: [
+        "# All Figures",
+        "",
+        "![Figure 1](/tmp/mineru/figure_crops/crops/figure-1.png)",
+        "",
+        "Overview of the available figure crop.",
+      ].join("\n"),
+      requestText: "help me explain all figures in this paper and save it",
+      blocks,
+      extractedFigures: [
+        {
+          id: "figure-1",
+          label: "Figure 1",
+          baseLabel: "Figure 1",
+          pageNumber: 2,
+          cropPath: "/tmp/mineru/figure_crops/crops/figure-1.png",
+          rect: { left: 0, top: 0, width: 100, height: 100 },
+          confidence: 0.96,
+          source: "pdf-image-object",
+          warnings: [],
+          mineruImagePaths: [],
+        },
+      ],
+      missingFigures: [],
+    });
+
+    assert.equal(narrowCache?.severity, "block");
+    assert.include(narrowCache?.message || "", "Figure 2");
+    assert.include(narrowCache?.message || "", "all-figures note");
+  });
+
+  it("allows explicit text-only all-figures notes when extraction failed", function () {
+    const blocks = build(
+      [
+        "# Results",
+        "![](images/fig1.png)",
+        "",
+        "Figure 1. First result.",
+        "",
+        "![](images/fig2.png)",
+        "",
+        "Figure 2. Second result.",
+      ].join("\n"),
+      [
+        {
+          type: "image",
+          img_path: "images/fig1.png",
+          image_caption: ["Figure 1. First result."],
+        },
+        {
+          type: "image",
+          img_path: "images/fig2.png",
+          image_caption: ["Figure 2. Second result."],
+        },
+      ],
+    );
+
+    const textOnly = validateFigureBlockEmbeds({
+      content: [
+        "# All Figures",
+        "",
+        "Figure images are not embedded because source-PDF figure extraction failed and no extracted PDF crops are available.",
+        "This is a text-only figure explanation based on captions, figure legends, and surrounding paper text.",
+        "",
+        "## Figure 1",
+        "",
+        "Figure 1 shows the first result.",
+        "",
+        "## Figure 2",
+        "",
+        "Figure 2 shows the second result.",
+      ].join("\n"),
+      requestText: "help me explain all figures in this paper and save it",
+      blocks,
+    });
+
+    assert.isNull(textOnly);
+
+    const textOnlyDespiteAvailableCrop = validateFigureBlockEmbeds({
+      content: [
+        "# All Figures",
+        "",
+        "Figure images are not embedded because source-PDF figure extraction failed and no extracted PDF crops are available.",
+        "This is a text-only figure explanation based on captions, figure legends, and surrounding paper text.",
+        "",
+        "## Figure 1",
+        "",
+        "Figure 1 shows the first result.",
+      ].join("\n"),
+      requestText: "help me explain all figures in this paper and save it",
+      blocks,
+      extractedFigures: [
+        {
+          id: "figure-1",
+          label: "Figure 1",
+          baseLabel: "Figure 1",
+          pageNumber: 2,
+          cropPath: "/tmp/mineru/figure_crops/crops/figure-1.png",
+          rect: { left: 0, top: 0, width: 100, height: 100 },
+          confidence: 0.96,
+          source: "pdf-image-object",
+          warnings: [],
+          mineruImagePaths: [],
+        },
+      ],
+    });
+
+    assert.equal(textOnlyDespiteAvailableCrop?.severity, "block");
+    assert.include(
+      textOnlyDespiteAvailableCrop?.message || "",
+      "extracted PDF",
+    );
+
+    const withSourceImage = validateFigureBlockEmbeds({
+      content: [
+        "# All Figures",
+        "",
+        "Figure images are not embedded because source-PDF figure extraction failed and no extracted PDF crops are available.",
+        "This is a text-only figure explanation based on captions, figure legends, and surrounding paper text.",
+        "",
+        "![Figure 1](images/fig1.png)",
+        "",
+        "## Figure 1",
+        "",
+        "Figure 1 shows the first result.",
+      ].join("\n"),
+      requestText: "help me explain all figures in this paper and save it",
+      blocks,
+    });
+
+    assert.equal(withSourceImage?.severity, "block");
+    assert.include(withSourceImage?.message || "", "Missing extracted PDF");
+  });
+
+  it("allows no-image-crop all-figures notes when extraction failed", function () {
+    const blocks = build(
+      [
+        "# Results",
+        "![](images/fig1.png)",
+        "",
+        "Figure 1. First result.",
+        "",
+        "![](images/fig2.png)",
+        "",
+        "Figure 2. Second result.",
+      ].join("\n"),
+      [
+        {
+          type: "image",
+          img_path: "images/fig1.png",
+          image_caption: ["Figure 1. First result."],
+        },
+        {
+          type: "image",
+          img_path: "images/fig2.png",
+          image_caption: ["Figure 2. Second result."],
+        },
+      ],
+    );
+
+    const result = validateFigureBlockEmbeds({
+      content: [
+        "# Figure Explanations",
+        "",
+        "Figure extraction from the PDF failed (HTTP 404), so no image crops are embedded.",
+        "All explanations are based on the MinerU-parsed captions, figure legends, and surrounding paper text.",
+        "",
+        "## Figure 1",
+        "",
+        "Figure 1 shows the first result.",
+        "",
+        "## Figure 2",
+        "",
+        "Figure 2 shows the second result.",
+      ].join("\n"),
+      requestText: "help me explain all figures in this paper and save it",
+      blocks,
+    });
+
+    assert.isNull(result);
+  });
+
   it("allows low-confidence incomplete embeds only when the note states ambiguity", function () {
     const blocks = build(
       ["# Results", "![](images/a.jpg)", "", "![](images/b.jpg)"].join("\n"),

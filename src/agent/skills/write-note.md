@@ -155,14 +155,17 @@ Written by LLM-for-Zotero.
 
 ### Step 3 — Include figures
 
-**If the user asked about a specific figure, you MUST include that figure in the note.** For other notes, include figures when they genuinely aid understanding (result plots, diagrams, key tables).
+**If the user asked about a specific figure, include that figure in the note when an extracted PDF crop is available.** For other notes, include figures when they genuinely aid understanding (result plots, diagrams, key tables).
 For MinerU-ready papers, first call `paper_read({ mode:'figures', query:'<figure request>' })`.
 Embed extracted PDF crop paths returned by that tool.
 Do not embed MinerU source image paths.
 Panel suffixes and captions are hints only; do not assume image order proves panel identity.
-If `paper_read({ mode:'figures' })` returns `no_figures`, `mineru_required`, `error`, zero figures, or no image artifact, do not call `note_write` or `file_io` for that figure note.
-Tell the user that no extracted PDF crop is available instead of silently using MinerU images or creating a text-only substitute.
+If `paper_read({ mode:'figures' })` returns `no_figures`, `mineru_required`, `error`, zero figures, or no image artifact, switch to text-only mode when the user asked for a note.
+Do not include figure images, MinerU source images, rendered PDF page screenshots, or extracted-image placeholders in that failure state.
+Explicitly state that figure extraction failed or no extracted crops are available.
+Explicitly state that the explanations are based on captions, figure legends, and surrounding paper text.
 Text-only models may still copy/embed extracted crop paths into notes, but must not make unsupported visual claims beyond caption and surrounding-text evidence.
+This failure path does not restrict images the user manually attached or pasted; user-provided image inputs can still be used normally.
 
 #### For Zotero notes (`note_write`)
 
@@ -201,7 +204,10 @@ Write:        ![Figure 2. RSA toolbox schematic](../imgs/Nili2014/figure-2.jpg)
 - `![Figure 2|400](../imgs/foo.jpg)` — `|400` becomes literal alt text; image is not resized.
 - `![[imgs/foo/figure-2.jpg]]` — wiki-link embed; we use standard markdown only.
 
-**If the extracted PDF crop cannot be found**, tell the user clearly. Do NOT fall back to MinerU source images, `file:///`, absolute paths, or any of the negative examples above.
+**If the extracted PDF crop cannot be found**, write a text-only note when the user asked for a note.
+Switch to text-only mode and do not include any figure image artifact.
+Clearly state that figure extraction failed or no extracted crops are available.
+Do NOT fall back to MinerU source images, `file:///`, absolute paths, or any of the negative examples above.
 
 ### Step 4a — Write to Zotero (`note_write`)
 

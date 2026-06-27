@@ -142,10 +142,7 @@ describe("PdfPageService source-PDF figure runtime", function () {
         get: (id: number) => (id === 22 ? attachmentItem : null),
       },
       Prefs: {
-        get: (key: string) =>
-          key.endsWith(".figureExtractionRuntimeAllowSystemFallback")
-            ? false
-            : "",
+        get: () => "",
       },
     };
     globalScope.ChromeUtils = {
@@ -206,33 +203,6 @@ describe("PdfPageService source-PDF figure runtime", function () {
     });
   }
 
-  it("passes the resolved Poppler directory to the packaged extractor", async function () {
-    files.set("/opt/homebrew/bin/python3", encoder.encode("#!/bin/sh\n"));
-    files.set("/opt/homebrew/bin/pdftoppm", encoder.encode("#!/bin/sh\n"));
-    files.set("/opt/homebrew/bin/pdftohtml", encoder.encode("#!/bin/sh\n"));
-    files.set("/opt/homebrew/bin/pdfinfo", encoder.encode("#!/bin/sh\n"));
-    globalScope.Zotero = {
-      ...(globalScope.Zotero as Record<string, unknown>),
-      Prefs: {
-        get: (key: string) =>
-          key.endsWith(".figureExtractionRuntimeAllowSystemFallback")
-            ? true
-            : "",
-      },
-    };
-
-    await extractWithService();
-
-    assert.equal(capturedCall?.command, "/opt/homebrew/bin/python3");
-    const popplerArg = capturedCall?.arguments.indexOf("--poppler-bin") ?? -1;
-    assert.isAtLeast(popplerArg, 0);
-    assert.equal(capturedCall?.arguments[popplerArg + 1], "/opt/homebrew/bin");
-    assert.match(
-      capturedCall?.environment?.PATH || "",
-      /^\/opt\/homebrew\/bin:/,
-    );
-  });
-
   it("uses an installed managed runtime before any system runtime", async function () {
     const runtimeRoot =
       "/tmp/zotero/llm-for-zotero-runtimes/pdf-figure-extractor/1/macos-arm64";
@@ -292,26 +262,111 @@ describe("PdfPageService source-PDF figure runtime", function () {
           }).buffer,
       };
     };
-    globalScope.Zotero = {
-      ...(globalScope.Zotero as Record<string, unknown>),
-      Prefs: {
-        get: (key: string) =>
-          key.endsWith(".figureExtractionRuntimePackageUrl")
-            ? "https://example.test/runtime-{platform}.zip"
-            : "",
-      },
-    };
 
     await extractWithService();
 
-    assert.equal(fetchedUrl, "https://example.test/runtime-macos-arm64.zip");
+    assert.equal(
+      fetchedUrl,
+      "https://github.com/yilewang/llm-for-zotero/releases/download/pdf-figure-runtime-v1/llm-for-zotero-pdf-figure-runtime-v1-macos-arm64.zip",
+    );
     assert.isTrue(files.has(`${runtimeRoot}/runtime.json`));
     assert.equal(capturedCall?.command, `${runtimeRoot}/bin/python3`);
     const popplerArg = capturedCall?.arguments.indexOf("--poppler-bin") ?? -1;
     assert.equal(capturedCall?.arguments[popplerArg + 1], `${runtimeRoot}/bin`);
   });
 
-  it("ignores installed runtime manifests that point outside the runtime root", async function () {
+  it("ignores runtime package preferences and always uses the project release URL", async function () {
+    const runtimeRoot =
+      "/tmp/zotero/llm-for-zotero-runtimes/pdf-figure-extractor/1/macos-arm64";
+    let fetchedUrl = "";
+    globalScope.fetch = async (url: string) => {
+      fetchedUrl = url;
+      return {
+        ok: true,
+        status: 200,
+        arrayBuffer: async () =>
+          zipSync({
+            "runtime.json": encoder.encode(
+              JSON.stringify({
+                kind: "llm-for-zotero/pdf-figure-runtime",
+                version: "1",
+                platform: "macos-arm64",
+                pythonPath: "bin/python3",
+                popplerBinDir: "bin",
+              }),
+            ),
+            "bin/python3": encoder.encode("#!/bin/sh\n"),
+            "bin/pdftoppm": encoder.encode("#!/bin/sh\n"),
+            "bin/pdftohtml": encoder.encode("#!/bin/sh\n"),
+            "bin/pdfinfo": encoder.encode("#!/bin/sh\n"),
+          }).buffer,
+      };
+    };
+    globalScope.Zotero = {
+      ...(globalScope.Zotero as Record<string, unknown>),
+      Prefs: {
+        get: (key: string) =>
+          key.endsWith(".figureExtractionRuntimePackageUrl")
+            ? "https://example.test/not-the-runtime.zip"
+            : "",
+      },
+    };
+
+    await extractWithService();
+
+    assert.equal(
+      fetchedUrl,
+      "https://github.com/yilewang/llm-for-zotero/releases/download/pdf-figure-runtime-v1/llm-for-zotero-pdf-figure-runtime-v1-macos-arm64.zip",
+    );
+    assert.equal(capturedCall?.command, `${runtimeRoot}/bin/python3`);
+  });
+
+  it("does not use system Python or pip when the managed runtime cannot be downloaded", async function () {
+    files.set("/opt/homebrew/bin/python3", encoder.encode("#!/bin/sh\n"));
+    files.set("/opt/homebrew/bin/pdftoppm", encoder.encode("#!/bin/sh\n"));
+    files.set("/opt/homebrew/bin/pdftohtml", encoder.encode("#!/bin/sh\n"));
+    files.set("/opt/homebrew/bin/pdfinfo", encoder.encode("#!/bin/sh\n"));
+    const calls: SubprocessCall[] = [];
+    let fetchCalls = 0;
+    globalScope.fetch = async () => {
+      fetchCalls += 1;
+      return {
+        ok: false,
+        status: 404,
+        arrayBuffer: async () => new ArrayBuffer(0),
+      };
+    };
+    globalScope.ChromeUtils = {
+      importESModule: () => ({
+        Subprocess: {
+          call: async (options: SubprocessCall) => {
+            calls.push(options);
+            capturedCall = options;
+            return {
+              stdout: { readString: async () => "" },
+              stderr: { readString: async () => "" },
+              wait: async () => ({ exitCode: 0 }),
+            };
+          },
+        },
+      }),
+    };
+
+    let error: unknown;
+    try {
+      await extractWithService();
+    } catch (caught) {
+      error = caught;
+    }
+
+    assert.instanceOf(error, Error);
+    assert.match((error as Error).message, /fetch HTTP 404/);
+    assert.equal(fetchCalls, 1);
+    assert.deepEqual(calls, []);
+    assert.isNull(capturedCall);
+  });
+
+  it("replaces invalid installed runtime manifests with a downloaded managed runtime", async function () {
     const runtimeRoot =
       "/tmp/zotero/llm-for-zotero-runtimes/pdf-figure-extractor/1/macos-arm64";
     files.set(
@@ -359,5 +414,40 @@ describe("PdfPageService source-PDF figure runtime", function () {
 
     assert.isTrue(fetched);
     assert.equal(capturedCall?.command, `${runtimeRoot}/bin/python3`);
+    assert.notEqual(capturedCall?.command, "/usr/bin/python3");
+  });
+
+  it("does not use user-specific fallback runtime paths", async function () {
+    const legacyHome = ["", "Users", "yat" + "-lok"].join("/");
+    const personalPopplerBin = [
+      legacyHome,
+      ".cache",
+      "codex" + "-runtimes",
+      "codex-primary-runtime",
+      "dependencies",
+      "bin",
+    ].join("/");
+    files.set(
+      [legacyHome, "mini" + "conda3", "bin", "python3"].join("/"),
+      encoder.encode("#!/bin/sh\n"),
+    );
+    files.set(`${personalPopplerBin}/pdftoppm`, encoder.encode("#!/bin/sh\n"));
+    files.set(`${personalPopplerBin}/pdftohtml`, encoder.encode("#!/bin/sh\n"));
+    files.set(`${personalPopplerBin}/pdfinfo`, encoder.encode("#!/bin/sh\n"));
+    globalScope.fetch = undefined;
+
+    let error: unknown;
+    try {
+      await extractWithService();
+    } catch (caught) {
+      error = caught;
+    }
+
+    assert.instanceOf(error, Error);
+    assert.match(
+      (error as Error).message,
+      /No downloader is available|fetch is not a function/i,
+    );
+    assert.isNull(capturedCall);
   });
 });

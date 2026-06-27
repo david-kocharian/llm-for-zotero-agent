@@ -15,6 +15,7 @@ import {
   formatPaperCitationLabel,
   formatPaperSourceLabel,
 } from "../../../modules/contextPanel/paperAttribution";
+import { stripMineruSourceImageEmbedsFromMarkdown } from "../../../modules/contextPanel/mineruCache";
 import {
   buildQuoteCitation,
   mergeQuoteCitations,
@@ -162,7 +163,9 @@ async function tryReadMineruOverview(
   if (!cacheDir) return null;
   try {
     const filePath = joinLocalPath(cacheDir, "full.md");
-    const fullMd = await readTextFile(filePath);
+    const fullMd = stripMineruSourceImageEmbedsFromMarkdown(
+      await readTextFile(filePath),
+    );
     const selected = selectMineruOverview(fullMd, maxChars);
     return {
       backend: "mineru",
@@ -246,9 +249,7 @@ function isTableOnlyInterpretationRequest(
   if (!text) return false;
   const hasTable = /\btables?\s+(?:[sS]?\d+|[IVX]+)\b/i.test(text);
   if (!hasTable) return false;
-  const hasFigure = /\b(?:fig(?:ure)?s?\.?|figs?\.?)\s*[sS]?\d+\b/i.test(
-    text,
-  );
+  const hasFigure = /\b(?:fig(?:ure)?s?\.?|figs?\.?)\s*[sS]?\d+\b/i.test(text);
   return !hasFigure;
 }
 
@@ -281,7 +282,10 @@ async function buildMineruVisualRedirect(params: {
   if (!paperContext || !mineruCacheDir) return null;
   const query = params.input.query || params.context.request.userText || "";
   if (
-    isTableOnlyInterpretationRequest(params.input, params.context.request.userText)
+    isTableOnlyInterpretationRequest(
+      params.input,
+      params.context.request.userText,
+    )
   ) {
     return {
       mode: "visual",
