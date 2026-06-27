@@ -86,7 +86,17 @@ describe("PdfFigureExtractionService", function () {
         }
       },
       makeDirectory: async () => undefined,
-      getChildren: async () => [],
+      getChildren: async (path: string) => {
+        const prefix = path.endsWith("/") ? path : `${path}/`;
+        const children = new Set<string>();
+        for (const filePath of files.keys()) {
+          if (!filePath.startsWith(prefix) || filePath === path) continue;
+          const rest = filePath.slice(prefix.length);
+          const childName = rest.split("/")[0];
+          if (childName) children.add(`${prefix}${childName}`);
+        }
+        return [...children];
+      },
     };
   });
 
@@ -207,7 +217,9 @@ describe("PdfFigureExtractionService", function () {
     const result = await new PdfFigureExtractionService({
       extractFiguresFromSourcePdf: async () => {
         rawCalled = true;
-        throw new Error("source extraction should not run for compatible crops");
+        throw new Error(
+          "source extraction should not run for compatible crops",
+        );
       },
     } as never).extractFigures({
       input: { query: "explain Figure 1" },
@@ -479,6 +491,56 @@ describe("PdfFigureExtractionService", function () {
     assert.equal(cache.version, 2);
     assert.equal(cache.algorithmVersion, 9);
     assert.equal(cache.entries[0].source, "pdf-image-object");
+  });
+
+  it("removes raw MinerU source images after writing a ready crop cache", async function () {
+    writeFile(
+      "/tmp/mineru-paper/full.md",
+      "# Results\nFigure 1. First precise result.",
+    );
+    writeFile(
+      "/tmp/mineru-paper/content_list.json",
+      JSON.stringify([
+        { type: "text", text_level: 1, text: "Results", page_idx: 1 },
+        {
+          type: "image",
+          img_path: "images/fig1.png",
+          image_caption: ["Figure 1. First precise result."],
+          page_idx: 1,
+        },
+      ]),
+    );
+    files.set("/tmp/mineru-paper/images/fig1.png", encoder.encode("mineru"));
+    const cropPath = "/tmp/mineru-paper/figure_crops/crops/figure-1-p2.png";
+
+    const result = await new PdfFigureExtractionService({
+      extractFiguresFromSourcePdf: async () => {
+        files.set(cropPath, encoder.encode("png"));
+        return [
+          {
+            id: "figure-1-p2",
+            label: "Figure 1",
+            baseLabel: "Figure 1",
+            pageNumber: 2,
+            cropPath,
+            captionText: "Figure 1. First precise result.",
+            rect: { left: 57, top: 80, width: 451, height: 331 },
+            confidence: 0.9,
+            source: "pdf-image-object" as const,
+            warnings: [],
+            mineruImagePaths: [],
+          },
+        ];
+      },
+    } as never).extractFigures({
+      input: { query: "explain Figure 1" },
+      context,
+      paperContexts: [paperContext],
+    });
+
+    assert.equal(result.status, "ok");
+    assert.isFalse(files.has("/tmp/mineru-paper/images/fig1.png"));
+    assert.isTrue(files.has(cropPath));
   });
 
   it("returns and caches expected and missing figures from raw source-PDF extraction", async function () {

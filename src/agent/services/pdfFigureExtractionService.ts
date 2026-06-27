@@ -1,4 +1,7 @@
-import { type MineruManifest } from "../../modules/contextPanel/mineruCache";
+import {
+  pruneMineruSourceImagesWhenFigureCropsReady,
+  type MineruManifest,
+} from "../../modules/contextPanel/mineruCache";
 import {
   PDF_FIGURE_CROP_ALGORITHM_VERSION,
   PDF_FIGURE_CROP_CACHE_VERSION,
@@ -284,6 +287,18 @@ export class PdfFigureExtractionService {
           missingFigures: rawMissingFigures,
           entries: rawFigures,
         });
+        try {
+          await pruneMineruSourceImagesWhenFigureCropsReady(
+            mineruCacheDir,
+            manifest,
+          );
+        } catch (error) {
+          warnings.push(
+            `Could not remove MinerU source images after figure extraction: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
         return true;
       };
       if (typeof rawSourcePdfExtractor !== "function") {

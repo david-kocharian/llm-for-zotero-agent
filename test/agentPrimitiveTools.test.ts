@@ -1352,6 +1352,56 @@ describe("primitive agent tools", function () {
     }
   });
 
+  it("file_io preserves MinerU metadata when selected text duplicates selected paper context", async function () {
+    const tool = createFileIOTool();
+    const originalIOUtils = (globalThis as { IOUtils?: unknown }).IOUtils;
+    const cacheDir = "/tmp/llm-for-zotero-mineru/89";
+    const rawImagePath = `${cacheDir}/images/b.jpg`;
+    (globalThis as { IOUtils?: unknown }).IOUtils = {
+      exists: async (path: string) => path === rawImagePath,
+      read: async () => new Uint8Array([137, 80, 78, 71]),
+    };
+    const selectedTextContext: PaperContextRef = {
+      itemId: 88,
+      contextItemId: 89,
+      title: "Duplicated Paper",
+    };
+    const selectedPaperContext: PaperContextRef = {
+      ...selectedTextContext,
+      mineruCacheDir: cacheDir,
+    };
+    const context: AgentToolContext = {
+      ...baseContext,
+      request: {
+        ...baseContext.request,
+        selectedTextPaperContexts: [selectedTextContext],
+        selectedPaperContexts: [selectedPaperContext],
+      },
+    };
+
+    try {
+      const read = tool.validate({
+        action: "read",
+        filePath: rawImagePath,
+      });
+      assert.isTrue(read.ok);
+      if (!read.ok) return;
+
+      const result = (await tool.execute(read.value, context)) as {
+        content: Record<string, unknown>;
+        artifacts?: Array<{ storedPath: string }>;
+      };
+
+      assert.include(
+        String(result.content.error || ""),
+        "MinerU source image caches are not available",
+      );
+      assert.isUndefined(result.artifacts);
+    } finally {
+      (globalThis as { IOUtils?: unknown }).IOUtils = originalIOUtils;
+    }
+  });
+
   it("write tools do not import figure crop cache policing guards", async function () {
     const { readFile } = await import("node:fs/promises");
     const writeToolPaths = [

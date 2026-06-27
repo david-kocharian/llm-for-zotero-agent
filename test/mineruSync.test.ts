@@ -5,6 +5,7 @@ import {
   setMineruSyncEnabled,
 } from "../src/utils/mineruConfig";
 import {
+  buildManifest,
   getMineruItemDir,
   hasCachedMineruMd,
   MINERU_SOURCE_PROVENANCE_FILE,
@@ -29,6 +30,11 @@ import {
   restoreSyncedMineruCacheForAttachment,
   shouldIncludeMineruCachePackageEntry,
 } from "../src/modules/contextPanel/mineruSync";
+import {
+  PDF_FIGURE_CROP_ALGORITHM_VERSION,
+  PDF_FIGURE_CROP_CACHE_VERSION,
+  buildPdfFigureCropManifestHash,
+} from "../src/modules/contextPanel/pdfFigureCropCache";
 import { createReadLibraryTool } from "../src/agent/tools/read/readLibrary";
 import { ZoteroGateway } from "../src/agent/services/zoteroGateway";
 
@@ -1463,7 +1469,7 @@ describe("mineruSync", function () {
     assert.isNull(provenance);
   });
 
-  it("migrates existing local caches to strip source images during repair", async function () {
+  it("keeps source images during repair until figure crops are ready", async function () {
     const io = setupMemoryIO();
     const items = new Map<number, MockItem>();
     const parent = createParent();
@@ -1516,7 +1522,7 @@ describe("mineruSync", function () {
       await readCachedMineruMd(pdf.id),
       "# Intro\nFig. 1 caption\n# Results\ncontent",
     );
-    assert.isFalse(io.files.has(normalizePath(`${itemDir}/images/fig1.png`)));
+    assert.isTrue(io.files.has(normalizePath(`${itemDir}/images/fig1.png`)));
     assert.isFalse(io.files.has(normalizePath(`${itemDir}/layout.json`)));
     assert.isFalse(io.files.has(normalizePath(`${itemDir}/middle.json`)));
     assert.isFalse(
@@ -1526,6 +1532,97 @@ describe("mineruSync", function () {
       decoder.decode(io.files.get(normalizePath(`${itemDir}/manifest.json`))!),
     );
     assert.deepEqual(manifest.figureBlocks[0].imagePaths, ["images/fig1.png"]);
+  });
+
+  it("strips source images during repair after figure crops are ready", async function () {
+    const io = setupMemoryIO();
+    const items = new Map<number, MockItem>();
+    const parent = createParent();
+    const pdf = createAttachment({
+      id: 407,
+      key: "PDFREPAIRCROPS",
+      parentID: parent.id,
+      contentType: "application/pdf",
+      filename: "repair-crops.pdf",
+    });
+    parent.attachmentIDs!.push(pdf.id);
+    items.set(parent.id, parent);
+    items.set(pdf.id, pdf);
+    setupZotero(items, io);
+
+    const itemDir = getMineruItemDir(pdf.id);
+    const sourceMd =
+      "# Intro\n![Fig](images/fig1.png)\nFig. 1 caption\n# Results\ncontent";
+    const canonicalMd = "# Intro\nFig. 1 caption\n# Results\ncontent";
+    const contentList = [
+      { type: "text", text_level: 1, text: "Intro", page_idx: 0 },
+      {
+        type: "image",
+        img_path: "images/fig1.png",
+        image_caption: ["Fig. 1 caption"],
+        page_idx: 0,
+      },
+      { type: "text", text_level: 1, text: "Results", page_idx: 1 },
+    ];
+    const sourceManifest = buildManifest(sourceMd, contentList);
+    const canonicalManifest = buildManifest(canonicalMd, contentList);
+    const finalizedManifest = {
+      ...canonicalManifest,
+      figureBlocks: sourceManifest.figureBlocks,
+    };
+    const cropPath = `${itemDir}/figure_crops/crops/figure-1.png`;
+    io.files.set(normalizePath(`${itemDir}/full.md`), bytes(sourceMd));
+    io.files.set(normalizePath(`${itemDir}/images/fig1.png`), bytes([1, 2, 3]));
+    io.files.set(
+      normalizePath(`${itemDir}/content_list.json`),
+      bytes(JSON.stringify(contentList)),
+    );
+    io.files.set(normalizePath(cropPath), bytes([137, 80, 78, 71, 1]));
+    io.files.set(
+      normalizePath(`${itemDir}/figure_crops/figure_geometry.json`),
+      bytes(
+        JSON.stringify({
+          version: PDF_FIGURE_CROP_CACHE_VERSION,
+          attachmentId: pdf.id,
+          manifestHash: buildPdfFigureCropManifestHash(finalizedManifest),
+          pdfFingerprint: "test",
+          renderScale: 1.8,
+          algorithmVersion: PDF_FIGURE_CROP_ALGORITHM_VERSION,
+          generatedAt: 1,
+          expectedFigures: [
+            {
+              label: "Figure 1",
+              baseLabel: "Figure 1",
+              pageNumber: 1,
+              status: "ok",
+              cropPath,
+            },
+          ],
+          missingFigures: [],
+          entries: [
+            {
+              id: "figure-1",
+              label: "Figure 1",
+              baseLabel: "Figure 1",
+              pageNumber: 1,
+              cropPath,
+              rect: { left: 0, top: 0, width: 100, height: 100 },
+              confidence: 0.9,
+              source: "pdf-image-object",
+              warnings: [],
+              mineruImagePaths: [],
+            },
+          ],
+        }),
+      ),
+    );
+
+    const result = await repairMineruCaches();
+
+    assert.equal(result.checked, 1);
+    assert.equal(await readCachedMineruMd(pdf.id), canonicalMd);
+    assert.isFalse(io.files.has(normalizePath(`${itemDir}/images/fig1.png`)));
+    assert.isTrue(io.files.has(normalizePath(cropPath)));
   });
 
   it("keeps a local cache when the current PDF bytes changed", async function () {

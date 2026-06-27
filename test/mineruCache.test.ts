@@ -1,5 +1,10 @@
 import { assert } from "chai";
 import {
+  PDF_FIGURE_CROP_ALGORITHM_VERSION,
+  PDF_FIGURE_CROP_CACHE_VERSION,
+  buildPdfFigureCropManifestHash,
+} from "../src/modules/contextPanel/pdfFigureCropCache";
+import {
   buildManifest,
   getManifestFigureBaseLabel,
   MINERU_SOURCE_PROVENANCE_KIND,
@@ -290,7 +295,7 @@ describe("mineruCache", function () {
         "results",
       ].join("\n"),
     );
-    assert.isFalse(
+    assert.isTrue(
       io.files.has("/tmp/zotero/llm-for-zotero-mineru/42/images/fig1.png"),
     );
 
@@ -356,7 +361,7 @@ describe("mineruCache", function () {
       "/tmp/zotero/llm-for-zotero-mineru/51/content_list.json",
       "/tmp/zotero/llm-for-zotero-mineru/51/manifest.json",
     ]);
-    assert.notInclude(
+    assert.include(
       io.writes,
       "/tmp/zotero/llm-for-zotero-mineru/51/images/fig1.png",
     );
@@ -405,33 +410,93 @@ describe("mineruCache", function () {
     ]);
 
     assert.equal(await readCachedMineruMd(7), "# Simple");
-    assert.isFalse(
+    assert.isTrue(
       io.files.has("/tmp/zotero/llm-for-zotero-mineru/7/images/a.png"),
     );
   });
 
-  it("does not persist raw MinerU source images after cache finalization", async function () {
+  it("does not persist raw MinerU source images after figure crops are ready", async function () {
     const io = setupMemoryIO();
-    const imageCount = 55;
-    const markdown = Array.from(
-      { length: imageCount },
-      (_value, index) => `![Figure ${index + 1}](images/fig${index + 1}.png)`,
-    ).join("\n");
+    const itemDir = "/tmp/zotero/llm-for-zotero-mineru/77";
+    const cropPath = `${itemDir}/figure_crops/crops/figure-1.png`;
+    const markdown = [
+      "# Results",
+      "![Figure 1](images/fig1.png)",
+      "Figure 1. Better crop replacement.",
+    ].join("\n");
+    const contentList = [
+      { type: "text", text_level: 1, text: "Results", page_idx: 0 },
+      {
+        type: "image",
+        img_path: "images/fig1.png",
+        image_caption: ["Figure 1. Better crop replacement."],
+        page_idx: 0,
+      },
+    ];
+    const sourceManifest = buildManifest(markdown, contentList);
+    const canonicalManifest = buildManifest(
+      "# Results\nFigure 1. Better crop replacement.",
+      contentList,
+    );
+    const finalizedManifest = {
+      ...canonicalManifest,
+      figureBlocks: sourceManifest.figureBlocks,
+    };
+    io.files.set(cropPath, bytes([137, 80, 78, 71, 1]));
+    io.files.set(
+      `${itemDir}/figure_crops/figure_geometry.json`,
+      bytes(
+        JSON.stringify({
+          version: PDF_FIGURE_CROP_CACHE_VERSION,
+          attachmentId: 77,
+          manifestHash: buildPdfFigureCropManifestHash(finalizedManifest),
+          pdfFingerprint: "test",
+          renderScale: 1.8,
+          algorithmVersion: PDF_FIGURE_CROP_ALGORITHM_VERSION,
+          generatedAt: 1,
+          expectedFigures: [
+            {
+              label: "Figure 1",
+              baseLabel: "Figure 1",
+              pageNumber: 1,
+              status: "ok",
+              cropPath,
+            },
+          ],
+          missingFigures: [],
+          entries: [
+            {
+              id: "figure-1",
+              label: "Figure 1",
+              baseLabel: "Figure 1",
+              pageNumber: 1,
+              cropPath,
+              rect: { left: 0, top: 0, width: 100, height: 100 },
+              confidence: 0.9,
+              source: "pdf-image-object",
+              warnings: [],
+              mineruImagePaths: [],
+            },
+          ],
+        }),
+      ),
+    );
     await writeMineruCacheFiles(77, markdown, [
       { relativePath: "full.md", data: bytes(markdown) },
-      ...Array.from({ length: imageCount }, (_value, index) => ({
-        relativePath: `images/fig${index + 1}.png`,
-        data: bytes([137, 80, 78, 71, index]),
-      })),
+      {
+        relativePath: "content_list.json",
+        data: bytes(JSON.stringify(contentList)),
+      },
+      {
+        relativePath: "images/fig1.png",
+        data: bytes([137, 80, 78, 71, 2]),
+      },
     ]);
 
-    for (let index = 0; index < imageCount; index += 1) {
-      assert.isFalse(
-        io.files.has(
-          `/tmp/zotero/llm-for-zotero-mineru/77/images/fig${index + 1}.png`,
-        ),
-      );
-    }
+    assert.isFalse(
+      io.files.has("/tmp/zotero/llm-for-zotero-mineru/77/images/fig1.png"),
+    );
+    assert.isTrue(io.files.has(cropPath));
   });
 
   it("keeps compound figure metadata without source image files", async function () {
@@ -475,7 +540,7 @@ describe("mineruCache", function () {
       "images/fig2c.png",
     ]);
     for (const name of ["fig2a", "fig2b", "fig2c"]) {
-      assert.isFalse(
+      assert.isTrue(
         io.files.has(`/tmp/zotero/llm-for-zotero-mineru/78/images/${name}.png`),
       );
     }
@@ -593,7 +658,7 @@ describe("mineruCache", function () {
 
     assert.isTrue(io.writes.every((path) => path.length <= 260));
     assert.include(io.writes, "/tmp/zotero/llm-for-zotero-mineru/55/full.md");
-    assert.notInclude(
+    assert.include(
       io.writes,
       "/tmp/zotero/llm-for-zotero-mineru/55/images/fig.png",
     );
