@@ -64,6 +64,20 @@ describe("quoteTextSearch", function () {
     );
   });
 
+  it("does not build weak two-token FindController fallbacks from source quotes", function () {
+    const result = buildFindControllerQuoteQueries(
+      "modulation of firing-rate adaptation strength within a continuous attractor model of place cells gives rise to these distinct forms of replay.",
+    );
+
+    assert.notInclude(result, "modulation of");
+    assert.isTrue(
+      result.some((query) =>
+        query.includes("firing-rate adaptation strength within"),
+      ),
+      result.join("\n"),
+    );
+  });
+
   it("preserves non-ASCII locator text during normalization", function () {
     assert.equal(
       normalizeLocatorText("记忆痕迹在巩固过程中具有高度动态性。"),

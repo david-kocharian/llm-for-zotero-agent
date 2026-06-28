@@ -1774,6 +1774,11 @@ async function searchFindControllerForQuery(
 function getFindControllerResolvedPageIndex(
   searchResult: FindControllerSearchResult,
 ): number | null {
+  // A citation paragraph jump must identify one source location, not merely
+  // whatever highlighted occurrence PDF.js selected from a non-unique search.
+  if (searchResult.totalMatches !== 1) {
+    return null;
+  }
   if (searchResult.matchedPageIndexes.length === 1) {
     return searchResult.matchedPageIndexes[0];
   }
@@ -1792,9 +1797,9 @@ function didUseSelectedFindControllerPage(
   resolvedPageIndex: number,
 ): boolean {
   return (
+    searchResult.totalMatches === 1 &&
     searchResult.selectedPageIndex === resolvedPageIndex &&
-    (searchResult.matchedPageIndexes.length !== 1 ||
-      searchResult.totalMatches > 1)
+    searchResult.matchedPageIndexes.length !== 1
   );
 }
 
@@ -1851,6 +1856,87 @@ function buildPageTextQuoteResult(
     excerpt: searchResult.excerpt,
     debugSummary,
     reason,
+  };
+}
+
+function buildAmbiguousFindControllerReason(
+  attempt: ExactQuoteJumpQueryAttempt,
+): string {
+  if (attempt.totalMatches > 1) {
+    const pageSuffix =
+      attempt.matchedPageIndexes.length > 1
+        ? ` across multiple pages (${formatPageList(attempt.matchedPageIndexes)})`
+        : "";
+    return `FindController found multiple quote matches (${attempt.totalMatches} total${pageSuffix}), so no single source location was chosen.`;
+  }
+  return `FindController found the quote on multiple pages (${formatPageList(attempt.matchedPageIndexes)}), so no single page was chosen.`;
+}
+
+function buildAmbiguousCachedPageTextReason(
+  attempt: ExactQuoteJumpQueryAttempt,
+): string {
+  if (attempt.totalMatches > 1) {
+    const pageSuffix =
+      attempt.matchedPageIndexes.length > 1
+        ? ` across multiple pages (${formatPageList(attempt.matchedPageIndexes)})`
+        : "";
+    return `Cached page text found multiple quote matches (${attempt.totalMatches} total${pageSuffix}), so no single source location was chosen.`;
+  }
+  return `Cached page text found the quote on multiple pages (${formatPageList(attempt.matchedPageIndexes)}), so no single page was chosen.`;
+}
+
+function summarizeCachedFindControllerQueryMatches(
+  cached: CachedPageTextIndex,
+  query: string,
+): ExactQuoteJumpQueryAttempt {
+  const normalizedQuery = normalizeLocatorText(query);
+  const matchedPageIndexes: number[] = [];
+  let totalMatches = 0;
+  if (!normalizedQuery) {
+    return { query, matchedPageIndexes, totalMatches };
+  }
+  for (const page of cached.normalised) {
+    const matchIndexes = findAllMatchIndexes(
+      page.normalizedText,
+      normalizedQuery,
+    );
+    if (!matchIndexes.length) continue;
+    matchedPageIndexes.push(page.pageIndex);
+    totalMatches += matchIndexes.length;
+  }
+  return { query, matchedPageIndexes, totalMatches };
+}
+
+function filterFindControllerQueriesByCachedPageText(
+  queries: string[],
+  cached: CachedPageTextIndex | null,
+): {
+  queries: string[];
+  attempts: ExactQuoteJumpQueryAttempt[];
+  debugSummary: string[];
+  checked: boolean;
+} {
+  if (!cached?.normalised.length) {
+    return { queries, attempts: [], debugSummary: [], checked: false };
+  }
+  const attempts: ExactQuoteJumpQueryAttempt[] = [];
+  const debugSummary: string[] = [];
+  const filteredQueries: string[] = [];
+  for (const query of queries) {
+    const attempt = summarizeCachedFindControllerQueryMatches(cached, query);
+    attempts.push(attempt);
+    debugSummary.push(
+      `Cached paragraph query "${formatQuerySnippet(query)}" -> ${formatPageList(attempt.matchedPageIndexes)}`,
+    );
+    if (attempt.totalMatches === 1 && attempt.matchedPageIndexes.length === 1) {
+      filteredQueries.push(query);
+    }
+  }
+  return {
+    queries: filteredQueries,
+    attempts,
+    debugSummary,
+    checked: true,
   };
 }
 
@@ -2435,8 +2521,34 @@ export async function scrollToExactQuoteInReader(
   const debugSummary: string[] = [];
   let ambiguousAttempt: ExactQuoteJumpQueryAttempt | null = null;
   let unlocatedMatchAttempt: ExactQuoteJumpQueryAttempt | null = null;
+  const cached = await warmPageTextCache(reader).catch((_err) => {
+    void _err;
+    return null;
+  });
+  const cachedQueryFilter = filterFindControllerQueriesByCachedPageText(
+    queries,
+    cached,
+  );
+  debugSummary.push(...cachedQueryFilter.debugSummary);
+  if (cachedQueryFilter.checked && !cachedQueryFilter.queries.length) {
+    const cachedAmbiguousAttempt = cachedQueryFilter.attempts.find(
+      (attempt) => attempt.totalMatches > 1,
+    );
+    return {
+      matched: false,
+      reason: cachedAmbiguousAttempt
+        ? buildAmbiguousCachedPageTextReason(cachedAmbiguousAttempt)
+        : "Cached page text did not find a unique paragraph query for the quote.",
+      expectedPageIndex,
+      queries: cachedQueryFilter.attempts,
+      debugSummary,
+    };
+  }
+  const queriesToSearch = cachedQueryFilter.checked
+    ? cachedQueryFilter.queries
+    : queries;
 
-  for (const query of queries) {
+  for (const query of queriesToSearch) {
     const searchResult = await searchFindControllerForQuery(reader, query);
     if (!searchResult) {
       return {
@@ -2495,7 +2607,7 @@ export async function scrollToExactQuoteInReader(
   if (ambiguousAttempt) {
     return {
       matched: false,
-      reason: `FindController found the quote on multiple pages (${formatPageList(ambiguousAttempt.matchedPageIndexes)}), so no single page was chosen.`,
+      reason: buildAmbiguousFindControllerReason(ambiguousAttempt),
       expectedPageIndex,
       queries: attempts,
       debugSummary,

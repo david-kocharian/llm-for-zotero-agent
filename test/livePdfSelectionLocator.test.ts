@@ -624,6 +624,8 @@ describe("scrollToExactQuoteInReader", function () {
       dispatchSelectedPageIdx?: number;
       findBarCountText?: string;
       matchesCountTotal?: number;
+      dispatchedQueries?: string[];
+      pageMatchesByQuery?: Record<string, unknown[]>;
       selectedPageIdx?: number;
     },
   ) {
@@ -649,8 +651,10 @@ describe("scrollToExactQuoteInReader", function () {
       : undefined;
     const eventBus = {
       dispatch: (_eventName: string, params: { query: string }) => {
+        options?.dispatchedQueries?.push(params.query);
         findController._rawQuery = params.query;
-        findController.pageMatches = pageMatches;
+        findController.pageMatches =
+          options?.pageMatchesByQuery?.[params.query] ?? pageMatches;
         if (options?.dispatchMatchesCountTotal !== undefined) {
           findController.matchesCount = {
             total: options.dispatchMatchesCountTotal,
@@ -722,6 +726,42 @@ describe("scrollToExactQuoteInReader", function () {
     assert.include(result.reason, "page 3");
   });
 
+  it("uses cached page text to skip non-unique FindController queries before paragraph jump", async function () {
+    clearPageTextCache();
+    const quote =
+      "Ambiguous lead phrase connects to unique discriminating phrase for citation navigation.";
+    const uniqueQuery = "discriminating phrase for citation navigation";
+    const dispatchedQueries: string[] = [];
+    const reader: any = createFindControllerReader([], {
+      dispatchedQueries,
+      pageMatchesByQuery: {
+        [uniqueQuery]: [[], [0], []],
+      },
+    });
+    reader._item = { id: 909 };
+    reader.itemID = 909;
+    const pageOne = "Background page with no useful paragraph text.";
+    const pageTwo =
+      "The extracted PDF text exposes discriminating phrase for citation navigation here.";
+    const pageThree = "Closing page with unrelated text.";
+    const restore = installPdfWorkerStub(async () => ({
+      text: pageOne + pageTwo + pageThree,
+      pageChars: [pageOne.length, pageTwo.length, pageThree.length],
+    }));
+
+    try {
+      const result = await scrollToExactQuoteInReader(reader, quote, {
+        expectedPageIndex: 1,
+      });
+
+      assert.isTrue(result.matched);
+      assert.equal(result.matchedPageIndex, 1);
+      assert.deepEqual(dispatchedQueries, [uniqueQuery]);
+    } finally {
+      restore();
+    }
+  });
+
   it("does not use stale FindController counts and selected pages as a match", async function () {
     const reader = createFindControllerReader([], {
       matchesCountTotal: 1,
@@ -765,7 +805,22 @@ describe("scrollToExactQuoteInReader", function () {
     assert.include(result.reason, "multiple pages");
   });
 
-  it("uses the selected highlighted page when FindController reports multiple pages", async function () {
+  it("does not treat a selected highlighted result as unique when FindController reports multiple matches", async function () {
+    const reader = createFindControllerReader([[0], [], [0]], {
+      dispatchSelectedPageIdx: 0,
+    });
+    const result = await scrollToExactQuoteInReader(
+      reader,
+      "modulation of firing-rate adaptation strength within a continuous attractor model of place cells gives rise to these distinct forms of replay.",
+      { expectedPageIndex: 1 },
+    );
+
+    assert.isFalse(result.matched);
+    assert.isUndefined(result.matchedPageIndex);
+    assert.include(result.reason, "multiple");
+  });
+
+  it("rejects the selected highlighted page when FindController reports multiple pages", async function () {
     const reader = createFindControllerReader([[0], [], [0]], {
       dispatchSelectedPageIdx: 2,
     });
@@ -775,12 +830,12 @@ describe("scrollToExactQuoteInReader", function () {
       { expectedPageIndex: null },
     );
 
-    assert.isTrue(result.matched);
-    assert.equal(result.matchedPageIndex, 2);
-    assert.include(result.reason, "selected");
+    assert.isFalse(result.matched);
+    assert.isUndefined(result.matchedPageIndex);
+    assert.include(result.reason, "multiple");
   });
 
-  it("uses the selected highlighted page for count-only FindController matches", async function () {
+  it("rejects selected count-only FindController matches when the count is not unique", async function () {
     const reader = createFindControllerReader([], {
       dispatchMatchesCountTotal: 2,
       dispatchSelectedPageIdx: 1,
@@ -791,9 +846,9 @@ describe("scrollToExactQuoteInReader", function () {
       { expectedPageIndex: null },
     );
 
-    assert.isTrue(result.matched);
-    assert.equal(result.matchedPageIndex, 1);
-    assert.include(result.reason, "selected");
+    assert.isFalse(result.matched);
+    assert.isUndefined(result.matchedPageIndex);
+    assert.include(result.reason, "multiple");
   });
 
   it("resolves live quote lookup from FindController count plus selected page", async function () {

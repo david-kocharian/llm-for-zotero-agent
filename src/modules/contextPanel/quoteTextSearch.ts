@@ -553,6 +553,7 @@ function pushFindControllerQuery(
     normalizeFindControllerQueryText(query),
   );
   if (normalizedQuery.length < 12) return;
+  if (isWeakQuoteSearchQuery(normalizeLocatorText(normalizedQuery))) return;
   const key = normalizedQuery.toLowerCase();
   if (seen.has(key)) return;
   seen.add(key);
