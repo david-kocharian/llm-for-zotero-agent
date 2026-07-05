@@ -424,6 +424,10 @@ function buildTargetedPaperGroups(
     if (sectionLabel) passage.sectionLabel = sectionLabel;
     const chunkKind = normalizeString(result.chunkKind);
     if (chunkKind) passage.chunkKind = chunkKind;
+    const pageIndex = Number(result.pageIndex);
+    if (Number.isFinite(pageIndex) && pageIndex >= 0) {
+      passage.pageIndex = Math.floor(pageIndex);
+    }
     const pageLabel = normalizeString(result.pageLabel);
     if (pageLabel) passage.pageLabel = pageLabel;
     const quoteCitation = buildQuoteCitationFromResult(result);
@@ -459,8 +463,12 @@ function buildQuoteCitationFromResult(
     citationLabel:
       normalizeString(result.sourceLabel) ||
       normalizeString(result.citationLabel),
+    sourceSectionLabel: result.sectionLabel,
+    sourceChunkKind: result.chunkKind,
     contextItemId: paperContext?.contextItemId,
     itemId: paperContext?.itemId,
+    pageHintIndex: result.pageIndex,
+    pageHintLabel: result.pageLabel,
   });
 }
 
@@ -549,8 +557,12 @@ function buildOverviewQuoteCitationPack(
           citationLabel:
             normalizeString(result.sourceLabel) ||
             normalizeString(result.citationLabel),
+          sourceSectionLabel: result.sectionLabel,
+          sourceChunkKind: result.chunkKind,
           contextItemId: paperContext?.contextItemId,
           itemId: paperContext?.itemId,
+          pageHintIndex: result.pageIndex,
+          pageHintLabel: result.pageLabel,
         }),
       )
       .filter((entry): entry is QuoteCitation => Boolean(entry));

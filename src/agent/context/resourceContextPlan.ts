@@ -618,8 +618,11 @@ export function buildAgentStableResourceContextBlock(
       BALANCED_EVIDENCE_GUIDANCE,
       "Citation/source label rule: for direct quotes and substantive paper-grounded claims, use the exact sourceLabel shown for the relevant paper.",
       "If quote anchors like [[quote:Q_x7a2]] are provided, use the anchor token for direct quotes instead of manually copying the quote or sourceLabel.",
-      "Direct quote text must be copied verbatim in the original source language; never translate quote text to match the user's language. Put any translation outside the blockquote as explanation.",
+      "Use `>` blockquotes only for direct original source text.",
+      "Direct quote text must be copied verbatim in the original source language; never translate quote text to match the user's language.",
+      "Put interpretation, emphasis, examples, opinion, or translation in normal prose or fenced `text` blocks, not in `>` blockquotes.",
       "If no quote anchor is provided for a direct quote, keep the source label attached to the quote: put it on the next non-empty line after the blockquote, before any commentary.",
+      "Copy the Source label string exactly. Do not invent author/year/page/section labels.",
       "Do not write [[source=...]], section=..., or chunk=... metadata in the final answer; those fields are internal context only.",
     );
   }
@@ -662,6 +665,7 @@ export function buildAgentStableResourceContextBlock(
           `- Collection ${index + 1}: ${entry.name} [collectionId=${entry.collectionId}, libraryID=${entry.libraryID}]`,
       ),
       "Treat collection membership as the scope boundary. Use library_retrieve({ scope:{ collectionIds:[<collectionId>] }, query:'...', queryVariants:[...], intent:'enumerate'|'summarize', depth:'metadata'|'evidence' }) for broad comprehensive evidence search when variants would improve recall, library_search({ entity:'items', mode:'list', filters:{ collectionId:<collectionId> } }) for catalog listing, or collection-scoped actions when the user asks to operate on them. Do not assume all full text has already been read.",
+      "Catalog rows and manifest rows are navigation context, not evidence. Ground final content claims in library_retrieve snippets or paper_read results.",
       "When reading papers from a collection, prefer library_retrieve for staged resource-pool search. It maps metadata, scans indexed/searchable text, returns a paper-level frontier, and expands snippets only for selected branches; use paper_read only for close reading explicit itemId/contextItemId targets returned by search/retrieval. Do not use the active reader paper as an implicit collection member.",
       "If the user explicitly asks to read or analyze the full text of every paper in a collection, use library_retrieve or plan a batch workflow: enumerate papers, read/process them in bounded batches, create compact per-paper digests with evidence, then synthesize.",
       "If the user explicitly asks to include or only read child attachments in this collection, enumerate item attachments with library_search plus library_read sections:['attachments']; otherwise ignore sibling attachments for primary-document workflows.",
@@ -674,6 +678,7 @@ export function buildAgentStableResourceContextBlock(
         formatTagScopeLine(entry, index),
       ),
       "Treat tag membership as the scope boundary. Use library_retrieve({ query:'...', queryVariants:[...], intent:'enumerate'|'summarize', depth:'metadata'|'evidence' }) to search the selected tag pool by default, library_retrieve({ scope:{ tagNames:['<tag>'] }, query:'...', intent:'enumerate' }) for an explicit named tag scope, or library_search({ entity:'items', mode:'list', filters:{ tag:'<tag>' } }) for catalog listing. Do not ask which tag the user means when a selected tag scope is listed here.",
+      "Catalog rows and manifest rows are navigation context, not evidence. Ground final content claims in library_retrieve snippets or paper_read results.",
       "When reading papers from a tag, prefer library_retrieve for staged resource-pool search. It maps metadata, scans indexed/searchable text inside the tag where possible, returns a paper-level frontier, and expands snippets only for selected branches; use paper_read only for close reading explicit itemId/contextItemId targets returned by search/retrieval. Do not use the active reader paper as an implicit tag member.",
       "If the user explicitly asks to analyze the full text of every paper in a tag, use library_retrieve or plan a bounded batch workflow: enumerate papers, read/process them in batches, create compact per-paper digests with evidence, then synthesize.",
     );

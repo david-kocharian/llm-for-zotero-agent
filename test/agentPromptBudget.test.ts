@@ -446,6 +446,74 @@ describe("agent prompt budget", function () {
     );
   });
 
+  it("preserves the latest generic tool result while reducing older tool output", function () {
+    const latestReadContent = JSON.stringify({
+      handle: "trh_latest",
+      path: "results",
+      returnedCount: 2,
+      items: [
+        { itemId: 51, title: "Stored row 50" },
+        { itemId: 52, title: "Stored row 51" },
+      ],
+    });
+    const messages: AgentModelMessage[] = [
+      { role: "system", content: "Use tools." },
+      { role: "user", content: "List papers, then inspect omitted rows." },
+      {
+        role: "assistant",
+        content: "",
+        tool_calls: [
+          {
+            id: "call-library",
+            name: "query_library",
+            arguments: { entity: "items", mode: "list" },
+          },
+        ],
+      },
+      {
+        ...buildCatalogToolMessage(160),
+        tool_call_id: "call-library",
+      } as AgentModelMessage,
+      {
+        role: "assistant",
+        content: "",
+        tool_calls: [
+          {
+            id: "call-read",
+            name: "tool_result_read",
+            arguments: {
+              handle: "trh_latest",
+              path: "results",
+              offset: 50,
+              limit: 2,
+            },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        tool_call_id: "call-read",
+        name: "tool_result_read",
+        content: latestReadContent,
+      },
+    ];
+
+    const result = enforceAgentPromptBudget({
+      messages,
+      model: "claude-haiku-4-5",
+      inputTokenCap: 8_000,
+      conversationKey: 4,
+      resourceSignature: "scope-b",
+    });
+
+    assert.isTrue(result.changed);
+    const latestToolResult = result.messages.find(
+      (message) =>
+        message.role === "tool" && message.tool_call_id === "call-read",
+    );
+    assert.equal(latestToolResult?.content, latestReadContent);
+  });
+
   it("throws a graceful local over-budget error when protected context cannot fit", function () {
     const messages: AgentModelMessage[] = [
       { role: "system", content: "Use tools." },

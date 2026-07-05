@@ -1541,6 +1541,8 @@ describe("semantic tool surface", function () {
             "[chunk 4]\nThe agent learns where to attend using reinforcement learning from task reward.",
           citationLabel: "Mnih et al., 2014",
           sourceLabel: "(Mnih et al., 2014)",
+          pageIndex: 3,
+          pageLabel: "4",
           paperContext,
         }),
       } as never,
@@ -1563,6 +1565,8 @@ describe("semantic tool surface", function () {
         id: string;
         quoteText: string;
         citationLabel: string;
+        pageHintIndex?: number;
+        pageHintLabel?: string;
       }>;
     };
 
@@ -1575,6 +1579,8 @@ describe("semantic tool surface", function () {
       output.quoteCitations?.[0]?.citationLabel,
       "(Mnih et al., 2014)",
     );
+    assert.equal(output.quoteCitations?.[0]?.pageHintIndex, 3);
+    assert.equal(output.quoteCitations?.[0]?.pageHintLabel, "4");
     assert.deepEqual(
       output.results?.[0]?.quoteCitationIds,
       output.quoteCitations?.map((citation) => citation.id),
@@ -1662,6 +1668,8 @@ describe("semantic tool surface", function () {
             score: 4.5,
             citationLabel: "Huys, 2016",
             sourceLabel: "(Huys, 2016)",
+            pageIndex: 4,
+            pageLabel: "5",
           },
           {
             paperContext: secondPaper,
@@ -1697,6 +1705,8 @@ describe("semantic tool surface", function () {
         id: string;
         quoteText: string;
         citationLabel: string;
+        pageHintIndex?: number;
+        pageHintLabel?: string;
       }>;
       papers?: Array<{
         status?: string;
@@ -1704,6 +1714,7 @@ describe("semantic tool surface", function () {
         passages?: Array<{
           text?: string;
           sectionLabel?: string;
+          pageLabel?: string;
           quoteCitationId?: string;
         }>;
       }>;
@@ -1726,6 +1737,9 @@ describe("semantic tool surface", function () {
       "First method passage.",
     );
     assert.equal(output.quoteCitations?.[0]?.citationLabel, "(Huys, 2016)");
+    assert.equal(output.quoteCitations?.[0]?.pageHintIndex, 4);
+    assert.equal(output.quoteCitations?.[0]?.pageHintLabel, "5");
+    assert.equal(output.papers?.[0]?.passages?.[0]?.pageLabel, "5");
     assert.equal(
       output.papers?.[0]?.passages?.[0]?.quoteCitationId,
       output.quoteCitations?.[0]?.id,
@@ -1800,7 +1814,12 @@ describe("semantic tool surface", function () {
     if (!validated.ok) return;
     const output = (await tool.execute(validated.value, baseContext)) as {
       results?: Array<Record<string, unknown>>;
-      quoteCitations?: Array<{ quoteText: string; citationLabel: string }>;
+      quoteCitations?: Array<{
+        quoteText: string;
+        citationLabel: string;
+        pageHintIndex?: number;
+        pageHintLabel?: string;
+      }>;
       papers?: Array<{
         passages?: Array<{ pageLabel?: string; text?: string }>;
       }>;
@@ -1820,6 +1839,8 @@ describe("semantic tool surface", function () {
       "Only page two text should be returned.",
     );
     assert.equal(output.quoteCitations?.[0]?.citationLabel, "(Huys, 2016)");
+    assert.equal(output.quoteCitations?.[0]?.pageHintIndex, 1);
+    assert.equal(output.quoteCitations?.[0]?.pageHintLabel, "2");
   });
 
   it("paper_read targeted groups explicit page reads across multiple targets", async function () {
@@ -2128,7 +2149,7 @@ describe("semantic tool surface", function () {
       raw,
       "For method-section requests, do not call overview first",
     );
-    assert.include(raw, "include short blockquotes");
+    assert.include(raw, "include short direct-source blockquotes");
     assert.include(
       raw,
       "Do not call visual/page tools, `file_io`, or `run_command`",

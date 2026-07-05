@@ -361,10 +361,7 @@ function compactQuoteCitationRecord(
   if (!id || typeof quoteText !== "string" || !quoteText.trim()) {
     return undefined;
   }
-  if (
-    typeof citationLabel !== "string" ||
-    !citationLabel.trim()
-  ) {
+  if (typeof citationLabel !== "string" || !citationLabel.trim()) {
     return undefined;
   }
   const compact = compactMetadataValue(source);
@@ -457,9 +454,7 @@ function compactEvidenceSnippet(
     compact.passageCount = source.passages.length;
     compact.passages = source.passages
       .slice(0, 4)
-      .map((passage) =>
-        compactEvidenceSnippet(passage, validQuoteCitationIds),
-      );
+      .map((passage) => compactEvidenceSnippet(passage, validQuoteCitationIds));
   }
   return compact;
 }
@@ -660,9 +655,6 @@ function buildEvidenceCompactToolResult(params: {
     return false;
   };
 
-  for (const match of paperMatches) {
-    if (!tryPush("paperMatches", compactPaperMatch(match))) break;
-  }
   for (const snippet of snippets) {
     if (
       !tryPush(
@@ -671,6 +663,9 @@ function buildEvidenceCompactToolResult(params: {
       )
     )
       break;
+  }
+  for (const match of paperMatches) {
+    if (!tryPush("paperMatches", compactPaperMatch(match))) break;
   }
   for (const result of results) {
     if (
@@ -1098,7 +1093,9 @@ export function enforceAgentPromptBudget(params: {
       kind: "generic_compacted" as const,
       minTokens: MIN_GENERIC_TOOL_TOKENS,
       predicate: (message: AgentToolMessage) =>
-        !isLibrarySearchTool(message.name) && !isEvidenceTool(message.name),
+        !isLibrarySearchTool(message.name) &&
+        !isEvidenceTool(message.name) &&
+        !protectedToolIds.has(message.tool_call_id),
     },
   ];
 

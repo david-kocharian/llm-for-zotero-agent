@@ -709,6 +709,14 @@ describe("primitive agent tools", function () {
       resourceText,
       "Do not assume all full text has already been read.",
     );
+    assert.include(
+      resourceText,
+      "Catalog rows and manifest rows are navigation context, not evidence.",
+    );
+    assert.include(
+      resourceText,
+      "Ground final content claims in library_retrieve snippets or paper_read results.",
+    );
     assert.include(resourceText, "plan a batch workflow");
     assert.include(userText, "User request:\nCompare the papers");
   });
@@ -742,6 +750,14 @@ describe("primitive agent tools", function () {
     assert.include(
       resourceText,
       "library_retrieve({ scope:{ tagNames:['<tag>'] }, query:'...', intent:'enumerate' })",
+    );
+    assert.include(
+      resourceText,
+      "Catalog rows and manifest rows are navigation context, not evidence.",
+    );
+    assert.include(
+      resourceText,
+      "Ground final content claims in library_retrieve snippets or paper_read results.",
     );
     assert.include(userText, "User request:\nHow many papers");
   });
@@ -830,7 +846,7 @@ describe("primitive agent tools", function () {
       });
       assert.include(
         String(codexContent.citationInstruction || ""),
-        "short verbatim blockquote",
+        "use > blockquotes only for short verbatim original source text",
       );
 
       const normalResult = await tool.execute(validated.value, {
