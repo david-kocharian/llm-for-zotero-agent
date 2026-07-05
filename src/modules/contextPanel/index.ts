@@ -50,6 +50,7 @@ import { setupHandlers } from "./setupHandlers";
 import { ensureConversationLoaded, getConversationKey } from "./chat";
 import { renderShortcuts } from "./shortcuts";
 import { refreshChat } from "./chat";
+import { persistPendingChatScrollRestoreFromBody } from "./chatScrollSnapshots";
 import {
   getActiveContextAttachmentFromTabs,
   getActiveReaderForSelectedTab,
@@ -158,9 +159,7 @@ function getPanelContextSourceStateKey(
 ): string {
   const state = resolvePanelContextLifecycleState(item);
   if (!state) return "";
-  const contextItemId = state.requiresAsyncResolution
-    ? 0
-    : state.contextItemId;
+  const contextItemId = state.requiresAsyncResolution ? 0 : state.contextItemId;
   return [
     state.sourceKind,
     contextItemId > 0 ? `${contextItemId}` : "",
@@ -179,8 +178,7 @@ function writePanelContextDataset(
     ? String(Number(rawItem.id || 0) || "")
     : "";
   panelRoot.dataset.contextItemId = getPanelContextItemIdKey(rawItem);
-  panelRoot.dataset.contextOwnerItemId =
-    getPanelContextOwnerItemIdKey(rawItem);
+  panelRoot.dataset.contextOwnerItemId = getPanelContextOwnerItemIdKey(rawItem);
   panelRoot.dataset.contextSourceStateKey =
     getPanelContextSourceStateKey(rawItem);
   panelRoot.dataset.rawContextItemId = rawContextItemKey;
@@ -371,6 +369,7 @@ export function registerReaderContextPanel() {
           systemChanged
         ) {
           clearCompletedPanelLifecycleSignature(body);
+          persistPendingChatScrollRestoreFromBody(body);
           // Build UI synchronously so panel data attributes (basePaperItemId,
           // conversationKind, etc.) are immediately correct.  The reader popup
           // "Add Text" path reads these attributes to decide paper-mismatch —
@@ -407,6 +406,7 @@ export function registerReaderContextPanel() {
           writePanelContextDataset(panelRoot, rawContextItem);
           void retainClaudeRuntimeForBody(body, resolvedState.item);
           if (sameOwnerContextSourceChanged) {
+            persistPendingChatScrollRestoreFromBody(body);
             (body as any).__llmContextRefreshOnly = true;
             const refreshContextSource = (body as any)
               .__llmRefreshContextSourceForCurrentItem;
@@ -459,6 +459,7 @@ export function registerReaderContextPanel() {
         activeContextPanels.set(body, () => resolvedItem);
         activeContextPanelRawItems.set(body, item || null);
       } else if (!syncAlreadyRendered) {
+        persistPendingChatScrollRestoreFromBody(body);
         buildUI(body, resolvedItem);
         const panelRoot = body.querySelector("#llm-main") as HTMLElement | null;
         writePanelContextDataset(panelRoot, item || resolvedItem);

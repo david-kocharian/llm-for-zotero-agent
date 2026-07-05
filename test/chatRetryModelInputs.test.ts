@@ -1,5 +1,6 @@
 import { assert } from "chai";
 import {
+  QUOTE_RENDER_OCCURRENCE_PATTERN,
   buildAssistantDisplayMarkdownForRender,
   buildRenderedMarkdownClipboardPayload,
   resolveRetryModelInputsForTests,
@@ -22,7 +23,7 @@ describe("chat retry model inputs", function () {
     storedPath: "/tmp/paper.pdf",
   };
 
-  it("preserves known quote anchors for interactive assistant rendering", function () {
+  it("converts known quote anchors into render occurrence markers for interactive assistant rendering", function () {
     const quoteCitation = buildQuoteCitation({
       quoteText: "Rendered quote anchors should not leak.",
       citationLabel: "(Lee, 2026)",
@@ -35,7 +36,8 @@ describe("chat retry model inputs", function () {
       quoteCitations: [quoteCitation!],
     });
 
-    assert.include(rendered, `[[quote:${quoteCitation!.id}]]`);
+    assert.include(rendered, "[[quote-occurrence:");
+    assert.notInclude(rendered, `[[quote:${quoteCitation!.id}]]`);
     assert.notInclude(rendered, "> Rendered quote anchors");
     assert.notInclude(rendered, "(Lee, 2026)");
   });
@@ -53,8 +55,9 @@ describe("chat retry model inputs", function () {
       quoteCitations: [quoteCitation!],
     });
 
-    assert.include(rendered, `[[quote:${quoteCitation!.id}]]\n\nSo **one`);
-    assert.notInclude(rendered, `[[quote:${quoteCitation!.id}]]\nSo **one`);
+    assert.include(rendered, "[[quote-occurrence:");
+    assert.include(rendered, "]]\n\nSo **one");
+    assert.notInclude(rendered, `[[quote:${quoteCitation!.id}]]`);
     assert.notInclude(rendered, "> Quote card boundaries");
   });
 
@@ -78,10 +81,9 @@ describe("chat retry model inputs", function () {
       quoteCitations: [quoteCitation!],
     });
 
-    assert.include(
-      rendered,
-      `[[quote:${quoteCitation!.id}]]\n\n*Environment Classification:*`,
-    );
+    assert.include(rendered, "]]\n\n*Environment Classification:*");
+    assert.include(rendered, "[[quote-occurrence:");
+    assert.notInclude(rendered, `[[quote:${quoteCitation!.id}]]`);
     assert.notInclude(rendered, "(Carrasco et al., 2026)");
     assert.notInclude(rendered, "> We trained");
   });
@@ -117,6 +119,25 @@ describe("chat retry model inputs", function () {
     assert.notInclude(payload!.plainText, "[[quote:");
     assert.include(payload!.renderedHtml, "<blockquote>");
     assert.notInclude(payload!.renderedHtml, "[[quote:");
+  });
+
+  it("expands legacy markdown-only quote blocks in rendered clipboard payloads", function () {
+    const payload = buildRenderedMarkdownClipboardPayload(
+      [
+        "Evidence:",
+        "",
+        "> Legacy quote blocks should remain useful for old history.",
+        ">",
+        "> (Rentzeperis et al., 2026)",
+      ].join("\n"),
+      undefined,
+    );
+
+    assert.isNotNull(payload);
+    assert.include(payload!.plainText, "> Legacy quote blocks");
+    assert.include(payload!.plainText, "(Rentzeperis et al., 2026)");
+    assert.notInclude(payload!.plainText, "[[quote");
+    assert.include(payload!.renderedHtml, "<blockquote>");
   });
 
   it("renders expanded quote anchors before emphasized continuation text in clipboard payloads", function () {
@@ -198,14 +219,15 @@ describe("chat retry model inputs", function () {
     assert.notInclude(payload!.renderedHtml, "[quote unavailable]");
   });
 
-  it("preserves untrusted leaked source metadata quotes before assistant rendering", function () {
+  it("converts untrusted leaked source metadata quotes before assistant rendering", function () {
     const rendered = buildAssistantDisplayMarkdownForRender({
       text: '"our results provide evidence that the activity of dynamic engrams..." [[source=(Tomé, 2024), section=Dynamic and selective engrams emerge with memory consolidation, chunk=28]]',
       quoteCitations: [],
     });
 
-    assert.include(rendered, "> our results provide evidence");
-    assert.include(rendered, "(Tomé, 2024)");
+    assert.include(rendered, "[[quote-occurrence:");
+    assert.notInclude(rendered, "> our results provide evidence");
+    assert.notInclude(rendered, "(Tomé, 2024)");
     assert.notInclude(rendered, "[[source=");
     assert.notInclude(rendered, "section=");
     assert.notInclude(rendered, "chunk=");
