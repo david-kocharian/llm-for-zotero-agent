@@ -3908,19 +3908,45 @@
 .llm-agent-image-artifacts .llm-agent-image-artifacts-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr));
+  align-items: end;
   gap: 8px;
   width: 100%;
   margin-top: 0;
 }
 
 .llm-agent-image-artifacts .llm-agent-image-artifact-frame {
+  display: grid;
+  grid-template-rows: auto auto;
+  align-items: end;
+  justify-items: center;
   min-width: 0;
-  border-radius: 8px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .llm-agent-image-artifacts .llm-assistant-generated-image {
+  width: auto;
+  max-width: 100%;
+  height: auto;
   max-height: 240px;
-  background: color-mix(in srgb, var(--material-background) 92%, white 8%);
+  background: transparent;
+}
+
+.llm-agent-image-artifacts .llm-assistant-generated-image-caption {
+  position: static;
+  justify-self: stretch;
+  max-width: 100%;
+  padding: 6px 2px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--fill-tertiary);
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  transition: none;
+  text-align: center;
 }
 
 .llm-model-header {

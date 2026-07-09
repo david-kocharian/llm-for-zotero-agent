@@ -2006,7 +2006,14 @@ describe("agentTrace render", function () {
       events,
     }) as unknown as FakeElement;
 
-    assert.exists(trace.findByClass("llm-agent-image-artifacts"));
+    const artifactHolder = trace.findByClass("llm-agent-image-artifacts");
+    assert.exists(artifactHolder);
+    assert.deepEqual(
+      trace
+        .findAllByClass("llm-assistant-generated-image-caption")
+        .map(collectFakeText),
+      ["Figure 1"],
+    );
     assert.equal(
       (
         trace.findByClass("llm-assistant-generated-image") as
@@ -2118,7 +2125,11 @@ describe("agentTrace render", function () {
       events,
     }) as unknown as FakeElement;
 
-    assert.exists(trace.findByClass("llm-agent-image-artifacts"));
+    const artifactHolder = trace.findByClass("llm-agent-image-artifacts");
+    assert.exists(artifactHolder);
+    assert.isFalse(
+      artifactHolder?.classList.contains("llm-agent-image-artifacts-multiple"),
+    );
     const images = trace.findAllByClass("llm-assistant-generated-image");
     assert.lengthOf(images, 2);
     assert.deepEqual(
@@ -2132,6 +2143,50 @@ describe("agentTrace render", function () {
       .findAllByClass("llm-assistant-generated-image-caption")
       .map(collectFakeText);
     assert.deepEqual(captions, ["Figure 1", "page-4.png"]);
+  });
+
+  it("bottom-aligns trace images with persistent label rows", function () {
+    const css = readFileSync("addon/content/zoteroPane.css", "utf8");
+    const gridRule =
+      css.match(
+        /\.llm-agent-image-artifacts\s+\.llm-agent-image-artifacts-grid\s*\{[\s\S]*?\}/,
+      )?.[0] || "";
+    const frameRule =
+      css.match(
+        /\.llm-agent-image-artifacts\s+\.llm-agent-image-artifact-frame\s*\{[\s\S]*?\}/,
+      )?.[0] || "";
+    const imageRule =
+      css.match(
+        /\.llm-agent-image-artifacts\s+\.llm-assistant-generated-image\s*\{[\s\S]*?\}/,
+      )?.[0] || "";
+    const captionRule =
+      css.match(
+        /\.llm-agent-image-artifacts\s+\.llm-assistant-generated-image-caption\s*\{[\s\S]*?\}/,
+      )?.[0] || "";
+
+    assert.include(gridRule, "align-items: end");
+    assert.include(frameRule, "display: grid");
+    assert.include(frameRule, "grid-template-rows: auto auto");
+    assert.include(frameRule, "align-items: end");
+    assert.include(frameRule, "justify-items: center");
+    assert.include(frameRule, "border: 0");
+    assert.include(frameRule, "border-radius: 0");
+    assert.include(frameRule, "background: transparent");
+    assert.include(imageRule, "width: auto");
+    assert.include(imageRule, "max-width: 100%");
+    assert.include(imageRule, "height: auto");
+    assert.include(imageRule, "background: transparent");
+    assert.include(captionRule, "position: static");
+    assert.include(captionRule, "justify-self: stretch");
+    assert.include(captionRule, "padding: 6px 2px 0");
+    assert.include(captionRule, "border: 0");
+    assert.include(captionRule, "background: transparent");
+    assert.include(captionRule, "opacity: 1");
+    assert.include(captionRule, "visibility: visible");
+    assert.include(captionRule, "transform: none");
+    assert.include(captionRule, "text-align: center");
+    assert.notInclude(css, ".llm-agent-image-artifact-frame:hover");
+    assert.notInclude(css, ".llm-agent-image-artifacts-multiple");
   });
 
   it("preserves Codex MCP image artifacts through native tool activity coalescing", function () {
@@ -2336,6 +2391,14 @@ describe("agentTrace render", function () {
     assert.equal(savedImg?.src, "file:///tmp/result.png");
     assert.equal(savedImg?.alt, "result.png");
     assert.equal(savedImg?.title, "A concise chart");
+    assert.equal(
+      collectFakeText(
+        savedPathRoot.findByClass(
+          "llm-assistant-generated-image-caption",
+        ) as FakeElement,
+      ),
+      "result.png",
+    );
     assert.isNull(savedPathRoot.findByClass("llm-user-screenshots-preview"));
     const savedActions = savedPathRoot.findAllByClass(
       "llm-generated-image-action",

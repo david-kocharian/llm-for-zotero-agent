@@ -1250,7 +1250,6 @@ function isPdfFigureCandidateSource(
 ): value is PdfFigureCandidateSource {
   return (
     value === "pdf-image-object" ||
-    value === "mineru-layout-region" ||
     value === "caption-bounded-region" ||
     value === "rendered-ink" ||
     value === "pdf-vector-object"
@@ -1713,9 +1712,7 @@ export class PdfPageService {
       throw new Error("Subprocess is not available for figure extraction");
     }
     const materialized = await materializePackagedFigureExtractorScript();
-    const cropDir = getPdfFigureCropImageDirForCacheDir(
-      params.figureCacheDir,
-    );
+    const cropDir = getPdfFigureCropImageDirForCacheDir(params.figureCacheDir);
     const pages = Array.isArray(params.pages)
       ? params.pages
           .filter((page) => Number.isFinite(page) && page >= 0)
@@ -1751,11 +1748,7 @@ export class PdfPageService {
           "--clean-out",
         ];
         if (params.mineruCacheDir) {
-          args.push(
-            "--mineru-dir",
-            params.mineruCacheDir,
-            "--use-mineru-targets",
-          );
+          args.push("--mineru-dir", params.mineruCacheDir);
         }
         if (pages) {
           args.push("--pages", pages);

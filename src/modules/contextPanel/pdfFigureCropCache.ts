@@ -6,7 +6,7 @@ import type {
 } from "./pdfFigureGeometry";
 
 export const PDF_FIGURE_CROP_CACHE_VERSION = 2;
-export const PDF_FIGURE_CROP_ALGORITHM_VERSION = 9;
+export const PDF_FIGURE_CROP_ALGORITHM_VERSION = 10;
 export const PDF_FIGURE_CROP_DIR = "figure_crops";
 export const PDF_FIGURE_CROP_METADATA_FILE = "figure_geometry.json";
 export const PDF_FIGURE_CROP_STANDALONE_ROOT_DIR =
@@ -76,13 +76,15 @@ function normalizePositiveInt(value: unknown): number {
 }
 
 function getBaseWritableDir(): string {
-  const zotero = (globalThis as unknown as {
-    Zotero?: {
-      DataDirectory?: { dir?: string };
-      Profile?: { dir?: string };
-      getTempDirectory?: () => { path?: string } | null;
-    };
-  }).Zotero;
+  const zotero = (
+    globalThis as unknown as {
+      Zotero?: {
+        DataDirectory?: { dir?: string };
+        Profile?: { dir?: string };
+        getTempDirectory?: () => { path?: string } | null;
+      };
+    }
+  ).Zotero;
   const dataDir = zotero?.DataDirectory?.dir;
   if (typeof dataDir === "string" && dataDir.trim()) {
     return dataDir.trim();

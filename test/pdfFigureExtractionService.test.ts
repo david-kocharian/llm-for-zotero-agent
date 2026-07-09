@@ -666,7 +666,7 @@ describe("PdfFigureExtractionService", function () {
     assert.instanceOf(cacheBytes, Uint8Array);
     const cache = JSON.parse(decoder.decode(cacheBytes));
     assert.equal(cache.version, 2);
-    assert.equal(cache.algorithmVersion, 9);
+    assert.equal(cache.algorithmVersion, PDF_FIGURE_CROP_ALGORITHM_VERSION);
     assert.equal(cache.entries[0].source, "pdf-image-object");
   });
 

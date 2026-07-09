@@ -12,8 +12,6 @@ export type PdfFigureBox = PdfFigureRect & {
 
 export type PdfFigureCandidateSource =
   | "pdf-image-object"
-  // Legacy/diagnostic only. Normal runtime figure extraction is source-PDF based.
-  | "mineru-layout-region"
   | "caption-bounded-region"
   | "rendered-ink"
   | "pdf-vector-object";

@@ -238,7 +238,7 @@ describe("PdfPageService source-PDF figure runtime", function () {
     );
   });
 
-  it("enables MinerU manifest and content-list targets for production extraction", async function () {
+  it("passes MinerU semantics without enabling MinerU layout targets", async function () {
     const runtimeRoot =
       "/tmp/zotero/llm-for-zotero-runtimes/pdf-figure-extractor/1/macos-arm64";
     files.set(
@@ -260,7 +260,7 @@ describe("PdfPageService source-PDF figure runtime", function () {
 
     await extractWithService();
 
-    assert.include(capturedCall?.arguments || [], "--use-mineru-targets");
+    assert.notInclude(capturedCall?.arguments || [], "--use-mineru-targets");
     assert.include(capturedCall?.arguments || [], "--mineru-dir");
     const mineruArg = capturedCall?.arguments.indexOf("--mineru-dir") ?? -1;
     assert.equal(capturedCall?.arguments[mineruArg + 1], "/tmp/mineru-paper");

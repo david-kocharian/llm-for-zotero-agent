@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Extract PDF-native figure crops from one Zotero/MinerU-ready PDF.
+"""Extract PDF-native figure crops from a Zotero PDF.
 
-This file is intentionally based on scripts/evaluate_pdf_figure_extraction.py.
-Keep the extraction algorithm in this packaged script aligned with the
-development evaluator; the plugin calls this script for production figure crops.
+The development evaluator delegates to this packaged script so evaluation and
+production use the same extraction algorithm.
 """
 
 from __future__ import annotations
@@ -44,7 +43,7 @@ DEFAULT_POPPLER_BIN_VALUE = os.environ.get("LLM_FOR_ZOTERO_POPPLER_BIN") or (
 DEFAULT_POPPLER_BIN = Path(DEFAULT_POPPLER_BIN_VALUE).expanduser()
 MIN_ACCEPTED_CONFIDENCE = 0.40
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 120
-DIRECT_EXTRACTOR_VERSION = "raw-pdf-evaluator-v3"
+DIRECT_EXTRACTOR_VERSION = "raw-pdf-evaluator-v4"
 
 CAPTION_PATTERN = re.compile(
     r"^\s*((?:Extended\s+Data\s+)?Fig(?:ure)?\.?\s*S?\d+[A-Za-z]?|"
@@ -95,8 +94,6 @@ class Target:
     caption_box: Rect | None
     caption_text: str
     source: str
-    visual_box: Rect | None = None
-    visual_aspect_ratio: float | None = None
 
 
 @dataclass(frozen=True)
@@ -494,48 +491,6 @@ def mineru_entry_captions(entry: dict[str, Any]) -> list[str]:
     return captions
 
 
-def mineru_entry_rect(entry: dict[str, Any]) -> Rect | None:
-    bbox = entry.get("bbox")
-    if (
-        not isinstance(bbox, list)
-        or len(bbox) != 4
-        or not all(isinstance(value, (int, float)) for value in bbox)
-    ):
-        return None
-    left, top, right, bottom = [float(value) for value in bbox]
-    if right <= left or bottom <= top:
-        return None
-    return Rect(left, top, right - left, bottom - top)
-
-
-def mineru_image_aspect_ratio(case: PdfCase, entry: dict[str, Any]) -> float | None:
-    img_path = entry.get("img_path")
-    if not isinstance(img_path, str) or not img_path:
-        return None
-    try:
-        with Image.open(case.mineru_dir / img_path) as image:
-            width, height = image.size
-        if width > 0 and height > 0:
-            return width / height
-    except Exception:
-        return None
-    return None
-
-
-def manifest_crop_rect(entry: dict[str, Any]) -> Rect | None:
-    raw = entry.get("pdfCropRange")
-    if (
-        not isinstance(raw, list)
-        or len(raw) != 4
-        or not all(isinstance(value, (int, float)) for value in raw)
-    ):
-        return None
-    left, top, right, bottom = [float(value) for value in raw]
-    if right <= left or bottom <= top:
-        return None
-    return Rect(left, top, right - left, bottom - top)
-
-
 def manifest_page_number(entry: dict[str, Any]) -> int | None:
     for key in ("pdfCropPage", "page"):
         value = entry.get(key)
@@ -585,26 +540,15 @@ def targets_from_manifest(case: PdfCase) -> list[Target]:
     if not isinstance(manifest, dict):
         return []
     targets: list[Target] = []
-    seen: set[tuple[str, int, tuple[float, float, float, float] | None]] = set()
+    seen: set[tuple[str, int]] = set()
     for entry in manifest_figure_entries(manifest):
         label = manifest_figure_label(entry)
         page_number = manifest_page_number(entry)
         if not label or not page_number:
             continue
-        visual_box = manifest_crop_rect(entry)
         caption = entry.get("caption")
         caption_text = str(caption) if isinstance(caption, str) else label
-        rect_key = (
-            (
-                round(visual_box.left, 3),
-                round(visual_box.top, 3),
-                round(visual_box.right, 3),
-                round(visual_box.bottom, 3),
-            )
-            if visual_box
-            else None
-        )
-        key = (label, page_number, rect_key)
+        key = (label, page_number)
         if key in seen:
             continue
         seen.add(key)
@@ -615,65 +559,12 @@ def targets_from_manifest(case: PdfCase) -> list[Target]:
                 caption_box=None,
                 caption_text=caption_text,
                 source="mineru-manifest",
-                visual_box=visual_box,
-                visual_aspect_ratio=(
-                    visual_box.width / visual_box.height
-                    if visual_box and visual_box.height > 0
-                    else None
-                ),
             ),
         )
     return targets
 
 
-def horizontal_gap(left: Rect, right: Rect) -> float:
-    if left.right < right.left:
-        return right.left - left.right
-    if right.right < left.left:
-        return left.left - right.right
-    return 0.0
-
-
-def expand_mineru_compound_visual_box(
-    seed: Rect,
-    page_idx: int,
-    label: str,
-    visual_entries: list[dict[str, Any]],
-) -> tuple[Rect, int]:
-    group = [seed]
-    changed = True
-    while changed:
-        changed = False
-        group_box = rect_union(group)
-        for item in visual_entries:
-            rect = item["rect"]
-            if item["page_idx"] != page_idx or rect in group:
-                continue
-            labels = item["labels"]
-            if labels and any(item_label != label for item_label in labels):
-                continue
-            overlap = min(group_box.bottom, rect.bottom) - max(group_box.top, rect.top)
-            vertical_overlap = max(0.0, overlap) / max(
-                1.0,
-                min(group_box.height, rect.height),
-            )
-            vgap = vertical_gap(group_box, rect)
-            hgap = horizontal_gap(group_box, rect)
-            close_vertically = (
-                vertical_overlap >= 0.22
-                or vgap <= max(18.0, min(group_box.height, rect.height) * 0.35)
-            )
-            close_horizontally = hgap <= max(
-                90.0,
-                min(group_box.width, rect.width) * 0.65,
-            )
-            if close_vertically and close_horizontally:
-                group.append(rect)
-                changed = True
-    return rect_union(group), len(group)
-
-
-def targets_from_mineru(case: PdfCase) -> list[Target]:
+def targets_from_mineru_semantics(case: PdfCase) -> list[Target]:
     content_path = case.mineru_dir / "content_list.json"
     if not content_path.exists():
         return []
@@ -681,48 +572,16 @@ def targets_from_mineru(case: PdfCase) -> list[Target]:
         content = json.loads(content_path.read_text())
     except Exception:
         return []
-    visual_entries: list[dict[str, Any]] = []
-    for entry in content:
-        if entry.get("type") not in {"image", "table"}:
-            continue
-        page_idx = entry.get("page_idx")
-        rect = mineru_entry_rect(entry)
-        if page_idx is None or rect is None:
-            continue
-        labels = {
-            label
-            for label in (caption_label(caption) for caption in mineru_entry_captions(entry))
-            if label
-        }
-        visual_entries.append(
-            {
-                "page_idx": int(page_idx),
-                "rect": rect,
-                "labels": labels,
-            },
-        )
     targets: list[Target] = []
     seen: set[tuple[str, int]] = set()
     for entry in content:
         captions = mineru_entry_captions(entry)
-        visual_box = mineru_entry_rect(entry)
-        visual_aspect_ratio = mineru_image_aspect_ratio(case, entry)
         for caption in captions:
             label = caption_label(str(caption))
             page_idx = entry.get("page_idx")
             if not label or page_idx is None:
                 continue
             page_number = int(page_idx) + 1
-            compound_count = 1
-            if visual_box:
-                visual_box, compound_count = expand_mineru_compound_visual_box(
-                    visual_box,
-                    int(page_idx),
-                    label,
-                    visual_entries,
-                )
-                if compound_count > 1:
-                    visual_aspect_ratio = visual_box.width / max(1.0, visual_box.height)
             key = (label, page_number)
             if key in seen:
                 continue
@@ -734,8 +593,6 @@ def targets_from_mineru(case: PdfCase) -> list[Target]:
                     caption_box=None,
                     caption_text=str(caption),
                     source="mineru-caption",
-                    visual_box=visual_box,
-                    visual_aspect_ratio=visual_aspect_ratio,
                 ),
             )
     return targets
@@ -753,9 +610,7 @@ def merge_targets(
             by_label[target.label] = target
             continue
         page_number = existing.page_number
-        if target.visual_box and not existing.visual_box:
-            page_number = target.page_number
-        elif (
+        if (
             target.source == "mineru-manifest"
             and existing.source != "mineru-manifest"
         ):
@@ -779,10 +634,6 @@ def merge_targets(
             caption_box=caption_box,
             caption_text=caption_text,
             source="+".join(sources),
-            visual_box=existing.visual_box or target.visual_box,
-            visual_aspect_ratio=(
-                existing.visual_aspect_ratio or target.visual_aspect_ratio
-            ),
         )
     targets = list(by_label.values())
     targets.sort(key=lambda item: (item.page_number, item.label))
@@ -804,8 +655,6 @@ def merge_targets(
                 caption_box=caption_box,
                 caption_text=target.caption_text,
                 source=target.source,
-                visual_box=target.visual_box,
-                visual_aspect_ratio=target.visual_aspect_ratio,
             ),
         )
     return resolved
@@ -877,12 +726,7 @@ def score_candidate(
     page: dict[str, Any],
     target: Target,
 ) -> Candidate:
-    if source == "pdf-image-object":
-        confidence = 0.64
-    elif source == "mineru-layout-region":
-        confidence = 0.84
-    else:
-        confidence = 0.48
+    confidence = 0.64 if source == "pdf-image-object" else 0.48
     area_ratio = rect.area / max(1.0, page["width"] * page["height"])
     confidence += min(0.08, area_ratio * 0.55)
     if target.caption_box:
@@ -907,8 +751,7 @@ def score_candidate(
         confidence += 0.04
     warnings: list[str] = []
     overlap = text_overlap_ratio(rect, page, target)
-    overlap_limit = 0.18 if source == "mineru-layout-region" else 0.03
-    if overlap > overlap_limit:
+    if overlap > 0.03:
         confidence -= min(0.50, overlap * 2.4)
         warnings.append("substantial non-caption text overlap")
     paragraph_overlap = paragraph_text_overlap_ratio(rect, page, target)
@@ -976,217 +819,6 @@ def should_caption_region_override(
             and region_candidate.confidence >= candidate.confidence - 0.06
         )
     )
-
-
-def choose_mineru_layout_candidate(
-    page: dict[str, Any],
-    target: Target,
-) -> Candidate | None:
-    if not target.visual_box:
-        return None
-    rect = repair_mineru_visual_rect(target.visual_box, page, target)
-    if is_page_furniture(rect, page):
-        return None
-    page_area = max(1.0, page["width"] * page["height"])
-    if rect.area / page_area > 0.72:
-        return None
-    candidate = score_candidate(
-        "mineru-layout-region",
-        rect,
-        1,
-        [
-            (
-                "MinerU manifest PDF crop range"
-                if "mineru-manifest" in target.source
-                else "MinerU visual block"
-            ),
-        ],
-        page,
-        target,
-    )
-    return candidate
-
-
-def repair_mineru_visual_rect(
-    box: Rect,
-    page: dict[str, Any],
-    target: Target,
-) -> Rect:
-    aspect = target.visual_aspect_ratio
-    if not aspect or not math.isfinite(aspect) or aspect <= 0:
-        return box
-    if box.width <= 0 or box.height <= 0:
-        return box
-
-    current_aspect = box.width / box.height
-    tolerance = 0.08
-    max_grow = 2.5
-    width = box.width
-    height = box.height
-
-    if current_aspect > aspect * (1 + tolerance):
-        desired_height = min(width / aspect, height * max_grow)
-        if desired_height > height:
-            max_bottom = page["height"]
-            if (
-                target.caption_box
-                and target.caption_box.top >= box.bottom
-                and horizontal_overlap_ratio(box, target.caption_box) >= 0.15
-            ):
-                max_bottom = min(max_bottom, target.caption_box.top - 4)
-            height = min(desired_height, max(height, max_bottom - box.top))
-    elif current_aspect < aspect * (1 - tolerance):
-        desired_width = min(height * aspect, width * max_grow)
-        if desired_width > width:
-            max_right = page["width"]
-            if (
-                target.caption_box
-                and target.caption_box.left >= box.right
-                and vertical_gap(box, target.caption_box) <= page["height"] * 0.08
-            ):
-                max_right = min(max_right, target.caption_box.left - 4)
-            width = min(desired_width, max(width, max_right - box.left))
-
-    return Rect(box.left, box.top, width, height)
-
-
-def should_mask_text_for_mineru_refinement(
-    box: TextBox,
-    search_rect: Rect,
-    seed_rect: Rect,
-    page: dict[str, Any],
-    target: Target,
-) -> bool:
-    if intersect_area(box.rect, search_rect) <= 0:
-        return False
-    if target.caption_box:
-        caption_column = (
-            box.rect.left >= target.caption_box.left - 8
-            and box.rect.top >= target.caption_box.top - 8
-            and box.rect.top <= search_rect.bottom + 8
-        )
-        if caption_column:
-            return True
-    header_overlap = (
-        box.rect.top < page["height"] * 0.11
-        and box.rect.top < seed_rect.top
-    )
-    if header_overlap:
-        return True
-    text = box.text.strip()
-    paragraph_like = len(text) >= 38 or box.rect.width >= min(240.0, seed_rect.width * 0.34)
-    above_seed = box.rect.top < seed_rect.top + page["height"] * 0.012
-    return paragraph_like and above_seed
-
-
-def refine_mineru_candidate_with_rendered_ink(
-    image: Image.Image,
-    page: dict[str, Any],
-    target: Target,
-    candidate: Candidate,
-) -> Candidate:
-    if candidate.source != "mineru-layout-region":
-        return candidate
-
-    rect = candidate.rect
-    sx = image.width / page["width"]
-    sy = image.height / page["height"]
-    arr = np.asarray(image)
-    mask = np.any(arr < 245, axis=2)
-    mask = mask.copy()
-
-    pad_x = max(8.0, rect.width * 0.05)
-    pad_y_top = max(8.0, rect.height * 0.08)
-    pad_y_bottom = max(18.0, rect.height * 0.35)
-    left = max(0.0, rect.left - pad_x)
-    top = max(0.0, rect.top - pad_y_top)
-    right = min(page["width"], rect.right + pad_x)
-    bottom = min(page["height"], rect.bottom + pad_y_bottom)
-    if (
-        target.caption_box
-        and target.caption_box.top > rect.bottom
-        and target.caption_box.top - rect.bottom <= page["height"] * 0.35
-    ):
-        bottom = min(page["height"], max(bottom, target.caption_box.top - 2))
-    search_rect = Rect(left, top, right - left, bottom - top)
-
-    for box in page["texts"]:
-        if not should_mask_text_for_mineru_refinement(
-            box,
-            search_rect,
-            rect,
-            page,
-            target,
-        ):
-            continue
-        x0, y0, x1, y1 = scale_rect(box.rect, sx, sy)
-        pad = 4
-        mask[
-            max(0, y0 - pad) : min(mask.shape[0], y1 + pad),
-            max(0, x0 - pad) : min(mask.shape[1], x1 + pad),
-        ] = False
-
-    x0, y0, x1, y1 = scale_rect(search_rect, sx, sy)
-    window = mask[y0:y1, x0:x1]
-    if window.size == 0:
-        return candidate
-    ys, xs = np.where(window)
-    if len(xs) < 40:
-        return candidate
-
-    ink_rect = rect_from_pixels(
-        (
-            x0 + int(xs.min()),
-            y0 + int(ys.min()),
-            x0 + int(xs.max()) + 1,
-            y0 + int(ys.max()) + 1,
-        ),
-        sx,
-        sy,
-    )
-    snap_pad = 4.0
-    refined_left = max(0.0, float(ink_rect.left) - snap_pad)
-    refined_top = max(rect.top, float(ink_rect.top) - snap_pad)
-    refined_right = min(page["width"], float(ink_rect.right) + snap_pad)
-    refined_bottom = min(page["height"], float(ink_rect.bottom) + snap_pad)
-    refined = Rect(
-        refined_left,
-        refined_top,
-        refined_right - refined_left,
-        refined_bottom - refined_top,
-    )
-    top_trim = refined.top
-    for box in page["texts"]:
-        text = box.text.strip()
-        paragraph_like = (
-            len(text) >= 38
-            or box.rect.width >= min(240.0, refined.width * 0.34)
-        )
-        if (
-            paragraph_like
-            and box.rect.top <= refined.top + page["height"] * 0.02
-            and intersect_area(box.rect, refined) > 0
-        ):
-            top_trim = max(top_trim, box.rect.bottom + 2)
-    if top_trim > refined.top and refined.bottom - top_trim >= page["height"] * 0.03:
-        refined = Rect(refined.left, top_trim, refined.width, refined.bottom - top_trim)
-
-    if refined.area < rect.area * 0.30:
-        return candidate
-    if refined.width < page["width"] * 0.08 or refined.height < page["height"] * 0.03:
-        return candidate
-
-    refined_candidate = score_candidate(
-        candidate.source,
-        refined,
-        1,
-        [*candidate.reasons, "snapped to rendered figure ink"],
-        page,
-        target,
-    )
-    if refined_candidate.confidence < MIN_ACCEPTED_CONFIDENCE:
-        return candidate
-    return refined_candidate
 
 
 def render_page(pdf_path: Path, page_number: int, dpi: int, poppler_bin: Path) -> Image.Image:
@@ -1281,6 +913,28 @@ def rendered_content_x_bounds(
     if right - left < page["width"] * 0.25:
         return page["width"] * 0.05, page["width"] * 0.95
     return left, right
+
+
+def mask_margin_furniture_text(
+    mask: np.ndarray,
+    page: dict[str, Any],
+    sx: float,
+) -> None:
+    page_width = max(1.0, page["width"])
+    narrow_boxes = [
+        box.rect
+        for box in page["texts"]
+        if box.rect.width <= page_width * 0.04
+    ]
+    left_margin = [rect for rect in narrow_boxes if rect.right <= page_width * 0.07]
+    right_margin = [rect for rect in narrow_boxes if rect.left >= page_width * 0.93]
+    margin_padding = page_width * 0.035
+    if left_margin:
+        boundary = max(rect.right for rect in left_margin) + margin_padding
+        mask[:, : min(mask.shape[1], int(math.ceil(boundary * sx)))] = False
+    if right_margin:
+        boundary = min(rect.left for rect in right_margin) - margin_padding
+        mask[:, max(0, int(math.floor(boundary * sx))) :] = False
 
 
 def detect_two_column_text_windows(
@@ -1588,6 +1242,8 @@ def choose_caption_region_candidate(
     sy = image.height / page["height"]
     arr = np.asarray(image)
     visual = np.any(arr < 250, axis=2)
+    visual = visual.copy()
+    mask_margin_furniture_text(visual, page, sx)
     content_left, content_right = rendered_content_x_bounds(visual, page, sx)
 
     def build_candidate(
@@ -1831,8 +1487,6 @@ def target_for_candidate_page(target: Target, page_number: int) -> Target:
         caption_box=target.caption_box if same_page else None,
         caption_text=target.caption_text,
         source=target.source,
-        visual_box=target.visual_box if same_page else None,
-        visual_aspect_ratio=target.visual_aspect_ratio if same_page else None,
     )
 
 
@@ -2016,40 +1670,6 @@ def resolve_candidate_on_page(
     ]
     image: Image.Image | None = None
     candidate = choose_image_candidate(page, page_target)
-    mineru_candidate = choose_mineru_layout_candidate(page, page_target)
-    if mineru_candidate:
-        manifest_candidate = "mineru-manifest" in page_target.source
-        if not candidate:
-            candidate = mineru_candidate
-        elif manifest_candidate:
-            if (
-                candidate.confidence < 0.74
-                and mineru_candidate.confidence >= candidate.confidence + 0.04
-            ) or (
-                candidate.confidence < 0.82
-                and mineru_candidate.rect.area >= candidate.rect.area * 1.7
-            ):
-                candidate = mineru_candidate
-        elif (
-            mineru_candidate.confidence >= candidate.confidence - 0.04
-            or mineru_candidate.rect.area >= candidate.rect.area * 1.25
-        ):
-            candidate = mineru_candidate
-    if (
-        candidate
-        and candidate.source == "mineru-layout-region"
-        and "mineru-manifest" not in page_target.source
-    ):
-        image = render_cache.get(page_number)
-        if image is None:
-            image = render_page(case.pdf_path, page_number, dpi, poppler_bin)
-            render_cache[page_number] = image
-        candidate = refine_mineru_candidate_with_rendered_ink(
-            image,
-            page,
-            page_target,
-            candidate,
-        )
     region_candidate: Candidate | None = None
     if page_target.caption_box:
         image = render_cache.get(page_number)
@@ -2115,6 +1735,10 @@ def crop_image(
         min(image.height, bottom + margin_px),
     )
     return image.crop(bbox), bbox
+
+
+def figure_crop_margin_pixels(dpi: int) -> int:
+    return max(4, int(round(dpi * 0.06)))
 
 
 def draw_overlay(
@@ -2369,8 +1993,6 @@ def run_direct_mode(args: argparse.Namespace) -> int:
         raise FileNotFoundError(f"PDF not found: {pdf_path}")
     work_dir = Path(args.out).expanduser()
     mineru_dir = Path(args.mineru_dir).expanduser() if args.mineru_dir else None
-    if args.use_mineru_targets and mineru_dir is None:
-        raise ValueError("MinerU cache directory is required for MinerU targets")
     if mineru_dir is not None and not mineru_dir.exists():
         raise FileNotFoundError(f"MinerU cache directory not found: {mineru_dir}")
     if args.clean_out and work_dir.exists():
@@ -2398,7 +2020,7 @@ def run_direct_mode(args: argparse.Namespace) -> int:
             work_dir,
             Path(args.poppler_bin),
             int(args.dpi),
-            use_mineru_targets=bool(args.use_mineru_targets),
+            use_mineru_semantics=mineru_dir is not None,
         )
     except Exception as error:
         payload = {
@@ -2417,7 +2039,7 @@ def run_direct_mode(args: argparse.Namespace) -> int:
         print(encoded)
         return 0
     if not result:
-        target_source = "PDF text or MinerU cache" if args.use_mineru_targets else "PDF text"
+        target_source = "PDF text or MinerU semantics" if mineru_dir else "PDF text"
         payload = {
             "status": "no_figures",
             "algorithmVersion": DIRECT_EXTRACTOR_VERSION,
@@ -2506,14 +2128,14 @@ def build_case_targets(
     case: PdfCase,
     pages: dict[int, dict[str, Any]],
     *,
-    use_mineru_targets: bool = False,
+    use_mineru_semantics: bool = False,
 ) -> list[Target]:
     pdf_targets = targets_from_pdf_text(pages)
-    if not use_mineru_targets:
+    if not use_mineru_semantics:
         return merge_targets(pdf_targets, [], pages)
     return merge_targets(
         targets_from_manifest(case) + pdf_targets,
-        targets_from_mineru(case),
+        targets_from_mineru_semantics(case),
         pages,
     )
 
@@ -2524,10 +2146,14 @@ def evaluate_case(
     poppler_bin: Path,
     dpi: int,
     *,
-    use_mineru_targets: bool = False,
+    use_mineru_semantics: bool = False,
 ) -> dict[str, Any] | None:
     pages = parse_pdf_xml(case.pdf_path, poppler_bin)
-    targets = build_case_targets(case, pages, use_mineru_targets=use_mineru_targets)
+    targets = build_case_targets(
+        case,
+        pages,
+        use_mineru_semantics=use_mineru_semantics,
+    )
     if not targets:
         return None
     case_dir = out_dir / f"{case.attachment_id}_{case.attachment_key}"
@@ -2616,7 +2242,12 @@ def evaluate_case(
         if image is None:
             image = render_page(case.pdf_path, selected_page_number, dpi, poppler_bin)
             render_cache[selected_page_number] = image
-        crop, bbox = crop_image(image, candidate.rect, page, margin_px=0)
+        crop, bbox = crop_image(
+            image,
+            candidate.rect,
+            page,
+            margin_px=figure_crop_margin_pixels(dpi),
+        )
         stem = f"{index:02d}_{safe_stem(target.label)}"
         crop_path = case_dir / f"{stem}.png"
         overlay_path = case_dir / f"{stem}_overlay.png"
@@ -2688,11 +2319,6 @@ def main() -> None:
         action="store_true",
         help="Remove --out before direct extraction.",
     )
-    parser.add_argument(
-        "--use-mineru-targets",
-        action="store_true",
-        help="Opt into MinerU manifest/content-list figure targets for diagnostics.",
-    )
     parser.add_argument("--limit", type=int, default=10)
     parser.add_argument("--seed", type=int, default=20260624)
     parser.add_argument("--dpi", type=int, default=220)
@@ -2723,8 +2349,6 @@ def main() -> None:
     if args.pdf or args.mineru_dir:
         if not args.pdf:
             parser.error("--pdf is required in direct extraction mode")
-        if args.use_mineru_targets and not args.mineru_dir:
-            parser.error("--mineru-dir is required with --use-mineru-targets")
         if not args.crop_dir:
             parser.error("--crop-dir is required in direct extraction mode")
         raise SystemExit(run_direct_mode(args))
@@ -2766,7 +2390,7 @@ def main() -> None:
                 out_dir,
                 args.poppler_bin,
                 args.dpi,
-                use_mineru_targets=bool(args.use_mineru_targets),
+                use_mineru_semantics=case.mineru_dir.exists(),
             )
         except Exception as error:
             result = {
