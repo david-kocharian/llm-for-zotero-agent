@@ -429,6 +429,41 @@ describe("workflow: note editing mode", function () {
     );
   });
 
+  it("keeps the editing chip after send while the note selection remains", async function () {
+    const selectedSentence = "Persistent note selections stay editable.";
+    fixture = await api.createItemNoteFixture({
+      title: "Workflow Persistent Note Parent",
+      pdfTitle: "Workflow Persistent Note PDF",
+      noteHtml: `<p>${selectedSentence}</p><p>Persistent note body.</p>`,
+    });
+
+    const panel = await api.renderPanelForItem(fixture.noteItemId);
+    await api.selectNoteEditorText(panel.panelId, selectedSentence);
+
+    const firstSend = await api.ask(panel.panelId, "Rewrite selected text");
+    assert.deepEqual(firstSend.selectedTexts, [selectedSentence]);
+    assert.deepEqual(firstSend.selectedTextSources, ["note-edit"]);
+
+    const afterFirstSend = await api.getDiagnostics(panel.panelId);
+    assert.include(
+      afterFirstSend.selectedContextLabels,
+      "Editing",
+      await diagnosticsMessage(api, panel.panelId),
+    );
+
+    const followUpSend = await api.ask(panel.panelId, "Try again");
+    assert.deepEqual(followUpSend.selectedTexts, [selectedSentence]);
+    assert.deepEqual(followUpSend.selectedTextSources, ["note-edit"]);
+
+    await api.selectNoteEditorText(panel.panelId, "");
+    const afterClear = await api.getDiagnostics(panel.panelId);
+    assert.notInclude(
+      afterClear.selectedContextLabels,
+      "Editing",
+      await diagnosticsMessage(api, panel.panelId),
+    );
+  });
+
   it("rehydrates note focus and selected snippet after remount", async function () {
     const selectedSentence = "Remounted note panels keep the editing snippet.";
     fixture = await api.createItemNoteFixture({

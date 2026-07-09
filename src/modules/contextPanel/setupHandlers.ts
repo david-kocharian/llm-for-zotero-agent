@@ -533,6 +533,7 @@ export type ContextPreviewRenderMetrics = {
 };
 
 export type SetupHandlersHooks = {
+  startWithFreshConversation?: boolean;
   onConversationHistoryChanged?: () => void;
   onDefaultContextRendered?: () => void;
   onContextPreviewRendered?: (metrics: ContextPreviewRenderMetrics) => void;
@@ -4429,6 +4430,33 @@ export function setupHandlers(
   resetHistorySearchState = historyLifecycleController.resetHistorySearchState;
   hasPendingTurnDeletionForConversation =
     historyLifecycleController.hasPendingTurnDeletionForConversation;
+
+  const maybeStartWithFreshConversation = () => {
+    const startupBody = body as Element & {
+      __llmFreshStartupConversationHandled?: boolean;
+      __llmFreshStartupConversationInFlight?: boolean;
+    };
+    if (!hooks?.startWithFreshConversation) return;
+    if (isStandalonePanel || isWebChatMode()) return;
+    if (!item || startupBody.__llmFreshStartupConversationHandled) return;
+    startupBody.__llmFreshStartupConversationHandled = true;
+    startupBody.__llmFreshStartupConversationInFlight = true;
+    void (async () => {
+      try {
+        const kind = resolveDisplayConversationKind(item);
+        if (kind === "global") {
+          await createAndSwitchGlobalConversation(true);
+        } else if (kind === "paper") {
+          await createAndSwitchPaperConversation(true);
+        }
+      } catch (err) {
+        ztoolkit.log("LLM: Failed to start fresh startup conversation", err);
+      } finally {
+        delete startupBody.__llmFreshStartupConversationInFlight;
+      }
+    })();
+  };
+  maybeStartWithFreshConversation();
 
   const getModelChoices = () => {
     const choices = isClaudeConversationSystem()

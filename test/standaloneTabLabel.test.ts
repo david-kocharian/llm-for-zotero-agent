@@ -1,5 +1,8 @@
 import { assert } from "chai";
-import { resolveStandalonePaperTabLabel } from "../src/modules/contextPanel/standaloneTabLabel";
+import {
+  resolveStandaloneNoteWindowTitle,
+  resolveStandalonePaperTabLabel,
+} from "../src/modules/contextPanel/standaloneTabLabel";
 
 describe("standaloneTabLabel", function () {
   const globalScope = globalThis as typeof globalThis & {
@@ -119,5 +122,34 @@ describe("standaloneTabLabel", function () {
 
     assert.equal(labelWhileLibraryChat, "Paper chat");
     assert.equal(labelAfterReturning, "Paper chat");
+  });
+
+  it("titles standalone item-note windows with the note kind and note title", function () {
+    assert.equal(
+      resolveStandaloneNoteWindowTitle(attachedNote),
+      "Item note: Draft note",
+    );
+  });
+
+  it("titles standalone standalone-note windows with the note kind and note title", function () {
+    assert.equal(
+      resolveStandaloneNoteWindowTitle(standaloneNote),
+      "Standalone note: Standalone draft",
+    );
+  });
+
+  it("uses Untitled Note for standalone note windows without a title", function () {
+    const untitledNote = {
+      id: 44,
+      isNote: () => true,
+      getDisplayTitle: () => "",
+      getField: () => "",
+      getNoteTitle: () => "",
+    } as unknown as Zotero.Item;
+
+    assert.equal(
+      resolveStandaloneNoteWindowTitle(untitledNote),
+      "Standalone note: Untitled Note",
+    );
   });
 });

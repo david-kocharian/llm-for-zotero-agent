@@ -27,12 +27,19 @@ export function retainPinnedTextState(
   pinnedSelectedTextKeys: Map<number, Set<string>>,
   itemId: number,
 ): void {
+  const contexts = getSelectedTextContextEntries(itemId);
+  const liveNoteEditingContexts = contexts.filter(
+    (context) => context.source === "note-edit",
+  );
   const retained = retainPinnedSelectedTextContexts(
     pinnedSelectedTextKeys,
     itemId,
-    getSelectedTextContextEntries(itemId),
+    contexts.filter((context) => context.source !== "note-edit"),
   );
-  setSelectedTextContextEntries(itemId, retained);
+  setSelectedTextContextEntries(itemId, [
+    ...liveNoteEditingContexts,
+    ...retained,
+  ]);
   setSelectedTextExpandedIndex(itemId, null);
   setNoteContextExpanded(itemId, null);
 }

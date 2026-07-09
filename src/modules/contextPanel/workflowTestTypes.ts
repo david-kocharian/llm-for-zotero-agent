@@ -49,6 +49,7 @@ export type WorkflowTestDiagnostics = {
   historyToggleVisible?: boolean;
   inputValue?: string;
   statusText?: string;
+  messageText?: string;
   lastSend: SendQuestionOptions | null;
   lastFinalRequest: WorkflowTestFinalRequestSnapshot | null;
 };
@@ -98,6 +99,11 @@ export type WorkflowTestApi = {
     noteHtml: string;
   }) => Promise<WorkflowTestStandaloneNoteFixture>;
   renderPanelForItem: (itemId: number) => Promise<WorkflowTestPanel>;
+  renderStartupPanelForItem: (itemId: number) => Promise<WorkflowTestPanel>;
+  seedPanelStoredUserMessage: (
+    panelId: string,
+    text: string,
+  ) => Promise<WorkflowTestDiagnostics>;
   clickPanelSystemToggle: (panelId: string) => Promise<WorkflowTestDiagnostics>;
   selectNoteEditorText: (panelId: string, text: string) => Promise<void>;
   ask: (panelId: string, text: string) => Promise<SendQuestionOptions>;

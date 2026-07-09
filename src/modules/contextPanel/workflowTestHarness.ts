@@ -45,6 +45,7 @@ import {
   type WorkflowTestFinalRequestSnapshot,
 } from "./workflowTestHooks";
 import { dispatchZoteroItemsAsContext } from "./zoteroItemContextMenu";
+import { appendMessage } from "../../utils/chatStore";
 
 type PanelRecord = {
   id: string;
@@ -298,6 +299,35 @@ async function createStandaloneNoteFixture(input: {
 }
 
 async function renderPanelForItem(itemId: number): Promise<WorkflowTestPanel> {
+  return renderPanelForItemInternal(itemId, {
+    startWithFreshConversation: false,
+  });
+}
+
+async function renderStartupPanelForItem(
+  itemId: number,
+): Promise<WorkflowTestPanel> {
+  return renderPanelForItemInternal(itemId, {
+    startWithFreshConversation: true,
+  });
+}
+
+async function waitForStartupFreshConversation(
+  body: HTMLElement,
+): Promise<void> {
+  const startedAt = Date.now();
+  while ((body as any).__llmFreshStartupConversationInFlight) {
+    if (Date.now() - startedAt > 5000) {
+      throw new Error("Timed out waiting for startup fresh conversation");
+    }
+    await Zotero.Promise.delay(25);
+  }
+}
+
+async function renderPanelForItemInternal(
+  itemId: number,
+  options: { startWithFreshConversation: boolean },
+): Promise<WorkflowTestPanel> {
   assertWorkflowTestEnabled();
   const item = Zotero.Items.get(itemId);
   if (!item) throw new Error(`Unable to find Zotero item ${itemId}`);
@@ -308,13 +338,51 @@ async function renderPanelForItem(itemId: number): Promise<WorkflowTestPanel> {
   buildUI(body, item);
   activeContextPanels.set(body, () => item);
   activeContextPanelRawItems.set(body, item);
-  loadedConversationKeys.add(getConversationKey(item));
-  setupHandlers(body, item);
-  await ensureConversationLoaded(item).catch(() => undefined);
-  const contextSnapshot = await resolveContextSourceItemAsync(item);
-  const panel = { id: panelId, body, item, contextSnapshot };
+  if (!options.startWithFreshConversation) {
+    loadedConversationKeys.add(getConversationKey(item));
+  }
+  setupHandlers(
+    body,
+    item,
+    options.startWithFreshConversation
+      ? { startWithFreshConversation: true }
+      : undefined,
+  );
+  if (options.startWithFreshConversation) {
+    await waitForStartupFreshConversation(body);
+  }
+  const mountedItem = activeContextPanels.get(body)?.() || item;
+  await ensureConversationLoaded(mountedItem).catch(() => undefined);
+  const contextSnapshot = await resolveContextSourceItemAsync(mountedItem);
+  const panel = { id: panelId, body, item: mountedItem, contextSnapshot };
   panels.set(panelId, panel);
   return { panelId, itemId, contextSnapshot };
+}
+
+async function seedPanelStoredUserMessage(
+  panelId: string,
+  text: string,
+): Promise<WorkflowTestDiagnostics> {
+  assertWorkflowTestEnabled();
+  const panel = getPanel(panelId);
+  const item = activeContextPanels.get(panel.body)?.() || panel.item;
+  const conversationKey = getConversationKey(item);
+  if (!conversationKey) {
+    throw new Error("Workflow panel has no active conversation key");
+  }
+  const message = {
+    role: "user" as const,
+    text,
+    timestamp: Date.now(),
+  };
+  await appendMessage(conversationKey, message);
+  const existing = chatHistory.get(conversationKey) || [];
+  chatHistory.set(conversationKey, [...existing, message]);
+  loadedConversationKeys.add(conversationKey);
+  panel.item = item;
+  refreshChat(panel.body, item);
+  await Zotero.Promise.delay(100);
+  return getDiagnostics(panelId);
 }
 
 async function selectNoteEditorText(
@@ -700,16 +768,20 @@ async function getDiagnostics(
   const panel = panelId ? panels.get(panelId) : undefined;
   const body = panel?.body;
   const panelRoot = body?.querySelector("#llm-main") as HTMLElement | null;
+  const mountedItem = body
+    ? activeContextPanels.get(body)?.() || panel?.item
+    : panel?.item;
   const historyNewBtn = body?.querySelector(
     "#llm-history-new",
   ) as HTMLElement | null;
   const historyToggleBtn = body?.querySelector(
     "#llm-history-toggle",
   ) as HTMLElement | null;
+  const chatBox = body?.querySelector("#llm-chat-box") as HTMLElement | null;
   return {
     panelId,
-    activeItemId: panel?.item.id,
-    conversationKey: panel?.item ? getConversationKey(panel.item) : undefined,
+    activeItemId: parsePositiveInt(mountedItem?.id),
+    conversationKey: mountedItem ? getConversationKey(mountedItem) : undefined,
     panelConversationKey: parsePositiveInt(panelRoot?.dataset.itemId),
     conversationKind: panelRoot?.dataset.conversationKind || undefined,
     conversationSystem: panelRoot?.dataset.conversationSystem || undefined,
@@ -735,6 +807,7 @@ async function getDiagnostics(
     statusText:
       (body?.querySelector("#llm-status") as HTMLElement | null)?.textContent ||
       undefined,
+    messageText: chatBox?.textContent?.trim() || undefined,
     lastSend,
     lastFinalRequest,
   };
@@ -797,6 +870,8 @@ export function installWorkflowTestHarness(targetAddon: {
     createItemNoteFixture,
     createStandaloneNoteFixture,
     renderPanelForItem,
+    renderStartupPanelForItem,
+    seedPanelStoredUserMessage,
     clickPanelSystemToggle,
     selectNoteEditorText,
     ask,

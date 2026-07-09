@@ -7,6 +7,7 @@ import {
   setSelectedTextContextEntries,
   syncSelectedTextContextForSource,
 } from "../src/modules/contextPanel/contextResolution";
+import { retainPinnedTextState } from "../src/modules/contextPanel/contexts/textContextState";
 import { resolvePaperContextRefFromAttachment } from "../src/modules/contextPanel/paperAttribution";
 
 describe("contextResolution note-edit sync", function () {
@@ -73,6 +74,24 @@ describe("contextResolution note-edit sync", function () {
         "Tighten this wording",
         "note-edit",
       ),
+    );
+  });
+
+  it("retains live note-edit context while clearing unpinned selected text", function () {
+    setSelectedTextContextEntries(itemId, [
+      { text: "Live note sentence", source: "note-edit" },
+      { text: "PDF snippet", source: "pdf", pageIndex: 1, pageLabel: "2" },
+      { text: "Model snippet", source: "model" },
+    ]);
+
+    retainPinnedTextState(new Map(), itemId);
+
+    assert.deepEqual(
+      getSelectedTextContextEntries(itemId).map((entry) => ({
+        text: entry.text,
+        source: entry.source,
+      })),
+      [{ text: "Live note sentence", source: "note-edit" }],
     );
   });
 

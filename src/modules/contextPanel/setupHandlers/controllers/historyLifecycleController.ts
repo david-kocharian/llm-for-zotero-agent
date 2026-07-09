@@ -11,6 +11,7 @@ import {
   conversationRepository,
   type ConversationCatalogEntry,
 } from "../../../../core/conversations/repository";
+import { resolveFreshConversationDraft } from "../../freshConversationDraft";
 import {
   evaluateConversationForkEligibility,
   type ConversationForkEligibilityReason,
@@ -159,11 +160,7 @@ import {
   type HistorySearchResult,
 } from "./historySearchController";
 import { createHistorySearchPopupController } from "./historySearchPopupController";
-import {
-  collapseDuplicateReusableConversationDrafts,
-  findReusableConversationDraft,
-  isReusableConversationDraft,
-} from "../../standaloneConversationResolution";
+import { collapseDuplicateReusableConversationDrafts } from "../../standaloneConversationResolution";
 import { primeHistoryNavigationMode } from "../../historyNavigationModeSync";
 
 type HistorySearchIndexFallbackStatus = Pick<
@@ -3345,7 +3342,7 @@ export function createHistoryLifecycleController(
   const createAndSwitchGlobalConversation = async (
     options: boolean | CreateConversationOptions = false,
   ): Promise<boolean> => {
-    const { forceFresh, excludeConversationKey } =
+    const { excludeConversationKey } =
       normalizeCreateConversationOptions(options);
     if (!item) return false;
     closeHistoryNewMenu();
@@ -3392,83 +3389,21 @@ export function createHistoryLifecycleController(
       ? Math.floor(currentCandidate)
       : 0;
 
-    if (
-      normalizedCurrentCandidate > 0 &&
-      normalizedCurrentCandidate !== excludeConversationKey
-    ) {
-      try {
-        const currentSummary = await conversationRepository.getCatalogEntry({
-          system,
-          kind: "global",
-          conversationKey: normalizedCurrentCandidate,
-        });
-        if (
-          isReusableConversationDraft({
-            forceFresh,
-            summary: currentSummary,
-            kind: "global",
-            libraryID,
-          })
-        ) {
-          targetConversationKey = normalizedCurrentCandidate;
-          reuseReason = "active-draft";
-        }
-      } catch (err) {
-        ztoolkit.log(
-          "LLM: Failed to inspect active global candidate for draft reuse",
-          err,
-        );
-      }
-    }
-
-    if (targetConversationKey <= 0) {
-      try {
-        const summaries = await conversationRepository.listCatalogEntries({
-          system,
-          kind: "global",
-          libraryID,
-          limit: GLOBAL_HISTORY_LIMIT,
-          includeEmpty: true,
-        });
-        const latestEmpty = findReusableConversationDraft({
-          forceFresh,
-          summaries,
-          kind: "global",
-          libraryID,
-        });
-        const latestEmptyKey = Number(latestEmpty?.conversationKey || 0);
-        if (
-          Number.isFinite(latestEmptyKey) &&
-          latestEmptyKey > 0 &&
-          Math.floor(latestEmptyKey) !== excludeConversationKey
-        ) {
-          targetConversationKey = Math.floor(latestEmptyKey);
-          reuseReason = "latest-draft";
-        }
-      } catch (err) {
-        ztoolkit.log(
-          "LLM: Failed to load latest empty global conversation",
-          err,
-        );
-      }
-    }
-
-    if (targetConversationKey <= 0) {
-      try {
-        targetConversationKey = Number(
-          (
-            await conversationRepository.createCatalogEntry({
-              system,
-              kind: "global",
-              libraryID,
-            })
-          )?.conversationKey || 0,
-        );
-      } catch (err) {
-        ztoolkit.log("LLM: Failed to create new global conversation", err);
-      }
-      reuseReason = null;
-    }
+    const freshDraft = await resolveFreshConversationDraft({
+      system,
+      kind: "global",
+      libraryID,
+      currentConversationKey: normalizedCurrentCandidate,
+      excludeConversationKey,
+      limit: GLOBAL_HISTORY_LIMIT,
+    });
+    targetConversationKey = freshDraft.conversationKey;
+    reuseReason =
+      freshDraft.source === "current"
+        ? "active-draft"
+        : freshDraft.source === "listed"
+          ? "latest-draft"
+          : null;
 
     if (
       Math.floor(Number(targetConversationKey || 0)) === excludeConversationKey
@@ -3522,7 +3457,7 @@ export function createHistoryLifecycleController(
   const createAndSwitchPaperConversation = async (
     options: boolean | CreateConversationOptions = false,
   ): Promise<boolean> => {
-    const { forceFresh, excludeConversationKey } =
+    const { excludeConversationKey } =
       normalizeCreateConversationOptions(options);
     if (!item) return false;
     closeHistoryNewMenu();
@@ -3548,89 +3483,21 @@ export function createHistoryLifecycleController(
 
     const system = getConversationSystem();
     const currentKey = Number(getConversationKey(item) || 0);
-    if (
-      Number.isFinite(currentKey) &&
-      currentKey > 0 &&
-      Math.floor(currentKey) !== excludeConversationKey
-    ) {
-      try {
-        const currentSummary = await conversationRepository.getCatalogEntry({
-          system,
-          kind: "paper",
-          conversationKey: Math.floor(currentKey),
-        });
-        if (
-          isReusableConversationDraft({
-            forceFresh,
-            summary: currentSummary,
-            kind: "paper",
-            paperItemID,
-          })
-        ) {
-          targetConversationKey = Math.floor(currentKey);
-          reuseReason = "active-draft";
-        }
-      } catch (err) {
-        ztoolkit.log(
-          "LLM: Failed to inspect active paper conversation for draft reuse",
-          err,
-        );
-      }
-    }
-
-    if (targetConversationKey <= 0) {
-      try {
-        const summaries = await conversationRepository.listCatalogEntries({
-          system,
-          kind: "paper",
-          libraryID,
-          paperItemID,
-          limit: 50,
-          includeEmpty: true,
-        });
-        const emptyEntry = findReusableConversationDraft({
-          forceFresh,
-          summaries,
-          kind: "paper",
-          paperItemID,
-        });
-        const emptyConversationKey = Number(emptyEntry?.conversationKey || 0);
-        if (
-          Number.isFinite(emptyConversationKey) &&
-          emptyConversationKey > 0 &&
-          Math.floor(emptyConversationKey) !== excludeConversationKey
-        ) {
-          targetConversationKey = Math.floor(emptyConversationKey);
-          reuseReason = "existing-draft";
-        }
-      } catch (err) {
-        ztoolkit.log(
-          "LLM: Failed to list paper conversations for draft reuse",
-          err,
-        );
-      }
-    }
-
-    if (targetConversationKey <= 0) {
-      let createdSummary: ConversationCatalogEntry | null = null;
-      try {
-        createdSummary = await conversationRepository.createCatalogEntry({
-          system,
-          kind: "paper",
-          libraryID,
-          paperItemID,
-        });
-      } catch (err) {
-        ztoolkit.log("LLM: Failed to create new paper conversation", err);
-      }
-      if (!createdSummary?.conversationKey) {
-        if (status)
-          setStatus(status, t("Failed to create paper chat"), "error");
-        return false;
-      }
-      targetConversationKey = createdSummary.conversationKey;
-      reuseReason = null;
-    }
+    const freshDraft = await resolveFreshConversationDraft({
+      system,
+      kind: "paper",
+      libraryID,
+      paperItemID,
+      currentConversationKey: currentKey,
+      excludeConversationKey,
+    });
+    targetConversationKey = freshDraft.conversationKey;
+    reuseReason =
+      freshDraft.source === "current"
+        ? "active-draft"
+        : freshDraft.source === "listed"
+          ? "existing-draft"
+          : null;
     if (
       Math.floor(Number(targetConversationKey || 0)) === excludeConversationKey
     ) {

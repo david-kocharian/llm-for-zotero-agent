@@ -59,6 +59,7 @@ import {
   resolvePanelContextLifecycleState,
   appendSelectedTextContextForItem,
   applySelectedTextPreview,
+  getSelectedTextContextEntries,
 } from "./contextResolution";
 import {
   clearNoteEditingSelectedText,
@@ -388,12 +389,13 @@ export function registerReaderContextPanel() {
           void retainClaudeRuntimeForBody(body, resolvedState.item);
           // Attach handlers synchronously so buttons are
           // immediately interactive — don't gate on ensureConversationLoaded.
-          setupHandlers(body, item);
+          setupHandlers(body, item, { startWithFreshConversation: true });
           // Flag: onAsyncRender can skip the duplicate buildUI + setupHandlers.
           (body as any).__llmSyncRendered = true;
           // Defer conversation loading and chat rendering
           void (async () => {
             try {
+              if ((body as any).__llmFreshStartupConversationInFlight) return;
               if (resolvedState.item)
                 await ensureConversationLoaded(resolvedState.item);
               if (isStandaloneWindowActive()) return;
@@ -471,6 +473,7 @@ export function registerReaderContextPanel() {
       }
 
       if (resolvedItem) {
+        if ((body as any).__llmFreshStartupConversationInFlight) return;
         await ensureConversationLoaded(resolvedItem);
       }
       // Bail if a newer render has started while we were awaiting,
@@ -485,7 +488,7 @@ export function registerReaderContextPanel() {
       if (renderGeneration !== thisGeneration) return;
       if (isStandaloneWindowActive()) return;
       if (!syncAlreadyRendered && !contextRefreshOnly) {
-        setupHandlers(body, item);
+        setupHandlers(body, item, { startWithFreshConversation: true });
       }
       if (contextRefreshOnly) {
         const refreshContextSource = (body as any)
@@ -1266,6 +1269,43 @@ function getActiveNotePanelConversationSystems(
   return systems;
 }
 
+function hasCurrentNoteEditingSelectedText(params: {
+  conversationKey: number;
+  noteId: number;
+  text: string;
+}): boolean {
+  const conversationKey = Math.floor(Number(params.conversationKey || 0));
+  const noteId = Math.floor(Number(params.noteId || 0));
+  const text = params.text;
+  if (!conversationKey || !noteId || !text) return false;
+  return getSelectedTextContextEntries(conversationKey).some((entry) => {
+    if (entry.source !== "note-edit" || entry.text !== text) return false;
+    const entryNoteId = Math.floor(Number(entry.noteContext?.noteItemId || 0));
+    return !entryNoteId || entryNoteId === noteId;
+  });
+}
+
+function areCurrentNoteEditingSelectionsSynced(params: {
+  noteItem: Zotero.Item | null | undefined;
+  noteId: number;
+  text: string;
+  systems: ConversationSystem[];
+}): boolean {
+  if (!params.noteItem || !params.text) return true;
+  const targetSystems = params.systems.length ? params.systems : [null];
+  return targetSystems.every((system) => {
+    const conversationKey = getNoteFocusConversationKey(
+      params.noteItem,
+      system,
+    );
+    return hasCurrentNoteEditingSelectedText({
+      conversationKey: conversationKey || 0,
+      noteId: params.noteId,
+      text: params.text,
+    });
+  });
+}
+
 function refreshTrackedNoteEditingSelection(
   win: MainWindowWithNoteEditingTracker,
 ): void {
@@ -1352,7 +1392,17 @@ function refreshTrackedNoteEditingSelection(
     tracker.lastNoteFocusConversationKey === nextNoteFocusConversationKey &&
     tracker.lastSelectionText === nextSelectionText
   ) {
-    return;
+    if (
+      !nextSelectionText ||
+      areCurrentNoteEditingSelectionsSynced({
+        noteItem,
+        noteId: nextNoteId,
+        text: nextSelectionText,
+        systems: panelSystems,
+      })
+    ) {
+      return;
+    }
   }
 
   if (
