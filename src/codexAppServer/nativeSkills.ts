@@ -1,6 +1,7 @@
 import type {
   ChatAttachment,
   CollectionContextRef,
+  NoteContextRef,
   PaperContextRef,
   SelectedTextSource,
   TagContextRef,
@@ -49,6 +50,7 @@ export type CodexNativeSkillContext = {
   selectedTexts?: string[];
   selectedTextSources?: SelectedTextSource[];
   selectedTextPaperContexts?: (PaperContextRef | undefined)[];
+  selectedTextNoteContexts?: (NoteContextRef | undefined)[];
   selectedPaperContexts?: PaperContextRef[];
   fullTextPaperContexts?: PaperContextRef[];
   pinnedPaperContexts?: PaperContextRef[];
@@ -89,14 +91,16 @@ function normalizeTextForSignature(value: string): string {
 }
 
 function hasNonAsciiText(value: string): boolean {
-  return /[^\x00-\x7F]/.test(value);
+  return Array.from(value).some((char) => char.charCodeAt(0) > 0x7f);
 }
 
 function uniqueInSkillOrder(
   ids: ReadonlySet<string>,
   allSkills: ReadonlyArray<AgentSkill>,
 ): string[] {
-  return allSkills.filter((skill) => ids.has(skill.id)).map((skill) => skill.id);
+  return allSkills
+    .filter((skill) => ids.has(skill.id))
+    .map((skill) => skill.id);
 }
 
 function requestHasNoteSelection(request: AgentRuntimeRequest): boolean {
@@ -154,14 +158,14 @@ function isAmbiguousSkillCandidate(request: AgentRuntimeRequest): boolean {
   if (!text || text.length > 1200) return false;
   const hasWorkflowContext = Boolean(
     request.activeNoteContext ||
-      request.selectedTexts?.length ||
-      request.selectedPaperContexts?.length ||
-      request.fullTextPaperContexts?.length ||
-      request.pinnedPaperContexts?.length ||
-      request.selectedCollectionContexts?.length ||
-      request.selectedTagContexts?.length ||
-      request.screenshots?.length ||
-      request.attachments?.length,
+    request.selectedTexts?.length ||
+    request.selectedPaperContexts?.length ||
+    request.fullTextPaperContexts?.length ||
+    request.pinnedPaperContexts?.length ||
+    request.selectedCollectionContexts?.length ||
+    request.selectedTagContexts?.length ||
+    request.screenshots?.length ||
+    request.attachments?.length,
   );
   if (!hasWorkflowContext) return false;
   if (SKILL_CANDIDATE_PATTERN.test(text)) return true;
@@ -180,11 +184,14 @@ export function shouldUseCodexNativeSkillClassifierFallback(params: {
   if (params.deterministicSkillIds?.length) return false;
   const mode = params.mode || getCodexNativeSkillRoutingModePref();
   if (mode === "deterministic") return false;
-  if (mode === "classifier") return Boolean((params.request.userText || "").trim());
+  if (mode === "classifier")
+    return Boolean((params.request.userText || "").trim());
   return isAmbiguousSkillCandidate(params.request);
 }
 
-function buildSkillVersionSignature(allSkills: ReadonlyArray<AgentSkill>): string {
+function buildSkillVersionSignature(
+  allSkills: ReadonlyArray<AgentSkill>,
+): string {
   return allSkills
     .map((skill) =>
       [
@@ -192,7 +199,9 @@ function buildSkillVersionSignature(allSkills: ReadonlyArray<AgentSkill>): strin
         skill.version,
         skill.source,
         normalizeTextForSignature(skill.description || ""),
-        skill.patterns.map((pattern) => `${pattern.source}/${pattern.flags}`).join("|"),
+        skill.patterns
+          .map((pattern) => `${pattern.source}/${pattern.flags}`)
+          .join("|"),
       ].join(":"),
     )
     .sort()
@@ -220,7 +229,9 @@ export function buildCodexNativeSkillClassifierCacheKey(params: {
       tagCount: request.selectedTagContexts?.length || 0,
       screenshotCount: request.screenshots?.length || 0,
       attachmentTypes: Array.from(
-        new Set((request.attachments || []).map((attachment) => attachment.category)),
+        new Set(
+          (request.attachments || []).map((attachment) => attachment.category),
+        ),
       ).sort(),
     },
     skills: buildSkillVersionSignature(allSkills),
@@ -286,6 +297,9 @@ export function buildCodexNativeSkillRequest(
     selectedTextSources: normalizeList(skillContext?.selectedTextSources),
     selectedTextPaperContexts: normalizeList(
       skillContext?.selectedTextPaperContexts,
+    ),
+    selectedTextNoteContexts: normalizeList(
+      skillContext?.selectedTextNoteContexts,
     ),
     selectedPaperContexts:
       normalizeList(skillContext?.selectedPaperContexts) || scopePapers,
@@ -389,7 +403,11 @@ export async function resolveCodexNativeSkills(
   }
 
   const classify = params.detectSkillIntentImpl || detectSkillIntent;
-  const classifiedSkillIds = await classify(request, [...allSkills], params.signal);
+  const classifiedSkillIds = await classify(
+    request,
+    [...allSkills],
+    params.signal,
+  );
   const matchedSkillIds = getMatchedSkillIds(request, classifiedSkillIds);
   setClassifierCache(cacheKey, matchedSkillIds);
   return {

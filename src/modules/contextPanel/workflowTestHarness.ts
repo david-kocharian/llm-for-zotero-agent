@@ -13,7 +13,9 @@ import type {
   WorkflowTestAttachmentFixture,
   WorkflowTestDiagnostics,
   WorkflowTestFixture,
+  WorkflowTestNoteFixture,
   WorkflowTestPanel,
+  WorkflowTestStandaloneNoteFixture,
   WorkflowTestStandaloneDiagnostics,
 } from "./workflowTestTypes";
 import type { Message } from "./types";
@@ -23,7 +25,11 @@ import {
   getConversationKey,
   refreshChat,
 } from "./chat";
-import { resolveContextSourceItemAsync } from "./contextResolution";
+import {
+  applySelectedTextPreview,
+  resolveContextSourceItemAsync,
+} from "./contextResolution";
+import { syncNoteEditingSelectedText } from "./noteEditing/selectionController";
 import {
   decorateAssistantCitationLinks,
   renderQuoteCitationPlaceholders,
@@ -247,6 +253,50 @@ async function createStandaloneAttachmentFixture(input: {
   };
 }
 
+async function createItemNoteFixture(input: {
+  title: string;
+  pdfTitle: string;
+  noteHtml: string;
+}): Promise<WorkflowTestNoteFixture> {
+  assertWorkflowTestEnabled();
+  const fixture = await createPaperWithPdfFixture({
+    title: input.title,
+    pdfTitle: input.pdfTitle,
+  });
+  const note = new Zotero.Item("note");
+  note.libraryID = Zotero.Libraries.userLibraryID;
+  note.parentID = fixture.parentItemId;
+  note.setNote(input.noteHtml);
+  const savedNoteItemId = await note.saveTx();
+  const noteItemId = Math.floor(Number(savedNoteItemId));
+  if (!Number.isFinite(noteItemId) || noteItemId <= 0) {
+    throw new Error("Failed to save workflow test note");
+  }
+  return {
+    ...fixture,
+    noteItemId,
+    noteText: input.noteHtml,
+  };
+}
+
+async function createStandaloneNoteFixture(input: {
+  noteHtml: string;
+}): Promise<WorkflowTestStandaloneNoteFixture> {
+  assertWorkflowTestEnabled();
+  const note = new Zotero.Item("note");
+  note.libraryID = Zotero.Libraries.userLibraryID;
+  note.setNote(input.noteHtml);
+  const savedNoteItemId = await note.saveTx();
+  const noteItemId = Math.floor(Number(savedNoteItemId));
+  if (!Number.isFinite(noteItemId) || noteItemId <= 0) {
+    throw new Error("Failed to save workflow test standalone note");
+  }
+  return {
+    noteItemId,
+    noteText: input.noteHtml,
+  };
+}
+
 async function renderPanelForItem(itemId: number): Promise<WorkflowTestPanel> {
   assertWorkflowTestEnabled();
   const item = Zotero.Items.get(itemId);
@@ -265,6 +315,41 @@ async function renderPanelForItem(itemId: number): Promise<WorkflowTestPanel> {
   const panel = { id: panelId, body, item, contextSnapshot };
   panels.set(panelId, panel);
   return { panelId, itemId, contextSnapshot };
+}
+
+async function selectNoteEditorText(
+  panelId: string,
+  text: string,
+): Promise<void> {
+  assertWorkflowTestEnabled();
+  const panel = getPanel(panelId);
+  const synced = syncNoteEditingSelectedText({
+    noteItem: panel.item,
+    text,
+  });
+  if (!synced) throw new Error("Workflow panel item is not a note");
+  applySelectedTextPreview(panel.body, synced.conversationKey);
+}
+
+async function clickPanelSystemToggle(
+  panelId: string,
+): Promise<WorkflowTestDiagnostics> {
+  assertWorkflowTestEnabled();
+  const panel = getPanel(panelId);
+  const button = panel.body.querySelector(
+    "#llm-claude-system-toggle",
+  ) as HTMLButtonElement | null;
+  if (!button) throw new Error("System toggle button was not rendered");
+  const eventCtor = panel.body.ownerDocument.defaultView?.MouseEvent;
+  if (eventCtor) {
+    button.dispatchEvent(
+      new eventCtor("click", { bubbles: true, cancelable: true }),
+    );
+  } else {
+    button.click();
+  }
+  await Zotero.Promise.delay(350);
+  return getDiagnostics(panelId);
 }
 
 async function ask(
@@ -455,7 +540,7 @@ function readStandaloneDiagnostics(): WorkflowTestStandaloneDiagnostics {
         : null;
   return {
     activeTab: activeTabName,
-    conversationKey: parsePositiveInt(panelRoot?.dataset.itemId),
+    conversationKey: mountedItem ? getConversationKey(mountedItem) : undefined,
     activeItemId: parsePositiveInt(mountedItem?.id),
     rawContextItemId:
       parsePositiveInt(rawItem?.id) ||
@@ -466,6 +551,9 @@ function readStandaloneDiagnostics(): WorkflowTestStandaloneDiagnostics {
     titleText: titleEl?.textContent?.trim() || undefined,
     chipText: Array.from(
       contentArea?.querySelectorAll(".llm-paper-context-chip-text") || [],
+    ).map((node) => ((node as Element).textContent || "").trim()),
+    selectedContextLabels: Array.from(
+      contentArea?.querySelectorAll(".llm-selected-context-meta") || [],
     ).map((node) => ((node as Element).textContent || "").trim()),
     messageText: chatBox?.textContent?.trim() || undefined,
     paperTabText: paperTab?.textContent?.trim() || undefined,
@@ -611,13 +699,36 @@ async function getDiagnostics(
 ): Promise<WorkflowTestDiagnostics> {
   const panel = panelId ? panels.get(panelId) : undefined;
   const body = panel?.body;
+  const panelRoot = body?.querySelector("#llm-main") as HTMLElement | null;
+  const historyNewBtn = body?.querySelector(
+    "#llm-history-new",
+  ) as HTMLElement | null;
+  const historyToggleBtn = body?.querySelector(
+    "#llm-history-toggle",
+  ) as HTMLElement | null;
   return {
     panelId,
     activeItemId: panel?.item.id,
+    conversationKey: panel?.item ? getConversationKey(panel.item) : undefined,
+    panelConversationKey: parsePositiveInt(panelRoot?.dataset.itemId),
+    conversationKind: panelRoot?.dataset.conversationKind || undefined,
+    conversationSystem: panelRoot?.dataset.conversationSystem || undefined,
+    noteId: parsePositiveInt(panelRoot?.dataset.noteId),
+    noteKind: panelRoot?.dataset.noteKind || undefined,
+    noteParentItemId: parsePositiveInt(panelRoot?.dataset.noteParentItemId),
     contextSnapshot: panel?.contextSnapshot,
     chipText: Array.from(
       body?.querySelectorAll(".llm-paper-context-chip-text") || [],
     ).map((node) => ((node as Element).textContent || "").trim()),
+    selectedContextLabels: Array.from(
+      body?.querySelectorAll(".llm-selected-context-meta") || [],
+    ).map((node) => ((node as Element).textContent || "").trim()),
+    historyNewVisible: historyNewBtn
+      ? historyNewBtn.style.display !== "none"
+      : false,
+    historyToggleVisible: historyToggleBtn
+      ? historyToggleBtn.style.display !== "none"
+      : false,
     inputValue: (
       body?.querySelector("#llm-input") as HTMLTextAreaElement | null
     )?.value,
@@ -649,7 +760,11 @@ async function reset(): Promise<void> {
 }
 
 async function cleanupFixture(
-  fixture: WorkflowTestFixture | WorkflowTestAttachmentFixture,
+  fixture:
+    | WorkflowTestFixture
+    | WorkflowTestAttachmentFixture
+    | WorkflowTestNoteFixture
+    | WorkflowTestStandaloneNoteFixture,
 ): Promise<void> {
   assertWorkflowTestEnabled();
   if ("attachmentItemId" in fixture) {
@@ -657,9 +772,18 @@ async function cleanupFixture(
     await removePathIfPossible(fixture.tempPath);
     return;
   }
-  await trashItemIfPossible(fixture.pdfAttachmentId);
-  await trashItemIfPossible(fixture.parentItemId);
-  await removePathIfPossible(fixture.tempPdfPath);
+  if ("noteItemId" in fixture) {
+    await trashItemIfPossible(fixture.noteItemId);
+  }
+  if ("pdfAttachmentId" in fixture) {
+    await trashItemIfPossible(fixture.pdfAttachmentId);
+  }
+  if ("parentItemId" in fixture) {
+    await trashItemIfPossible(fixture.parentItemId);
+  }
+  if ("tempPdfPath" in fixture) {
+    await removePathIfPossible(fixture.tempPdfPath);
+  }
 }
 
 export function installWorkflowTestHarness(targetAddon: {
@@ -670,7 +794,11 @@ export function installWorkflowTestHarness(targetAddon: {
     reset,
     createPaperWithPdfFixture,
     createStandaloneAttachmentFixture,
+    createItemNoteFixture,
+    createStandaloneNoteFixture,
     renderPanelForItem,
+    clickPanelSystemToggle,
+    selectNoteEditorText,
     ask,
     renderAssistantForPanel,
     openStandaloneForItem,

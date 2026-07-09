@@ -3,6 +3,7 @@ import type {
   ActiveNoteContext,
   ChatAttachment,
   CollectionContextRef,
+  NoteContextRef,
   PaperContextRef,
   SelectedTextSource,
   TagContextRef,
@@ -20,6 +21,7 @@ export type TurnContextEnvelopeInput = Pick<
   | "selectedCollectionContexts"
   | "selectedPaperContexts"
   | "selectedTagContexts"
+  | "selectedTextNoteContexts"
   | "selectedTextPaperContexts"
   | "selectedTextSources"
   | "selectedTexts"
@@ -46,6 +48,13 @@ export type TurnContextEnvelope = {
   selectedTextCount: number;
   selectedTextSources: SelectedTextSource[];
   selectedTextPaperTitles: string[];
+  selectedTextNotes: Array<{
+    index: number;
+    noteId?: number;
+    title: string;
+    noteKind: NoteContextRef["noteKind"];
+    parentItemId?: number;
+  }>;
   screenshotCount: number;
   attachments: ChatAttachment[];
   activeNote?: Pick<
@@ -147,7 +156,12 @@ function normalizeTags(tags: TagContextRef[] | undefined): TagContextRef[] {
     ].join(":");
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push({ ...tag, name, normalizedName: normalizedName || undefined, libraryID });
+    out.push({
+      ...tag,
+      name,
+      normalizedName: normalizedName || undefined,
+      libraryID,
+    });
   }
   return out;
 }
@@ -177,6 +191,20 @@ export function buildTurnContextEnvelope(
   const selectedTextPaperTitles = (input.selectedTextPaperContexts || [])
     .map((paper) => normalizeText(paper?.title))
     .filter(Boolean);
+  const selectedTextNotes: TurnContextEnvelope["selectedTextNotes"] = [];
+  (input.selectedTextNoteContexts || []).forEach((note, index) => {
+    if (!note) return;
+    const title = normalizeText(note.title);
+    const noteId = normalizeNumber(note.noteItemId);
+    const parentItemId = normalizeNumber(note.parentItemId);
+    selectedTextNotes.push({
+      index: index + 1,
+      ...(noteId ? { noteId } : {}),
+      title: title || (noteId ? `Note ${noteId}` : "Zotero note"),
+      noteKind: note.noteKind,
+      ...(parentItemId ? { parentItemId } : {}),
+    });
+  });
   const activeNote = input.activeNoteContext
     ? {
         noteId: input.activeNoteContext.noteId,
@@ -198,6 +226,7 @@ export function buildTurnContextEnvelope(
     selectedTextCount: selectedTexts.length,
     selectedTextSources,
     selectedTextPaperTitles,
+    selectedTextNotes,
     screenshotCount: (input.screenshots || []).filter(Boolean).length,
     attachments: (input.attachments || []).filter(Boolean),
     activeNote,
@@ -280,18 +309,34 @@ export function renderTurnContextEnvelopeForModel(
         `Selected text papers: ${envelope.selectedTextPaperTitles.join("; ")}`,
       );
     }
+    if (envelope.selectedTextNotes.length) {
+      lines.push(
+        `Selected text notes: ${envelope.selectedTextNotes
+          .map((note) =>
+            renderFields([
+              ["index", note.index],
+              ["title", note.title],
+              ["noteId", note.noteId],
+              ["noteKind", note.noteKind],
+              ["parentItemId", note.parentItemId],
+            ]),
+          )
+          .join(" | ")}`,
+      );
+    }
   }
 
   if (envelope.attachments.length) {
     lines.push(
       `Attachments: ${envelope.attachments
-        .map((attachment, index) =>
-          `${index + 1}. ${renderFields([
-            ["name", attachment.name],
-            ["category", attachment.category],
-            ["mimeType", attachment.mimeType],
-            ["sizeBytes", attachment.sizeBytes],
-          ])}`,
+        .map(
+          (attachment, index) =>
+            `${index + 1}. ${renderFields([
+              ["name", attachment.name],
+              ["category", attachment.category],
+              ["mimeType", attachment.mimeType],
+              ["sizeBytes", attachment.sizeBytes],
+            ])}`,
         )
         .join(" | ")}`,
     );
@@ -316,7 +361,7 @@ export function renderTurnContextEnvelopeForModel(
   return [
     "Zotero context for this turn:",
     ...lines,
-    "Resolve references like \"these papers\", \"both papers\", \"this collection\", \"this tag\", \"the selected library\", and ordinal phrases like \"the second paper\" from the context listed above. Do not infer missing resource identity from old thread history or local memory when the current turn lists resources.",
+    'Resolve references like "these papers", "both papers", "this collection", "this tag", "the selected library", and ordinal phrases like "the second paper" from the context listed above. Do not infer missing resource identity from old thread history or local memory when the current turn lists resources.',
   ].join("\n");
 }
 

@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
 import { createElement } from "../../utils/domHelpers";
 import { t } from "../../utils/i18n";
 import { revealLocalPath } from "../../utils/revealLocalPath";
@@ -314,7 +315,7 @@ import {
   resolveInitialPanelItemState,
   resolveActiveLibraryID,
   resolvePreferredConversationSystem,
-  resolveNoteConversationSystemSwitch,
+  resolveNoteFocusSystemSwitch,
   resolveShortcutMode,
 } from "./portalScope";
 import { getPanelDomRefs } from "./setupHandlers/domRefs";
@@ -900,9 +901,6 @@ export function setupHandlers(
     );
   };
   const getPreferredTargetSystem = (): ConversationSystem => {
-    if (isNoteSession()) {
-      return isCodexModeAvailable() ? "codex" : "upstream";
-    }
     const preferred = getConversationSystemPref();
     if (preferred === "codex" && isCodexModeAvailable()) return "codex";
     if (preferred === "claude_code" && isClaudeModeAvailable())
@@ -1021,10 +1019,7 @@ export function setupHandlers(
     const targetSystem = getPreferredTargetSystem();
     const webChatActive = isWebChatModeActive();
     const available =
-      !webChatActive &&
-      (isNoteSession()
-        ? targetSystem === "codex" || isCodexConversationSystem()
-        : isClaudeModeAvailable() || isCodexModeAvailable());
+      !webChatActive && (isClaudeModeAvailable() || isCodexModeAvailable());
     claudeSystemToggleBtn.style.display = available ? "inline-flex" : "none";
     if (!available) return;
     const active = isRuntimeConversationSystem();
@@ -1058,7 +1053,7 @@ export function setupHandlers(
   };
   let claudeWarmupInFlight: Promise<void> | null = null;
   const warmClaudeModeCaches = () => {
-    if (!isClaudeModeAvailable() || isNoteSession()) return;
+    if (!isClaudeModeAvailable()) return;
     if (claudeWarmupInFlight) return;
     claudeWarmupInFlight = initAgentSubsystem()
       .then((coreRuntime) =>
@@ -1138,16 +1133,21 @@ export function setupHandlers(
     if (!item) return;
     const noteSession = resolveCurrentNoteSession();
     if (noteSession) {
-      const resolvedNextSystem = resolveNoteConversationSystemSwitch({
+      const resolvedNextSystem = resolveNoteFocusSystemSwitch({
         nextSystem,
         codexAvailable: isCodexModeAvailable(),
+        claudeAvailable: isClaudeModeAvailable(),
       });
       if (!resolvedNextSystem) return;
       if (resolvedNextSystem === getConversationSystem()) return;
       persistDraftInputForCurrentConversation();
+      setConversationSystemPref(resolvedNextSystem);
       currentConversationSystem = resolvedNextSystem;
-      panelRoot.dataset.conversationSystem = resolvedNextSystem;
+      syncConversationIdentity();
       syncQueuedFollowUpRegistration();
+      if (resolvedNextSystem === "claude_code") {
+        warmClaudeModeCaches();
+      }
       updateRuntimeModeButton();
       updateClaudeSystemToggle();
       await ensureConversationLoaded(item);
@@ -1325,7 +1325,8 @@ export function setupHandlers(
     const mode: "global" | "paper" | null = item
       ? resolveDisplayConversationKind(item)
       : null;
-    panelRoot.dataset.conversationKind = mode || "";
+    panelRoot.dataset.conversationKind =
+      noteSession?.conversationKind || mode || "";
     currentConversationSystem = resolvePreferredConversationSystem({
       item,
       preferredSystem: currentConversationSystem,
@@ -1347,10 +1348,10 @@ export function setupHandlers(
       ? `${noteSession.parentItemId}`
       : "";
     if (historyNewBtn) {
-      historyNewBtn.style.display = noteSession ? "none" : "";
+      historyNewBtn.style.display = "";
     }
     if (historyToggleBtn) {
-      historyToggleBtn.style.display = noteSession ? "none" : "";
+      historyToggleBtn.style.display = "";
     }
     if (item && libraryID > 0 && mode && !noteSession) {
       if (isClaudeConversationSystem()) {
@@ -1441,10 +1442,12 @@ export function setupHandlers(
       // [webchat] Don't overwrite — applyWebChatModeUI manages the chip in webchat mode
       if (!modeChipBtn.querySelector(".llm-webchat-dot")) {
         const currentLabel = noteSession
-          ? "Note editing"
+          ? noteSession.noteKind === "item"
+            ? t("Item note")
+            : t("Standalone note")
           : mode === "global"
-            ? "Library chat"
-            : "Paper chat";
+            ? t("Library chat")
+            : t("Paper chat");
         modeChipBtn.textContent = currentLabel;
         modeChipBtn.title = noteSession
           ? currentLabel
@@ -5787,9 +5790,7 @@ export function setupHandlers(
     // isWebChatMode may not be ready during initial render
   }
   restoreDraftInputForCurrentConversation();
-  if (isNoteSession()) {
-    void refreshGlobalHistoryHeader();
-  } else if (isWebChatMode()) {
+  if (isWebChatMode()) {
     initializeWebChatConversationForCurrentItem();
     refreshChatPreservingScroll();
   } else if (isPaperMode()) {

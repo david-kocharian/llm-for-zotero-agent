@@ -1,12 +1,16 @@
 import { assert } from "chai";
 import { buildDefaultClaudePaperConversationKey } from "../src/claudeCode/constants";
 import { createClaudePaperPortalItem } from "../src/claudeCode/portal";
-import { buildDefaultCodexPaperConversationKey } from "../src/codexAppServer/constants";
+import {
+  buildDefaultCodexGlobalConversationKey,
+  buildDefaultCodexPaperConversationKey,
+} from "../src/codexAppServer/constants";
 import { createCodexPaperPortalItem } from "../src/codexAppServer/portal";
 import {
   provisionConversationScopeForItem,
   resolveConversationStorageSystemForItem,
 } from "../src/modules/contextPanel/conversationProvisioning";
+import { buildDefaultConversationKey } from "../src/shared/conversationKeySpace";
 import { validateConversationScope } from "../src/shared/conversationRegistry";
 
 type QueryRecord = {
@@ -27,7 +31,7 @@ type RuntimeConversationRow = {
 
 type RegistryRow = RuntimeConversationRow & {
   conversationID: string;
-  system: "claude_code" | "codex";
+  system: "upstream" | "claude_code" | "codex";
   profileSignature: string;
   valid: number;
   invalidReason?: string | null;
@@ -76,6 +80,46 @@ function installProvisioningDb(): {
             : [];
         }
         if (
+          sql.includes("FROM llm_for_zotero_paper_conversations pc") &&
+          sql.includes("WHERE pc.conversation_key = ?")
+        ) {
+          const row = conversations.get(Number(queryParams[0]));
+          return row?.kind === "paper"
+            ? [
+                {
+                  conversationID: row.conversationID,
+                  conversationKey: row.conversationKey,
+                  libraryID: row.libraryID,
+                  paperItemID: row.paperItemID,
+                  sessionVersion: 1,
+                  createdAt: row.createdAt,
+                  title: row.title,
+                  lastActivityAt: row.updatedAt,
+                  userTurnCount: 0,
+                },
+              ]
+            : [];
+        }
+        if (
+          sql.includes("FROM llm_for_zotero_global_conversations gc") &&
+          sql.includes("WHERE gc.conversation_key = ?")
+        ) {
+          const row = conversations.get(Number(queryParams[0]));
+          return row?.kind === "global"
+            ? [
+                {
+                  conversationID: row.conversationID,
+                  conversationKey: row.conversationKey,
+                  libraryID: row.libraryID,
+                  createdAt: row.createdAt,
+                  title: row.title,
+                  lastActivityAt: row.updatedAt,
+                  userTurnCount: 0,
+                },
+              ]
+            : [];
+        }
+        if (
           sql.includes("FROM llm_for_zotero_conversation_registry") &&
           sql.includes("WHERE legacy_conversation_key = ?")
         ) {
@@ -83,6 +127,7 @@ function installProvisioningDb(): {
           return row
             ? [
                 {
+                  conversationID: row.conversationID,
                   conversationKey: row.conversationKey,
                   system: row.system,
                   kind: row.kind,
@@ -104,11 +149,14 @@ function installProvisioningDb(): {
             profileSignature,
             libraryID,
             paperItemID,
+            createdAt,
+            updatedAt,
+            title,
           ] = queryParams;
           registry.set(Number(conversationKey), {
             conversationKey: Number(conversationKey),
             conversationID: String(conversationID),
-            system: system as "claude_code" | "codex",
+            system: system as "upstream" | "claude_code" | "codex",
             kind: kind as "global" | "paper",
             profileSignature: String(profileSignature),
             libraryID: Number(libraryID),
@@ -116,9 +164,9 @@ function installProvisioningDb(): {
               Number.isFinite(Number(paperItemID)) && Number(paperItemID) > 0
                 ? Number(paperItemID)
                 : null,
-            createdAt: Number(queryParams[7]),
-            updatedAt: Number(queryParams[8]),
-            title: typeof queryParams[9] === "string" ? queryParams[9] : null,
+            createdAt: Number(createdAt),
+            updatedAt: Number(updatedAt),
+            title: typeof title === "string" ? title : null,
             valid: 1,
           });
           return [];
@@ -135,6 +183,7 @@ function installProvisioningDb(): {
             paperItemID,
             createdAt,
             updatedAt,
+            _lastActivityAt,
             title,
           ] = queryParams;
           conversations.set(Number(conversationKey), {
@@ -149,6 +198,58 @@ function installProvisioningDb(): {
             createdAt: Number(createdAt),
             updatedAt: Number(updatedAt),
             title: typeof title === "string" ? title : null,
+          });
+          return [];
+        }
+        if (
+          sql.includes(
+            "INSERT OR IGNORE INTO llm_for_zotero_paper_conversations",
+          )
+        ) {
+          const [
+            conversationID,
+            conversationKey,
+            libraryID,
+            paperItemID,
+            createdAt,
+            lastActivityAt,
+          ] = queryParams;
+          conversations.set(Number(conversationKey), {
+            conversationID: String(conversationID),
+            conversationKey: Number(conversationKey),
+            libraryID: Number(libraryID),
+            kind: "paper",
+            paperItemID:
+              Number.isFinite(Number(paperItemID)) && Number(paperItemID) > 0
+                ? Number(paperItemID)
+                : null,
+            createdAt: Number(createdAt),
+            updatedAt: Number(lastActivityAt),
+            title: null,
+          });
+          return [];
+        }
+        if (
+          sql.includes(
+            "INSERT OR IGNORE INTO llm_for_zotero_global_conversations",
+          )
+        ) {
+          const [
+            conversationID,
+            conversationKey,
+            libraryID,
+            createdAt,
+            lastActivityAt,
+          ] = queryParams;
+          conversations.set(Number(conversationKey), {
+            conversationID: String(conversationID),
+            conversationKey: Number(conversationKey),
+            libraryID: Number(libraryID),
+            kind: "global",
+            paperItemID: null,
+            createdAt: Number(createdAt),
+            updatedAt: Number(lastActivityAt),
+            title: null,
           });
           return [];
         }
@@ -171,7 +272,11 @@ function installProvisioningDb(): {
 }
 
 describe("conversation provisioning", function () {
-  const originalZotero = globalThis.Zotero;
+  let originalZotero: typeof Zotero | undefined;
+
+  before(function () {
+    originalZotero = globalThis.Zotero;
+  });
 
   afterEach(function () {
     (globalThis as typeof globalThis & { Zotero?: typeof Zotero }).Zotero =
@@ -179,7 +284,7 @@ describe("conversation provisioning", function () {
   });
 
   it("registers a fresh Codex default paper conversation before validation", async function () {
-    const { registry, restore } = installProvisioningDb();
+    const { queries, registry, restore } = installProvisioningDb();
     try {
       const paperItem = {
         id: 3340,
@@ -217,7 +322,8 @@ describe("conversation provisioning", function () {
   });
 
   it("registers a fresh Claude default paper conversation before validation", async function () {
-    const { registry, restore } = installProvisioningDb();
+    const { queries, conversations, registry, restore } =
+      installProvisioningDb();
     try {
       const paperItem = {
         id: 3340,
@@ -286,7 +392,7 @@ describe("conversation provisioning", function () {
     }
   });
 
-  it("keeps active note transcripts in upstream storage even with Codex runtime", function () {
+  it("routes active note storage through the requested runtime system", function () {
     const { restore } = installProvisioningDb();
     const noteItem = {
       id: 55,
@@ -303,8 +409,117 @@ describe("conversation provisioning", function () {
         item: noteItem,
         conversationSystem: "codex",
       }),
-      "upstream",
+      "codex",
+    );
+    assert.equal(
+      resolveConversationStorageSystemForItem({
+        item: noteItem,
+        conversationSystem: "claude_code",
+      }),
+      "claude_code",
     );
     restore();
+  });
+
+  it("provisions a standalone note through the Codex library conversation", async function () {
+    const { queries, conversations, registry, restore } =
+      installProvisioningDb();
+    try {
+      const noteItem = {
+        id: 55,
+        libraryID: 1,
+        parentID: undefined,
+        isAttachment: () => false,
+        isRegularItem: () => false,
+        isNote: () => true,
+        getNoteTitle: () => "Draft note",
+      } as unknown as Zotero.Item;
+      globalThis.Zotero.Prefs = {
+        get: (key: string) => {
+          if (String(key).endsWith("enableCodexAppServerMode")) return true;
+          if (String(key).endsWith("conversationSystem")) return "codex";
+          return "";
+        },
+      } as unknown as typeof Zotero.Prefs;
+
+      const provisioned = await provisionConversationScopeForItem({
+        item: noteItem,
+        conversationSystem: "codex",
+      });
+      assert.equal(
+        provisioned,
+        true,
+        JSON.stringify({
+          queries: queries.map((entry) => entry.sql.slice(0, 120)),
+          conversations: Array.from(conversations.entries()),
+          registry: Array.from(registry.entries()),
+        }),
+      );
+      const conversationKey = buildDefaultCodexGlobalConversationKey(1);
+      assert.equal(registry.get(conversationKey)?.kind, "global");
+      assert.equal(
+        await validateConversationScope({
+          conversationKey,
+          system: "codex",
+          kind: "global",
+          libraryID: 1,
+        }),
+        true,
+      );
+    } finally {
+      restore();
+    }
+  });
+
+  it("provisions an item note through the upstream parent paper conversation", async function () {
+    const { registry, restore } = installProvisioningDb();
+    try {
+      const parentItem = {
+        id: 3340,
+        libraryID: 1,
+        parentID: undefined,
+        isAttachment: () => false,
+        isRegularItem: () => true,
+        getField: (field: string) => (field === "title" ? "Parent paper" : ""),
+      } as unknown as Zotero.Item;
+      const noteItem = {
+        id: 55,
+        libraryID: 1,
+        parentID: 3340,
+        isAttachment: () => false,
+        isRegularItem: () => false,
+        isNote: () => true,
+        getNoteTitle: () => "Draft note",
+      } as unknown as Zotero.Item;
+      globalThis.Zotero.Items.get = (itemID: number) =>
+        itemID === 3340 ? parentItem : itemID === 55 ? noteItem : null;
+
+      assert.equal(
+        await provisionConversationScopeForItem({
+          item: noteItem,
+          conversationSystem: "upstream",
+        }),
+        true,
+      );
+      const conversationKey = buildDefaultConversationKey(
+        "upstream",
+        "paper",
+        3340,
+      );
+      assert.equal(registry.get(conversationKey)?.kind, "paper");
+      assert.equal(registry.get(conversationKey)?.paperItemID, 3340);
+      assert.equal(
+        await validateConversationScope({
+          conversationKey,
+          system: "upstream",
+          kind: "paper",
+          libraryID: 1,
+          paperItemID: 3340,
+        }),
+        true,
+      );
+    } finally {
+      restore();
+    }
   });
 });

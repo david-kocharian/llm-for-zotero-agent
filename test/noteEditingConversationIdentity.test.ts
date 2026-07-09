@@ -1,0 +1,89 @@
+import { assert } from "chai";
+import { getConversationKey } from "../src/modules/contextPanel/conversationIdentity";
+import {
+  resolveActiveNoteSession,
+  resolveDisplayConversationKind,
+} from "../src/modules/contextPanel/portalScope";
+import { buildDefaultConversationKey } from "../src/shared/conversationKeySpace";
+
+describe("note editing conversation identity", function () {
+  const globalScope = globalThis as typeof globalThis & {
+    Zotero?: Record<string, unknown>;
+  };
+  let originalZotero: Record<string, unknown> | undefined;
+
+  before(function () {
+    originalZotero = globalScope.Zotero;
+  });
+
+  afterEach(function () {
+    globalScope.Zotero = originalZotero;
+  });
+
+  it("routes item notes through parent paper chat identity", function () {
+    const parentItem = {
+      id: 3612,
+      libraryID: 1,
+      isRegularItem: () => true,
+      isAttachment: () => false,
+      getField: (field: string) => (field === "title" ? "Parent paper" : ""),
+    } as unknown as Zotero.Item;
+    const noteItem = {
+      id: 3703,
+      libraryID: 1,
+      parentID: 3612,
+      key: "NOTE3703",
+      isAttachment: () => false,
+      isRegularItem: () => false,
+      isNote: () => true,
+      getNoteTitle: () => "Figure-by-Figure Analysis",
+    } as unknown as Zotero.Item;
+    globalScope.Zotero = {
+      Items: {
+        get: (itemID: number) =>
+          itemID === 3612 ? parentItem : itemID === 3703 ? noteItem : null,
+      },
+      Prefs: {
+        get: (key: string) =>
+          String(key).endsWith("conversationSystem") ? "upstream" : "",
+      },
+    };
+
+    const session = resolveActiveNoteSession(noteItem);
+
+    assert.equal(resolveDisplayConversationKind(noteItem), "paper");
+    assert.equal(session?.conversationKind, "paper");
+    assert.equal(getConversationKey(noteItem), 3612);
+  });
+
+  it("routes standalone notes through library chat identity", function () {
+    const noteItem = {
+      id: 3704,
+      libraryID: 1,
+      parentID: undefined,
+      key: "NOTE3704",
+      isAttachment: () => false,
+      isRegularItem: () => false,
+      isNote: () => true,
+      getNoteTitle: () => "Standalone Analysis",
+    } as unknown as Zotero.Item;
+    globalScope.Zotero = {
+      Items: {
+        get: (itemID: number) => (itemID === 3704 ? noteItem : null),
+      },
+      Prefs: {
+        get: (key: string) =>
+          String(key).endsWith("conversationSystem") ? "upstream" : "",
+      },
+    };
+
+    const session = resolveActiveNoteSession(noteItem);
+
+    assert.equal(resolveDisplayConversationKind(noteItem), "global");
+    assert.equal(session?.conversationKind, "global");
+    assert.equal(
+      getConversationKey(noteItem),
+      buildDefaultConversationKey("upstream", "global", 1),
+    );
+  });
+});

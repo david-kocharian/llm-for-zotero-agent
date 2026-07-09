@@ -18,8 +18,10 @@ import { getConversationKey } from "./conversationIdentity";
 import {
   resolveActiveNoteSession,
   resolveConversationBaseItem,
+  resolveConversationKeyForNoteFocus,
   resolveConversationSystemForItem,
   resolveDisplayConversationKind,
+  resolvePreferredConversationSystem,
 } from "./portalScope";
 
 type ConversationKind = "global" | "paper";
@@ -47,13 +49,21 @@ function sameRuntimeScope(
   return true;
 }
 
-function resolveProvisionScope(item: Zotero.Item): {
+function resolveProvisionScope(
+  item: Zotero.Item,
+  system: ConversationSystem,
+): {
   conversationKey: number;
   kind: ConversationKind;
   libraryID: number;
   paperItemID?: number;
 } | null {
-  const conversationKey = normalizePositiveInt(getConversationKey(item));
+  const noteScope = resolveActiveNoteSession(item);
+  const conversationKey = normalizePositiveInt(
+    noteScope
+      ? resolveConversationKeyForNoteFocus(item, { conversationSystem: system })
+      : getConversationKey(item),
+  );
   const kind = resolveDisplayConversationKind(item);
   if (!conversationKey || !kind) return null;
   if (kind === "global") {
@@ -84,11 +94,22 @@ export function resolveConversationStorageSystemForItem(params: {
   item: Zotero.Item;
   conversationSystem?: ConversationSystem | null;
 }): ConversationSystem | null {
-  const conversationKey = normalizePositiveInt(getConversationKey(params.item));
+  const noteScope = resolveActiveNoteSession(params.item);
+  const requestedSystem =
+    params.conversationSystem ||
+    resolveConversationSystemForItem(params.item) ||
+    (noteScope
+      ? resolvePreferredConversationSystem({ item: params.item })
+      : null) ||
+    "upstream";
+  const conversationKey = normalizePositiveInt(
+    noteScope
+      ? resolveConversationKeyForNoteFocus(params.item, {
+          conversationSystem: requestedSystem,
+        })
+      : getConversationKey(params.item),
+  );
   if (!conversationKey) return null;
-  if (resolveActiveNoteSession(params.item)) {
-    return "upstream";
-  }
   const itemSystem = resolveConversationSystemForItem(params.item);
   return resolveConversationStorageSystem({
     conversationKey,
@@ -188,9 +209,10 @@ export async function provisionConversationScopeForItem(params: {
   item: Zotero.Item;
   conversationSystem?: ConversationSystem | null;
 }): Promise<boolean> {
-  const scope = resolveProvisionScope(params.item);
-  if (!scope) return false;
   const storageSystem = resolveConversationStorageSystemForItem(params);
+  if (!storageSystem) return false;
+  const scope = resolveProvisionScope(params.item, storageSystem);
+  if (!scope) return false;
   try {
     if (storageSystem === "claude_code") {
       return await provisionClaudeConversation(scope);

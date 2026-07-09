@@ -293,7 +293,10 @@ function mergedRangeLength(
 }
 
 function hasNonAsciiText(value: string): boolean {
-  return /[^\x00-\x7F]/.test(value);
+  for (let index = 0; index < value.length; index += 1) {
+    if (value.charCodeAt(index) > 0x7f) return true;
+  }
+  return false;
 }
 
 function isSubstantiveAutoTrustedQuoteText(value: string): boolean {
@@ -913,7 +916,7 @@ function hasStableQuoteEvidenceScope(input: {
 }): boolean {
   return Boolean(
     normalizePositiveInt(input.contextItemId) ||
-      normalizePositiveInt(input.itemId),
+    normalizePositiveInt(input.itemId),
   );
 }
 
@@ -1946,6 +1949,7 @@ function finalizeSourceBackedQuoteBlock(params: {
   citationRemainder?: string;
   quoteCitations: QuoteCitation[];
   sourceIndex: QuoteSourceIndex;
+  fenceUnverifiedBlockquotes?: boolean;
 }): {
   markdown: string;
   quoteCitation?: QuoteCitation;
@@ -1981,12 +1985,14 @@ function finalizeSourceBackedQuoteBlock(params: {
   if (!isQuoteWorthySourceText(quoteText)) {
     return {
       markdown: `${
-        hasCanonicalSourceLabel
-          ? formatPlainQuoteWithCitationMarkdown(
-              quoteText,
-              params.citationLabel,
-            )
-          : formatPlainQuoteMarkdown(quoteText)
+        params.fenceUnverifiedBlockquotes
+          ? formatFencedTextMarkdown(quoteText)
+          : hasCanonicalSourceLabel
+            ? formatPlainQuoteWithCitationMarkdown(
+                quoteText,
+                params.citationLabel,
+              )
+            : formatPlainQuoteMarkdown(quoteText)
       }${citationRemainder ? `\n\n${citationRemainder}` : ""}`,
       consumedCitation: true,
     };
@@ -1998,6 +2004,14 @@ function finalizeSourceBackedQuoteBlock(params: {
         citationRemainder ? `\n\n${citationRemainder}` : ""
       }`,
       quoteCitation,
+      consumedCitation: true,
+    };
+  }
+  if (params.fenceUnverifiedBlockquotes) {
+    return {
+      markdown: `${formatFencedTextMarkdown(quoteText)}${
+        citationRemainder ? `\n\n${citationRemainder}` : ""
+      }`,
       consumedCitation: true,
     };
   }
@@ -2074,6 +2088,7 @@ export function finalizeAssistantQuoteCitations(params: {
   sourceIndex?: QuoteSourceIndex | undefined | null;
   requireVerifiedQuoteCitations?: boolean;
   requireBodyEvidenceQuotes?: boolean;
+  fenceUnverifiedBlockquotes?: boolean;
 }): { markdown: string; quoteCitations: QuoteCitation[] } {
   const sourceIndex =
     params.sourceIndex ||
@@ -2171,6 +2186,7 @@ export function finalizeAssistantQuoteCitations(params: {
           citationLabel: trailingLabel.label,
           quoteCitations,
           sourceIndex: finalizedSourceIndex,
+          fenceUnverifiedBlockquotes: params.fenceUnverifiedBlockquotes,
         });
         if (finalized.quoteCitation) {
           quoteCitations = mergeQuoteCitations(quoteCitations, [
@@ -2199,6 +2215,7 @@ export function finalizeAssistantQuoteCitations(params: {
         citationRemainder: leadingLabel.remainder,
         quoteCitations,
         sourceIndex: finalizedSourceIndex,
+        fenceUnverifiedBlockquotes: params.fenceUnverifiedBlockquotes,
       });
       if (finalized.quoteCitation) {
         quoteCitations = mergeQuoteCitations(quoteCitations, [
@@ -2235,17 +2252,29 @@ export function finalizeAssistantQuoteCitations(params: {
       sourceIndex: finalizedSourceIndex,
     });
     if (unverifiedQuoteMarkdown) {
-      out.push(unverifiedQuoteMarkdown);
+      out.push(
+        params.fenceUnverifiedBlockquotes
+          ? formatFencedTextMarkdown(quoteText)
+          : unverifiedQuoteMarkdown,
+      );
       index -= 1;
       continue;
     }
     if (quoteText && quoteText !== originalQuoteText) {
-      out.push(formatPlainQuoteMarkdown(quoteText));
+      out.push(
+        params.fenceUnverifiedBlockquotes
+          ? formatFencedTextMarkdown(quoteText)
+          : formatPlainQuoteMarkdown(quoteText),
+      );
       index -= 1;
       continue;
     }
 
-    out.push(...lines.slice(blockStart, index));
+    if (params.fenceUnverifiedBlockquotes && quoteText) {
+      out.push(formatFencedTextMarkdown(quoteText));
+    } else {
+      out.push(...lines.slice(blockStart, index));
+    }
     index -= 1;
   }
   const finalizedMarkdown = replaceQuoteCitationPlaceholdersForMarkdown(

@@ -8,6 +8,7 @@ import type {
   PaperContentSourceMode,
   AdvancedModelParams,
   ActiveNoteSession,
+  ActiveNoteContext,
   PaperContextRef,
   QuoteCitation,
   NoteContextRef,
@@ -30,6 +31,7 @@ export type {
   PaperContentSourceMode,
   AdvancedModelParams,
   ActiveNoteSession,
+  ActiveNoteContext,
   PaperContextRef,
   QuoteCitation,
   NoteContextRef,
@@ -408,6 +410,12 @@ export type SendQuestionOptions = {
   selectedTextSources?: SelectedTextSource[];
   selectedTextPaperContexts?: (PaperContextRef | undefined)[];
   selectedTextNoteContexts?: (NoteContextRef | undefined)[];
+  activeNoteContext?: ActiveNoteContext;
+  conversationKey?: number;
+  conversationKind?: "global" | "paper";
+  scopeType?: string;
+  scopeId?: string;
+  scopeLabel?: string;
   paperContexts?: PaperContextRef[];
   fullTextPaperContexts?: PaperContextRef[];
   selectedCollectionContexts?: CollectionContextRef[];

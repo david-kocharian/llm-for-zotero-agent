@@ -114,6 +114,7 @@ import { extractManagedBlobHash } from "../../attachmentStorage";
 import {
   getLastUsedPaperConversationKey,
   getLockedGlobalConversationKey,
+  setLastUsedPaperConversationKey,
   setLockedGlobalConversationKey,
   buildPaperStateKey,
 } from "../../prefHelpers";
@@ -918,8 +919,8 @@ export function createHistoryLifecycleController(
 
   const createHistorySearchEntryFromIndexMatch = (
     match: ConversationSearchIndexMatch,
-  ): ConversationHistoryEntry | null =>
-    createHistorySearchEntry({
+  ): ConversationHistoryEntry | null => {
+    return createHistorySearchEntry({
       kind: match.kind,
       conversationID: match.conversationID,
       conversationKey: match.conversationKey,
@@ -930,6 +931,7 @@ export function createHistoryLifecycleController(
       userTurnCount: match.userTurnCount,
       paperItemID: match.paperItemID,
     });
+  };
 
   const cacheHistorySearchDocument = (
     entry: ConversationHistoryEntry,
@@ -1621,28 +1623,6 @@ export function createHistoryLifecycleController(
       notifyConversationHistoryChanged();
       return;
     }
-    if (isNoteSession()) {
-      titleStatic.style.display = "none";
-      historyBar.style.display = "inline-flex";
-      if (historyNewBtn) {
-        historyNewBtn.style.display = "none";
-        historyNewBtn.setAttribute("aria-expanded", "false");
-      }
-      if (historyToggleBtn) {
-        historyToggleBtn.style.display = "none";
-        historyToggleBtn.setAttribute("aria-expanded", "false");
-      }
-      if (historyMenu) {
-        historyMenu.style.display = "none";
-        historyMenu.textContent = "";
-      }
-      latestConversationHistory = [];
-      closeHistoryNewMenu();
-      closeHistoryMenu();
-      hideHistoryUndoToast();
-      notifyConversationHistoryChanged();
-      return;
-    }
     const libraryID = getCurrentLibraryID();
     const requestId = ++globalHistoryLoadSeq;
     const paperEntries: ConversationHistoryEntry[] = [];
@@ -2162,7 +2142,8 @@ export function createHistoryLifecycleController(
   const switchGlobalConversation = async (
     nextConversationKey: number,
   ): Promise<boolean> => {
-    if (!item || isNoteSession()) return false;
+    if (!item) return false;
+    const noteFocusItem = isNoteSession() ? item : null;
     persistDraftInputForCurrentConversation();
     const libraryID = getCurrentLibraryID();
     if (!libraryID) return false;
@@ -2199,7 +2180,9 @@ export function createHistoryLifecycleController(
         : system === "codex"
           ? createCodexGlobalPortalItem(libraryID, normalizedConversationKey)
           : createGlobalPortalItem(libraryID, normalizedConversationKey);
-    setCurrentItem(nextItem as any);
+    if (!noteFocusItem) {
+      setCurrentItem(nextItem as any);
+    }
     syncConversationIdentity();
     void renderShortcuts(body, item as Zotero.Item, resolveShortcutMode(item));
     if (system === "claude_code") {
@@ -2217,6 +2200,11 @@ export function createHistoryLifecycleController(
         normalizedConversationKey,
       );
       setLastUsedCodexGlobalConversationKey(
+        libraryID,
+        normalizedConversationKey,
+      );
+    } else {
+      activeGlobalConversationByLibrary.set(
         libraryID,
         normalizedConversationKey,
       );
@@ -2251,7 +2239,8 @@ export function createHistoryLifecycleController(
       allowedCatalogPaperItemID?: number;
     },
   ): Promise<boolean> => {
-    if (!item || isNoteSession()) return false;
+    if (!item) return false;
+    const noteFocusItem = isNoteSession() ? item : null;
     persistDraftInputForCurrentConversation();
     const paperItem = options?.paperItem || resolveCurrentPaperBaseItem();
     if (!paperItem) return false;
@@ -2344,24 +2333,29 @@ export function createHistoryLifecycleController(
     if (!targetSummary) return false;
 
     const resolvedConversationKey = Math.floor(targetSummary.conversationKey);
-    if (system === "claude_code") {
-      setCurrentItem(
-        createClaudePaperPortalItem(paperItem, resolvedConversationKey) as any,
-      );
-    } else if (system === "codex") {
-      setCurrentItem(
-        createCodexPaperPortalItem(paperItem, resolvedConversationKey) as any,
-      );
-    } else {
-      const nextItem =
-        resolvedConversationKey === paperItemID
-          ? paperItem
-          : createPaperPortalItem(
-              paperItem,
-              resolvedConversationKey,
-              targetSummary.sessionVersion || 1,
-            );
-      setCurrentItem(nextItem as any);
+    if (!noteFocusItem) {
+      if (system === "claude_code") {
+        setCurrentItem(
+          createClaudePaperPortalItem(
+            paperItem,
+            resolvedConversationKey,
+          ) as any,
+        );
+      } else if (system === "codex") {
+        setCurrentItem(
+          createCodexPaperPortalItem(paperItem, resolvedConversationKey) as any,
+        );
+      } else {
+        const nextItem =
+          resolvedConversationKey === paperItemID
+            ? paperItem
+            : createPaperPortalItem(
+                paperItem,
+                resolvedConversationKey,
+                targetSummary.sessionVersion || 1,
+              );
+        setCurrentItem(nextItem as any);
+      }
     }
     syncConversationIdentity();
     refreshAutoLoadedPaperContextForCurrentItem();
@@ -2396,6 +2390,16 @@ export function createHistoryLifecycleController(
         resolvedConversationKey,
       );
       setLastUsedCodexPaperConversationKey(
+        libraryID,
+        paperItemID,
+        resolvedConversationKey,
+      );
+    } else {
+      activePaperConversationByPaper.set(
+        buildPaperStateKey(libraryID, paperItemID),
+        resolvedConversationKey,
+      );
+      setLastUsedPaperConversationKey(
         libraryID,
         paperItemID,
         resolvedConversationKey,
@@ -3343,7 +3347,7 @@ export function createHistoryLifecycleController(
   ): Promise<boolean> => {
     const { forceFresh, excludeConversationKey } =
       normalizeCreateConversationOptions(options);
-    if (!item || isNoteSession()) return false;
+    if (!item) return false;
     closeHistoryNewMenu();
     const libraryID = getCurrentLibraryID();
     if (!libraryID) {
@@ -3520,7 +3524,7 @@ export function createHistoryLifecycleController(
   ): Promise<boolean> => {
     const { forceFresh, excludeConversationKey } =
       normalizeCreateConversationOptions(options);
-    if (!item || isNoteSession()) return false;
+    if (!item) return false;
     closeHistoryNewMenu();
     const paperItem = resolveCurrentPaperBaseItem();
     if (!paperItem) {
@@ -3696,7 +3700,7 @@ export function createHistoryLifecycleController(
     historyNewBtn.addEventListener("click", (e: Event) => {
       e.preventDefault();
       e.stopPropagation();
-      if (!item || isNoteSession()) return;
+      if (!item) return;
       // Allow creating new conversations even if another is generating.
       closeModelMenu();
       closeReasoningMenu();
@@ -3853,7 +3857,7 @@ export function createHistoryLifecycleController(
     historyToggleBtn.addEventListener("click", (e: Event) => {
       e.preventDefault();
       e.stopPropagation();
-      if (!item || isNoteSession()) return;
+      if (!item) return;
       // Allow history navigation even during generation.
       void (async () => {
         closeModelMenu();

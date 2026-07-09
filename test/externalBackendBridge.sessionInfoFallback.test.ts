@@ -65,8 +65,9 @@ describe("external bridge session-info fallback", function () {
   });
 
   it("preserves raised paper context caps in the bridge envelope", function () {
-    const papers = Array.from({ length: MAX_SELECTED_PAPER_CONTEXTS + 5 }, (_, index) =>
-      paper(index + 1),
+    const papers = Array.from(
+      { length: MAX_SELECTED_PAPER_CONTEXTS + 5 },
+      (_, index) => paper(index + 1),
     );
     const envelope = buildExternalBridgeContextEnvelopeForTests({
       conversationKey: 1,
@@ -132,6 +133,45 @@ describe("external bridge session-info fallback", function () {
     ]);
     assert.equal(envelope.selectedPaperCount, 0);
     assert.lengthOf(envelope.selectedPapers, 0);
+  });
+
+  it("preserves selected note-edit context in the bridge envelope", function () {
+    const envelope = buildExternalBridgeContextEnvelopeForTests({
+      conversationKey: 3_700_003_703,
+      mode: "agent",
+      userText: "help me rewrite this sentence",
+      conversationKind: "paper",
+      activeItemId: 3612,
+      selectedTexts: ["Panel A illustrates the stability problem."],
+      selectedTextSources: ["note-edit"],
+      selectedTextNoteContexts: [
+        {
+          libraryID: 1,
+          noteItemKey: "NOTEKEY",
+          noteItemId: 3703,
+          parentItemId: 3612,
+          noteKind: "item",
+          title: "Ajemian et al., 2013 - MD",
+        },
+      ],
+      activeNoteContext: {
+        noteId: 3703,
+        title: "Ajemian et al., 2013 - MD",
+        noteKind: "item",
+        parentItemId: 3612,
+        noteText: "Panel A illustrates the stability problem.",
+      },
+    });
+
+    assert.equal(envelope.selectedTextCount, 1);
+    assert.deepEqual(envelope.selectedTexts[0].noteContext, {
+      noteItemId: 3703,
+      title: "Ajemian et al., 2013 - MD",
+      noteKind: "item",
+      parentItemId: 3612,
+    });
+    assert.equal(envelope.activeNote?.noteId, 3703);
+    assert.include(envelope.visibleContext || "", "Selected text notes:");
   });
 
   it("keeps bridge context signatures stable for selected tag order", function () {

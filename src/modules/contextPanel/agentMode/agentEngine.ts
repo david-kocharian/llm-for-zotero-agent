@@ -363,6 +363,7 @@ type BuildAgentRuntimeRequestParamsShape = {
   selectedTexts: string[];
   selectedTextSources?: SelectedTextSource[];
   selectedTextPaperContexts?: (PaperContextRef | undefined)[];
+  selectedTextNoteContexts?: (NoteContextRef | undefined)[];
   paperContexts: PaperContextRef[];
   fullTextPaperContexts: PaperContextRef[];
   citationPaperContexts?: PaperContextRef[];
@@ -950,6 +951,7 @@ export async function sendAgentTurn(
     selectedTexts: selectedTextsForMessage,
     selectedTextSources: selectedTextSourcesForMessage,
     selectedTextPaperContexts: selectedTextPaperContextsForMessage,
+    selectedTextNoteContexts: selectedTextNoteContextsForMessage,
     paperContexts: paperContextsForMessage,
     fullTextPaperContexts: fullTextPaperContextsForMessage,
     citationPaperContexts: userMessage.citationPaperContexts,
@@ -1654,6 +1656,7 @@ export async function retryAgentTurn(
     selectedTexts: selectedTextsRaw,
     selectedTextSources: selectedTextSourcesRaw,
     selectedTextPaperContexts: selectedTextPaperContextsRaw,
+    selectedTextNoteContexts: retryPair.userMessage.selectedTextNoteContexts,
     paperContexts,
     fullTextPaperContexts,
     citationPaperContexts: retryPair.userMessage.citationPaperContexts,

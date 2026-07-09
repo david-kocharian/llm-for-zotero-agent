@@ -16,6 +16,7 @@ import {
   buildNotesDirectoryConfigSection,
   getNotesDirectoryNickname,
 } from "../../utils/notesDirectoryConfig";
+import { NOTE_EDITING_QUOTE_BLOCK_GUIDANCE } from "../../shared/quoteGuidance";
 import { buildRuntimePlatformGuidanceText } from "../../utils/runtimePlatform";
 import { formatPaperSourceLabel } from "../../modules/contextPanel/paperAttribution";
 import {
@@ -134,6 +135,7 @@ function buildFullUserMessage(
     contextLines.push(
       `Current note content for this turn:\n"""\n${note.noteText}\n"""`,
     );
+    contextLines.push(NOTE_EDITING_QUOTE_BLOCK_GUIDANCE);
     if (note.noteHtml) {
       contextLines.push(`Original note HTML:\n"""\n${note.noteHtml}\n"""`);
     }
@@ -158,10 +160,24 @@ function buildFullUserMessage(
               : source === "note-edit"
                 ? "active note editing focus"
                 : "PDF reader";
+        const noteContext = request.selectedTextNoteContexts?.[index];
         const sourceMeta =
           source === "pdf" && paperContext
             ? `, paper=${paperContext.title}, source_label=${formatPaperSourceLabel(paperContext)}`
-            : "";
+            : source === "note-edit" && noteContext
+              ? [
+                  `, note=${noteContext.title}`,
+                  noteContext.noteItemId
+                    ? `note_id=${noteContext.noteItemId}`
+                    : "",
+                  `note_kind=${noteContext.noteKind}`,
+                  noteContext.parentItemId
+                    ? `parent_item_id=${noteContext.parentItemId}`
+                    : "",
+                ]
+                  .filter(Boolean)
+                  .join(", ")
+              : "";
         return `Selected text ${index + 1} [source=${sourceLabel}${sourceMeta}]:\n"""\n${entry}\n"""`;
       })
       .join("\n\n");

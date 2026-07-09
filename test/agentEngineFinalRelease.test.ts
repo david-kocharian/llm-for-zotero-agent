@@ -103,6 +103,9 @@ function createDeps(params: {
       apiKey: requestParams.effectiveRequestConfig.apiKey,
       authMode: requestParams.effectiveRequestConfig.authMode,
       providerProtocol: requestParams.effectiveRequestConfig.providerProtocol,
+      selectedTexts: requestParams.selectedTexts,
+      selectedTextSources: requestParams.selectedTextSources,
+      selectedTextNoteContexts: requestParams.selectedTextNoteContexts,
       history: requestParams.history,
     }),
     resolveEffectiveRequestConfig: () => ({
@@ -188,5 +191,56 @@ describe("agent engine final UI release", function () {
     assert.deepInclude(pendingWrites, [conversationKey, 0]);
     assert.deepInclude(idleRestores, [conversationKey, 77]);
     assert.include(statuses, "Ready");
+  });
+
+  it("forwards note-edit selected text contexts into the runtime request", async function () {
+    const conversationKey = 3703;
+    const noteContext = {
+      libraryID: 1,
+      noteItemKey: "NOTEKEY",
+      noteItemId: 3703,
+      parentItemId: 3612,
+      noteKind: "item" as const,
+      title: "Ajemian et al., 2013 - MD",
+    };
+    let capturedRequest: AgentRuntimeRequest | null = null;
+    const runtime = {
+      getCapabilities: () => ({
+        streaming: true,
+        toolCalls: true,
+        multimodal: false,
+      }),
+      runTurn: async (params: { request: AgentRuntimeRequest }) => {
+        capturedRequest = params.request;
+        return {
+          kind: "completed",
+          runId: "run-note-edit",
+          text: "Done.",
+          usedFallback: false,
+        } as AgentRuntimeOutcome;
+      },
+    } as unknown as AgentRuntime;
+    const deps = createDeps({
+      runtime,
+      pendingWrites: [],
+      idleRestores: [],
+      statuses: [],
+    });
+    deps.normalizeSelectedTextNoteContextsByIndex = () => [noteContext];
+
+    await sendAgentTurn(
+      {
+        body: {} as Element,
+        item: fakeItem(conversationKey),
+        question: "help me rewrite this sentence",
+        selectedTexts: ["Panel A illustrates the stability problem."],
+        selectedTextSources: ["note-edit"],
+        selectedTextNoteContexts: [noteContext],
+      },
+      deps,
+    );
+
+    assert.deepEqual(capturedRequest?.selectedTextSources, ["note-edit"]);
+    assert.deepEqual(capturedRequest?.selectedTextNoteContexts, [noteContext]);
   });
 });

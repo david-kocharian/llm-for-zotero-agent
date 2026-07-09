@@ -51,7 +51,11 @@ import type {
   AgentRuntimeOutcome,
   AgentRuntimeRequest,
 } from "./types";
-import type { PaperContentSourceMode, PaperContextRef } from "../shared/types";
+import type {
+  NoteContextRef,
+  PaperContentSourceMode,
+  PaperContextRef,
+} from "../shared/types";
 import {
   buildTurnContextEnvelope,
   renderTurnContextEnvelopeForModel,
@@ -214,6 +218,12 @@ type ContextEnvelope = {
   selectedTexts: Array<{
     source: string;
     text: string;
+    noteContext?: {
+      noteItemId?: number;
+      title: string;
+      noteKind: string;
+      parentItemId?: number;
+    };
   }>;
   selectedPapers: Array<{
     itemId: number;
@@ -366,6 +376,7 @@ type BridgeRuntimeRequest = {
   providerProtocol?: string;
   selectedTexts?: string[];
   selectedTextSources?: unknown[];
+  selectedTextNoteContexts?: NoteContextRef[];
   selectedPaperContexts?: BridgePaperContext[];
   fullTextPaperContexts?: BridgePaperContext[];
   pinnedPaperContexts?: BridgePaperContext[];
@@ -1157,10 +1168,10 @@ function buildClaudeZoteroMcpScope(
     normalizePositiveInt(request.activeItemId) ||
     normalizePositiveInt(request.item?.id) ||
     selectedPaper?.itemId;
+  const activeNote = request.activeNoteContext;
   const paperItemID =
     kind === "paper" ? selectedPaper?.itemId || activeItemId : undefined;
   const libraryID = resolveFallbackLibraryId(request);
-  const activeNote = request.activeNoteContext;
   return {
     profileSignature,
     conversationKey: normalizePositiveInt(request.conversationKey),
@@ -1380,6 +1391,9 @@ function buildContextEnvelope(request: AgentRuntimeRequest): ContextEnvelope {
   const selectedSources = Array.isArray(request.selectedTextSources)
     ? request.selectedTextSources
     : [];
+  const selectedNoteContexts = Array.isArray(request.selectedTextNoteContexts)
+    ? request.selectedTextNoteContexts
+    : [];
   const selectedTextRows = selectedTexts
     .slice(0, 6)
     .map((text, index) => ({
@@ -1388,6 +1402,14 @@ function buildContextEnvelope(request: AgentRuntimeRequest): ContextEnvelope {
           ? selectedSources[index]
           : "unknown",
       text: trimText(text, 280),
+      noteContext: selectedNoteContexts[index]
+        ? {
+            noteItemId: selectedNoteContexts[index]?.noteItemId,
+            title: trimText(selectedNoteContexts[index]?.title, 120),
+            noteKind: selectedNoteContexts[index]?.noteKind || "",
+            parentItemId: selectedNoteContexts[index]?.parentItemId,
+          }
+        : undefined,
     }))
     .filter((row) => row.text);
   const selectedPapers = normalizePaperRefs(
@@ -1684,6 +1706,11 @@ async function buildBridgeRuntimeRequest(
       : undefined,
     selectedTextSources: Array.isArray(request.selectedTextSources)
       ? request.selectedTextSources
+      : undefined,
+    selectedTextNoteContexts: Array.isArray(request.selectedTextNoteContexts)
+      ? request.selectedTextNoteContexts.filter(
+          (entry): entry is NoteContextRef => Boolean(entry),
+        )
       : undefined,
     selectedPaperContexts,
     fullTextPaperContexts,

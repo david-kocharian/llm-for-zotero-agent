@@ -851,6 +851,63 @@ describe("rendered Markdown code block source controls", function () {
     assert.equal(toggle?.textContent, "Show source");
   });
 
+  it("adds a per-block word-wrap toggle for code blocks", function () {
+    const { root, shell, header } = createFakeCodeBlockShell({
+      lang: "ts",
+    });
+
+    attachRenderedCodeBlockControls(
+      root as unknown as ParentNode,
+      fakeDocument,
+    );
+
+    const wrapToggle = header.findByClass("llm-codeblock-wrap-toggle");
+    assert.exists(wrapToggle);
+    assert.equal(shell.dataset.wordWrap, "false");
+    assert.equal(wrapToggle?.attributes["aria-pressed"], "false");
+    assert.equal(wrapToggle?.attributes["aria-label"], "Enable word wrap");
+    assert.equal(wrapToggle?.textContent, "Wrap");
+
+    wrapToggle?.dispatchFakeEvent("click");
+
+    assert.equal(shell.dataset.wordWrap, "true");
+    assert.equal(wrapToggle?.attributes["aria-pressed"], "true");
+    assert.equal(wrapToggle?.attributes["aria-label"], "Disable word wrap");
+    assert.equal(wrapToggle?.textContent, "No wrap");
+
+    wrapToggle?.dispatchFakeEvent("click");
+
+    assert.equal(shell.dataset.wordWrap, "false");
+    assert.equal(wrapToggle?.attributes["aria-pressed"], "false");
+    assert.equal(wrapToggle?.attributes["aria-label"], "Enable word wrap");
+    assert.equal(wrapToggle?.textContent, "Wrap");
+  });
+
+  it("wraps plain text fences by default while keeping the toggle reversible", function () {
+    const { root, shell, header } = createFakeCodeBlockShell({
+      lang: "text",
+    });
+
+    attachRenderedCodeBlockControls(
+      root as unknown as ParentNode,
+      fakeDocument,
+    );
+
+    const wrapToggle = header.findByClass("llm-codeblock-wrap-toggle");
+    assert.exists(wrapToggle);
+    assert.equal(shell.dataset.wordWrap, "true");
+    assert.equal(wrapToggle?.attributes["aria-pressed"], "true");
+    assert.equal(wrapToggle?.attributes["aria-label"], "Disable word wrap");
+    assert.equal(wrapToggle?.textContent, "No wrap");
+
+    wrapToggle?.dispatchFakeEvent("click");
+
+    assert.equal(shell.dataset.wordWrap, "false");
+    assert.equal(wrapToggle?.attributes["aria-pressed"], "false");
+    assert.equal(wrapToggle?.attributes["aria-label"], "Enable word wrap");
+    assert.equal(wrapToggle?.textContent, "Wrap");
+  });
+
   it("treats unsafe SVG without a preview like ordinary expanded code", function () {
     const { root, shell, header, body } = createFakeCodeBlockShell({
       lang: "svg",

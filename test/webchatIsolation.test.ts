@@ -362,7 +362,7 @@ describe("webchat isolation", function () {
       "restoreDraftInputForCurrentConversation();",
     );
     const webchatBranch = source.indexOf(
-      "} else if (isWebChatMode()) {",
+      "if (isWebChatMode()) {",
       restoreStart,
     );
     const paperBranch = source.indexOf(

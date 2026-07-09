@@ -7,7 +7,7 @@ import {
   isPaperPortalItem,
   resolveActiveNoteSession,
   resolveInitialPanelItemState,
-  resolveNoteConversationSystemSwitch,
+  resolveNoteFocusSystemSwitch,
   resolvePaperChatSourceItem,
   resolvePreferredConversationSystem,
 } from "../src/modules/contextPanel/portalScope";
@@ -316,7 +316,7 @@ describe("portalScope resolveInitialPanelItemState", function () {
     assert.equal(resolved.item?.libraryID, 7);
   });
 
-  it("keeps item notes on their own conversation while exposing the parent paper", function () {
+  it("maps item notes onto parent paper chat while keeping note focus metadata", function () {
     const parentItem = {
       id: 42,
       libraryID: 7,
@@ -343,18 +343,14 @@ describe("portalScope resolveInitialPanelItemState", function () {
     assert.deepEqual(session, {
       noteKind: "item",
       noteId: 99,
+      libraryID: 7,
       title: "Item Note",
       parentItemId: 42,
-      displayConversationKind: "paper",
-      capabilities: {
-        showModeSwitch: false,
-        showNewConversation: false,
-        showHistory: false,
-      },
+      conversationKind: "paper",
     });
   });
 
-  it("keeps standalone notes in open-chat semantics without remapping them", function () {
+  it("maps standalone notes onto library chat while keeping note focus metadata", function () {
     const noteItem = {
       id: 108,
       libraryID: 7,
@@ -374,14 +370,10 @@ describe("portalScope resolveInitialPanelItemState", function () {
     assert.deepEqual(session, {
       noteKind: "standalone",
       noteId: 108,
+      libraryID: 7,
       title: "Standalone Note",
       parentItemId: undefined,
-      displayConversationKind: "global",
-      capabilities: {
-        showModeSwitch: false,
-        showNewConversation: false,
-        showHistory: false,
-      },
+      conversationKind: "global",
     });
   });
 
@@ -450,7 +442,7 @@ describe("portalScope resolveInitialPanelItemState", function () {
     assert.equal(resolved.item?.libraryID, 7);
   });
 
-  it("does not allow active notes to enter Claude Code mode", function () {
+  it("allows active notes to enter Claude Code mode when enabled", function () {
     const noteItem = {
       id: 108,
       libraryID: 7,
@@ -473,7 +465,7 @@ describe("portalScope resolveInitialPanelItemState", function () {
 
     assert.equal(
       resolvePreferredConversationSystem({ item: noteItem }),
-      "upstream",
+      "claude_code",
     );
   });
 
@@ -504,37 +496,49 @@ describe("portalScope resolveInitialPanelItemState", function () {
     );
   });
 
-  it("normalizes note-session runtime switches without allowing Claude Code", function () {
+  it("normalizes note-session runtime switches across all enabled runtimes", function () {
     assert.equal(
-      resolveNoteConversationSystemSwitch({
+      resolveNoteFocusSystemSwitch({
         nextSystem: "codex",
         codexAvailable: true,
+        claudeAvailable: true,
       }),
       "codex",
     );
     assert.isNull(
-      resolveNoteConversationSystemSwitch({
+      resolveNoteFocusSystemSwitch({
         nextSystem: "codex",
         codexAvailable: false,
+        claudeAvailable: true,
       }),
     );
     assert.equal(
-      resolveNoteConversationSystemSwitch({
+      resolveNoteFocusSystemSwitch({
         nextSystem: "upstream",
         codexAvailable: false,
+        claudeAvailable: true,
       }),
       "upstream",
     );
-    assert.isNull(
-      resolveNoteConversationSystemSwitch({
+    assert.equal(
+      resolveNoteFocusSystemSwitch({
         nextSystem: "claude_code",
         codexAvailable: true,
+        claudeAvailable: true,
+      }),
+      "claude_code",
+    );
+    assert.isNull(
+      resolveNoteFocusSystemSwitch({
+        nextSystem: "claude_code",
+        codexAvailable: true,
+        claudeAvailable: false,
       }),
     );
   });
 
   it("falls back to upstream paper state when Claude mode is disabled", function () {
-    let claudeEnabled = false;
+    const claudeEnabled = false;
     const originalPrefs = globalThis.Zotero?.Prefs;
     const paperItem = {
       id: 42,

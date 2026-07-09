@@ -71,6 +71,13 @@ import {
   buildCodexLibraryStateKey,
   buildCodexPaperStateKey,
 } from "../../codexAppServer/state";
+import {
+  resolveNoteFocusSystemSwitch as resolveNoteFocusSystemSwitchPolicy,
+  resolveNoteEditingParentItem,
+  resolveNoteEditingScope,
+  resolveNoteEditingTitle,
+  resolvePreferredNoteFocusSystem,
+} from "./noteEditing";
 
 export function resolveActiveLibraryID(): number | null {
   try {
@@ -214,111 +221,17 @@ export function resolvePaperPortalBaseItem(
 export function resolveNoteParentItem(
   item: Zotero.Item | null | undefined,
 ): Zotero.Item | null {
-  if (!(item as any)?.isNote?.()) return null;
-  const parentID = normalizePositiveInt(item?.parentID);
-  if (!parentID) return null;
-  const parentItem = Zotero.Items.get(parentID) || null;
-  return parentItem?.isRegularItem?.() ? parentItem : null;
-}
-
-function resolveActiveTabTitleForNote(
-  item: Zotero.Item | null | undefined,
-): string {
-  const noteId = normalizePositiveInt(item?.id);
-  if (!noteId) return "";
-  const tabsCandidates = [
-    (Zotero as unknown as { Tabs?: unknown }).Tabs,
-    (Zotero.getMainWindow?.() as { Zotero?: { Tabs?: unknown } } | undefined)
-      ?.Zotero?.Tabs,
-    (Zotero.getActiveZoteroPane?.() as { document?: Document } | undefined)
-      ?.document?.defaultView &&
-      (
-        (Zotero.getActiveZoteroPane?.() as { document?: Document } | undefined)
-          ?.document?.defaultView as { Zotero?: { Tabs?: unknown } }
-      ).Zotero?.Tabs,
-  ];
-  for (const candidate of tabsCandidates) {
-    const tabs = candidate as
-      | {
-          selectedID?: string | number;
-          _tabs?: Array<Record<string, unknown>>;
-        }
-      | undefined;
-    const selectedId =
-      tabs?.selectedID === undefined || tabs?.selectedID === null
-        ? ""
-        : `${tabs.selectedID}`;
-    const activeTab = Array.isArray(tabs?._tabs)
-      ? tabs!._tabs!.find((tab) => `${tab?.id || ""}` === selectedId)
-      : null;
-    if (!activeTab) continue;
-    const data = (activeTab.data || {}) as Record<string, unknown>;
-    const candidateItemId = normalizePositiveInt(
-      data.itemID || data.itemId || data.id,
-    );
-    if (candidateItemId && candidateItemId !== noteId) continue;
-    const titleCandidates = [
-      activeTab.title,
-      activeTab.label,
-      activeTab.name,
-      data.title,
-      data.label,
-      data.name,
-      data.noteTitle,
-      data.itemTitle,
-    ];
-    for (const raw of titleCandidates) {
-      const title = typeof raw === "string" ? raw.trim() : "";
-      if (title) return title;
-    }
-  }
-  return "";
+  return resolveNoteEditingParentItem(item);
 }
 
 export function resolveNoteTitle(item: Zotero.Item | null | undefined): string {
-  if (!(item as any)?.isNote?.()) return "";
-  const activeTabTitle = resolveActiveTabTitleForNote(item);
-  if (activeTabTitle) return activeTabTitle;
-  try {
-    const raw = String((item as any).getDisplayTitle?.() || "").trim();
-    if (raw) return raw;
-  } catch (_err) {
-    void _err;
-  }
-  try {
-    const raw = String((item as any).getField?.("title") || "").trim();
-    if (raw) return raw;
-  } catch (_err) {
-    void _err;
-  }
-  try {
-    const raw = String((item as any).getNoteTitle?.() || "").trim();
-    if (raw) return raw;
-  } catch (_err) {
-    void _err;
-  }
-  return "";
+  return resolveNoteEditingTitle(item);
 }
 
 export function resolveActiveNoteSession(
   item: Zotero.Item | null | undefined,
 ): ActiveNoteSession | null {
-  if (!(item as any)?.isNote?.()) return null;
-  const noteId = normalizePositiveInt(item?.id);
-  if (!noteId) return null;
-  const parentItem = resolveNoteParentItem(item);
-  return {
-    noteKind: parentItem ? "item" : "standalone",
-    noteId,
-    title: resolveNoteTitle(item),
-    parentItemId: parentItem?.id,
-    displayConversationKind: parentItem ? "paper" : "global",
-    capabilities: {
-      showModeSwitch: false,
-      showNewConversation: false,
-      showHistory: false,
-    },
-  };
+  return resolveNoteEditingScope(item);
 }
 
 export function resolveDisplayConversationKind(
@@ -326,7 +239,7 @@ export function resolveDisplayConversationKind(
 ): "global" | "paper" | null {
   const noteSession = resolveActiveNoteSession(item);
   if (noteSession) {
-    return noteSession.displayConversationKind;
+    return noteSession.conversationKind;
   }
   if (!item) return null;
   return isGlobalPortalItem(item) ||
@@ -448,9 +361,11 @@ export function resolvePreferredConversationSystem(params: {
 }): ConversationSystem {
   const preferred = params.preferredSystem || getConversationSystemPref();
   if (resolveActiveNoteSession(params.item)) {
-    return preferred === "codex" && isCodexAppServerModeEnabled()
-      ? "codex"
-      : "upstream";
+    return resolvePreferredNoteFocusSystem({
+      preferredSystem: preferred,
+      claudeAvailable: isClaudeCodeModeEnabled(),
+      codexAvailable: isCodexAppServerModeEnabled(),
+    });
   }
   const itemSystem = resolveConversationSystemForItem(params.item);
   if (itemSystem === "claude_code" && !isClaudeCodeModeEnabled()) {
@@ -468,15 +383,16 @@ export function resolvePreferredConversationSystem(params: {
   return itemSystem || preferred;
 }
 
-export function resolveNoteConversationSystemSwitch(params: {
+export function resolveNoteFocusSystemSwitch(params: {
   nextSystem: ConversationSystem;
   codexAvailable: boolean;
+  claudeAvailable?: boolean;
 }): ConversationSystem | null {
-  if (params.nextSystem === "claude_code") return null;
-  if (params.nextSystem === "codex") {
-    return params.codexAvailable ? "codex" : null;
-  }
-  return "upstream";
+  return resolveNoteFocusSystemSwitchPolicy({
+    nextSystem: params.nextSystem,
+    claudeAvailable: params.claudeAvailable === true,
+    codexAvailable: params.codexAvailable,
+  });
 }
 
 function resolvePreferredConversationMode(
@@ -548,6 +464,60 @@ function resolveGlobalConversationKey(
       : Math.floor(activeKey);
   }
   return buildDefaultUpstreamGlobalConversationKey(libraryID);
+}
+
+function resolvePaperConversationKeyForBaseItem(
+  basePaperItem: Zotero.Item,
+  system: ConversationSystem,
+): number {
+  const libraryID = resolveLibraryIdFromItem(basePaperItem);
+  const paperItemID = normalizePositiveInt(basePaperItem?.id) || 0;
+  if (!libraryID || !paperItemID) return paperItemID;
+  const rememberedPaperKey = Number(
+    system === "claude_code"
+      ? activeClaudePaperConversationByPaper.get(
+          buildClaudePaperStateKey(libraryID, paperItemID),
+        ) ||
+          getLastUsedClaudePaperConversationKey(libraryID, paperItemID) ||
+          buildDefaultClaudePaperConversationKey(paperItemID)
+      : system === "codex"
+        ? activeCodexPaperConversationByPaper.get(
+            buildCodexPaperStateKey(libraryID, paperItemID),
+          ) ||
+          getLastUsedCodexPaperConversationKey(libraryID, paperItemID) ||
+          buildDefaultCodexPaperConversationKey(paperItemID)
+        : activePaperConversationByPaper.get(
+            buildPaperStateKey(libraryID, paperItemID),
+          ) ||
+          getLastUsedPaperConversationKey(libraryID, paperItemID) ||
+          paperItemID,
+  );
+  return Number.isFinite(rememberedPaperKey) && rememberedPaperKey > 0
+    ? Math.floor(rememberedPaperKey)
+    : paperItemID;
+}
+
+export function resolveConversationKeyForNoteFocus(
+  item: Zotero.Item | null | undefined,
+  options?: { conversationSystem?: ConversationSystem | null },
+): number | null {
+  const noteSession = resolveActiveNoteSession(item);
+  if (!noteSession) return null;
+  const conversationSystem = resolvePreferredConversationSystem({
+    item,
+    preferredSystem: options?.conversationSystem,
+  });
+  if (noteSession.noteKind === "standalone") {
+    return resolveGlobalConversationKey(
+      noteSession.libraryID,
+      conversationSystem,
+    );
+  }
+  const parentItem = noteSession.parentItemId
+    ? Zotero.Items.get(noteSession.parentItemId) || null
+    : null;
+  if (!parentItem?.isRegularItem?.()) return null;
+  return resolvePaperConversationKeyForBaseItem(parentItem, conversationSystem);
 }
 
 export function resolveInitialPanelItemState(
@@ -624,24 +594,9 @@ export function resolveInitialPanelItemState(
   }
 
   const paperItemID = Number(basePaperItem.id || 0);
-  const rememberedPaperKey = Number(
-    conversationSystem === "claude_code"
-      ? activeClaudePaperConversationByPaper.get(
-          buildClaudePaperStateKey(libraryID, paperItemID),
-        ) ||
-          getLastUsedClaudePaperConversationKey(libraryID, paperItemID) ||
-          buildDefaultClaudePaperConversationKey(paperItemID)
-      : conversationSystem === "codex"
-        ? activeCodexPaperConversationByPaper.get(
-            buildCodexPaperStateKey(libraryID, paperItemID),
-          ) ||
-          getLastUsedCodexPaperConversationKey(libraryID, paperItemID) ||
-          buildDefaultCodexPaperConversationKey(paperItemID)
-        : activePaperConversationByPaper.get(
-            buildPaperStateKey(libraryID, paperItemID),
-          ) ||
-          getLastUsedPaperConversationKey(libraryID, paperItemID) ||
-          0,
+  const rememberedPaperKey = resolvePaperConversationKeyForBaseItem(
+    basePaperItem,
+    conversationSystem,
   );
   if (
     Number.isFinite(rememberedPaperKey) &&

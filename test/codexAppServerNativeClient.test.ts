@@ -47,8 +47,7 @@ describe("Codex app-server native client", function () {
     const processKey = "native-compact-thread-test";
     const originalSpawn = CodexAppServerProcess.spawn;
     const writes: string[] = [];
-    let proc!: CodexAppServerProcess;
-    proc = CodexAppServerProcess.forTest({
+    const proc = CodexAppServerProcess.forTest({
       stdin: {
         write: (chunk: string) => {
           writes.push(chunk);
@@ -122,8 +121,7 @@ describe("Codex app-server native client", function () {
     const processKey = "native-model-list-test";
     const originalSpawn = CodexAppServerProcess.spawn;
     const writes: string[] = [];
-    let proc!: CodexAppServerProcess;
-    proc = CodexAppServerProcess.forTest({
+    const proc = CodexAppServerProcess.forTest({
       stdin: {
         write: (chunk: string) => {
           writes.push(chunk);
@@ -553,6 +551,44 @@ describe("Codex app-server native client", function () {
     assert.notInclude(block, "Collection 1");
   });
 
+  it("renders selected note-edit resources in Codex native visible context", function () {
+    const block = buildCodexNativeVisibleTurnContextBlockForTests({
+      scope: {
+        conversationKey: 3703,
+        libraryID: 1,
+        libraryName: "My Library",
+        kind: "paper",
+        paperItemID: 3612,
+        activeItemId: 3612,
+        paperTitle: "Ajemian et al., 2013",
+        activeNoteId: 3703,
+        activeNoteTitle: "Ajemian et al., 2013 - MD",
+        activeNoteKind: "item",
+        activeNoteParentItemId: 3612,
+      },
+      skillContext: {
+        selectedTexts: ["Panel A illustrates the stability problem."],
+        selectedTextSources: ["note-edit"],
+        selectedTextNoteContexts: [
+          {
+            libraryID: 1,
+            noteItemKey: "NOTEKEY",
+            noteItemId: 3703,
+            parentItemId: 3612,
+            noteKind: "item",
+            title: "Ajemian et al., 2013 - MD",
+          },
+        ],
+      },
+    });
+
+    assert.include(block, 'scope="paper"');
+    assert.include(block, "Selected text notes:");
+    assert.include(block, "noteId=3703");
+    assert.include(block, 'noteKind="item"');
+    assert.include(block, "parentItemId=3612");
+  });
+
   it("renders pinned papers and selected collections in visible context", function () {
     const block = buildCodexNativeVisibleTurnContextBlockForTests({
       scope: {
@@ -616,11 +652,10 @@ describe("Codex app-server native client", function () {
     const processKey = "native-visible-context-turn-test";
     const originalSpawn = CodexAppServerProcess.spawn;
     const originalZotero = globalThis.Zotero;
-    let proc!: CodexAppServerProcess;
     let threadResumeParams: Record<string, unknown> | undefined;
     let turnStartParams: Record<string, unknown> | undefined;
 
-    proc = CodexAppServerProcess.forTest({
+    const proc = CodexAppServerProcess.forTest({
       stdin: {
         write: (chunk: string) => {
           const request = JSON.parse(chunk) as {
@@ -777,11 +812,10 @@ describe("Codex app-server native client", function () {
     const originalToolkit = (
       globalThis as typeof globalThis & { ztoolkit?: unknown }
     ).ztoolkit;
-    let proc!: CodexAppServerProcess;
     const threadResumeParams: Record<string, unknown>[] = [];
     let turnStartParams: Record<string, unknown> | undefined;
 
-    proc = CodexAppServerProcess.forTest({
+    const proc = CodexAppServerProcess.forTest({
       stdin: {
         write: (chunk: string) => {
           const request = JSON.parse(chunk) as {
@@ -919,7 +953,6 @@ describe("Codex app-server native client", function () {
     const processKey = "native-approvals-reviewer-test";
     const originalSpawn = CodexAppServerProcess.spawn;
     const originalZotero = globalThis.Zotero;
-    let proc!: CodexAppServerProcess;
     let threadStartParams: Record<string, unknown> | undefined;
     let turnStartParams: Record<string, unknown> | undefined;
 
@@ -938,7 +971,7 @@ describe("Codex app-server native client", function () {
       },
     };
 
-    proc = CodexAppServerProcess.forTest({
+    const proc = CodexAppServerProcess.forTest({
       stdin: {
         write: (chunk: string) => {
           const request = JSON.parse(chunk) as {
@@ -1034,7 +1067,6 @@ describe("Codex app-server native client", function () {
     const processKey = "native-auto-skill-input-test";
     const originalSpawn = CodexAppServerProcess.spawn;
     const originalZotero = globalThis.Zotero;
-    let proc!: CodexAppServerProcess;
     let skillsListParams: Record<string, unknown> | undefined;
     let threadStartParams: Record<string, unknown> | undefined;
     let turnStartParams: Record<string, unknown> | undefined;
@@ -1053,7 +1085,7 @@ describe("Codex app-server native client", function () {
     const expectedCwd = getUserSkillsRuntimeRootDir();
     const skillPath = `${expectedCwd}/.agents/skills/evidence-based-qa/SKILL.md`;
 
-    proc = CodexAppServerProcess.forTest({
+    const proc = CodexAppServerProcess.forTest({
       stdin: {
         write: (chunk: string) => {
           const request = JSON.parse(chunk) as {
@@ -1199,7 +1231,6 @@ describe("Codex app-server native client", function () {
     const processKey = "native-explicit-skill-input-test";
     const originalSpawn = CodexAppServerProcess.spawn;
     const originalZotero = globalThis.Zotero;
-    let proc!: CodexAppServerProcess;
     let turnStartParams: Record<string, unknown> | undefined;
 
     (globalThis as typeof globalThis & { Zotero?: unknown }).Zotero = {
@@ -1215,7 +1246,7 @@ describe("Codex app-server native client", function () {
     const expectedCwd = getUserSkillsRuntimeRootDir();
     const skillPath = `${expectedCwd}/.agents/skills/write-note/SKILL.md`;
 
-    proc = CodexAppServerProcess.forTest({
+    const proc = CodexAppServerProcess.forTest({
       stdin: {
         write: (chunk: string) => {
           const request = JSON.parse(chunk) as {
@@ -1339,7 +1370,6 @@ describe("Codex app-server native client", function () {
     const processKey = "native-skills-cwd-turn-test";
     const originalSpawn = CodexAppServerProcess.spawn;
     const originalZotero = globalThis.Zotero;
-    let proc!: CodexAppServerProcess;
     let threadStartParams: Record<string, unknown> | undefined;
     let turnStartParams: Record<string, unknown> | undefined;
 
@@ -1355,7 +1385,7 @@ describe("Codex app-server native client", function () {
     };
     const expectedCwd = getUserSkillsRuntimeRootDir();
 
-    proc = CodexAppServerProcess.forTest({
+    const proc = CodexAppServerProcess.forTest({
       stdin: {
         write: (chunk: string) => {
           const request = JSON.parse(chunk) as {

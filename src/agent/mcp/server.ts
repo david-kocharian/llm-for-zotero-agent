@@ -1086,6 +1086,7 @@ function createToolContext(
       "",
     activeItemId,
     libraryID: scopeArgs.libraryID || scope?.libraryID || 0,
+    conversationKind: scope?.kind,
     model: "codex-app-server",
     authMode: "codex_app_server",
     selectedPaperContexts:

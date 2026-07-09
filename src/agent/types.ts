@@ -5,6 +5,7 @@ import type {
   ActiveNoteContext,
   ChatAttachment,
   CollectionContextRef,
+  NoteContextRef,
   PaperContentSourceMode,
   PaperContextRef,
   SelectedTextSource,
@@ -22,10 +23,14 @@ export type AgentRequest = {
   mode: "agent";
   userText: string;
   conversationKind?: "global" | "paper";
+  scopeType?: "paper" | "open" | "folder" | "tag" | "tagset" | "custom";
+  scopeId?: string;
+  scopeLabel?: string;
   activeItemId?: number;
   selectedTexts?: string[];
   selectedTextSources?: SelectedTextSource[];
   selectedTextPaperContexts?: (PaperContextRef | undefined)[];
+  selectedTextNoteContexts?: (NoteContextRef | undefined)[];
   selectedPaperContexts?: PaperContextRef[];
   fullTextPaperContexts?: PaperContextRef[];
   citationPaperContexts?: PaperContextRef[];

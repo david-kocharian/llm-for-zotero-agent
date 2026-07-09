@@ -9,7 +9,7 @@ describe("standaloneTabLabel", function () {
       };
     };
   };
-  const originalZotero = globalScope.Zotero;
+  let originalZotero: typeof globalScope.Zotero;
 
   const parentPaper = {
     id: 10,
@@ -31,6 +31,7 @@ describe("standaloneTabLabel", function () {
   } as unknown as Zotero.Item;
 
   beforeEach(function () {
+    originalZotero = globalScope.Zotero;
     globalScope.Zotero = {
       ...(originalZotero || {}),
       Items: {
@@ -47,10 +48,25 @@ describe("standaloneTabLabel", function () {
     delete globalScope.Zotero;
   });
 
-  it("labels an attached note paper slot as Note editing", function () {
+  const standaloneNote = {
+    id: 43,
+    isNote: () => true,
+    getDisplayTitle: () => "Standalone draft",
+    getField: () => "",
+    getNoteTitle: () => "Standalone draft",
+  } as unknown as Zotero.Item;
+
+  it("labels an attached note paper slot as Item note", function () {
     assert.equal(
       resolveStandalonePaperTabLabel({ paperSlotItem: attachedNote }),
-      "Note editing",
+      "Item note",
+    );
+  });
+
+  it("labels a standalone note slot as Standalone note", function () {
+    assert.equal(
+      resolveStandalonePaperTabLabel({ paperSlotItem: standaloneNote }),
+      "Standalone note",
     );
   });
 
@@ -79,7 +95,7 @@ describe("standaloneTabLabel", function () {
     );
   });
 
-  it("preserves a note-editing paper slot label while library chat is active", function () {
+  it("preserves an item-note paper slot label while library chat is active", function () {
     const paperSlotItem = attachedNote;
     const labelWhileLibraryChat = resolveStandalonePaperTabLabel({
       paperSlotItem,
@@ -88,8 +104,8 @@ describe("standaloneTabLabel", function () {
       paperSlotItem,
     });
 
-    assert.equal(labelWhileLibraryChat, "Note editing");
-    assert.equal(labelAfterReturning, "Note editing");
+    assert.equal(labelWhileLibraryChat, "Item note");
+    assert.equal(labelAfterReturning, "Item note");
   });
 
   it("preserves a regular paper-slot label while library chat is active", function () {

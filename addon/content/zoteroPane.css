@@ -5005,10 +5005,19 @@ label.llm-search-results-item:hover {
 }
 
 .llm-agent-hitl-diff {
+  --llm-agent-hitl-diff-add-text: inherit;
+  --llm-agent-hitl-diff-remove-text: inherit;
   border: 1px solid var(--stroke-secondary);
   border-radius: 10px;
   overflow: hidden;
   background: color-mix(in srgb, var(--fill-quaternary) 86%, black 14%);
+}
+
+.window-is-dark .llm-agent-hitl-diff,
+:root[lwtheme-brighttext] .llm-agent-hitl-diff,
+:root[sizemode][lwtheme-brighttext] .llm-agent-hitl-diff {
+  --llm-agent-hitl-diff-add-text: #7ce4a1;
+  --llm-agent-hitl-diff-remove-text: #ff9f9f;
 }
 
 .llm-agent-hitl-diff-body {
@@ -5068,12 +5077,12 @@ label.llm-search-results-item:hover {
 
 .llm-agent-hitl-diff-line-add .llm-agent-hitl-diff-marker,
 .llm-agent-hitl-diff-line-add .llm-agent-hitl-diff-segment-add {
-  color: #7ce4a1;
+  color: var(--llm-agent-hitl-diff-add-text);
 }
 
 .llm-agent-hitl-diff-line-remove .llm-agent-hitl-diff-marker,
 .llm-agent-hitl-diff-line-remove .llm-agent-hitl-diff-segment-remove {
-  color: #ff9f9f;
+  color: var(--llm-agent-hitl-diff-remove-text);
 }
 
 .llm-agent-hitl-diff-content {
@@ -5941,7 +5950,8 @@ label.llm-search-results-item:hover {
   white-space: nowrap;
 }
 
-.llm-rendered-markdown .llm-codeblock-source-toggle {
+.llm-rendered-markdown .llm-codeblock-source-toggle,
+.llm-rendered-markdown .llm-codeblock-wrap-toggle {
   appearance: none;
   -moz-appearance: none;
   flex: 0 0 auto;
@@ -5960,16 +5970,32 @@ label.llm-search-results-item:hover {
   font-size: var(--llm-fs-11);
   font-weight: 600;
   line-height: 1;
-  margin-left: auto;
   padding: 5px 7px;
 }
 
-.llm-rendered-markdown .llm-codeblock-source-toggle:hover {
+.llm-rendered-markdown .llm-codeblock-source-toggle {
+  margin-left: auto;
+}
+
+.llm-rendered-markdown .llm-codeblock-wrap-toggle {
+  margin-left: auto;
+}
+
+.llm-rendered-markdown
+  .llm-codeblock-wrap-toggle
+  + .llm-codeblock-source-toggle {
+  margin-left: 0;
+}
+
+.llm-rendered-markdown .llm-codeblock-source-toggle:hover,
+.llm-rendered-markdown .llm-codeblock-wrap-toggle:hover,
+.llm-rendered-markdown .llm-codeblock-wrap-toggle[aria-pressed="true"] {
   background: color-mix(in srgb, var(--fill-quinary) 75%, transparent);
   color: var(--llm-codeblock-copy-hover);
 }
 
-.llm-rendered-markdown .llm-codeblock-source-toggle:focus-visible {
+.llm-rendered-markdown .llm-codeblock-source-toggle:focus-visible,
+.llm-rendered-markdown .llm-codeblock-wrap-toggle:focus-visible {
   outline: 1px solid var(--color-accent);
   outline-offset: 1px;
 }
@@ -6091,6 +6117,25 @@ label.llm-search-results-item:hover {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 14px;
   line-height: 1.48;
+}
+
+.llm-rendered-markdown
+  .llm-codeblock-shell[data-word-wrap="true"]
+  .llm-codeblock-body
+  pre {
+  overflow-x: hidden;
+  white-space: pre-wrap;
+}
+
+.llm-rendered-markdown
+  .llm-codeblock-shell[data-word-wrap="true"]
+  .llm-codeblock-body
+  pre
+  code {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: normal;
 }
 
 .llm-rendered-markdown .llm-codeblock-body pre code span {

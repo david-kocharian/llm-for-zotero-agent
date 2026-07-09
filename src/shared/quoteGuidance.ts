@@ -15,3 +15,8 @@ export const BALANCED_EVIDENCE_GUIDANCE =
   "Paper titles, headings, author lists, journal names, DOI blocks, and source labels are metadata, not direct evidence. " +
   "Never use quotes as decoration or as a substitute for reasoning. " +
   "Prefer a readable answer with traceable evidence over repetitive citations or low-information quotes.";
+
+export const NOTE_EDITING_QUOTE_BLOCK_GUIDANCE =
+  "Note-editing output rule: revised or generated note text is not source evidence; do not use Markdown blockquotes (`>`) or standalone source-label citation lines for rewritten note text. " +
+  "Show candidate revised prose in a fenced `text` block, or use edit_current_note for review/diff. " +
+  "Use quote anchors or `>` blockquotes only for verbatim original PDF/source quotes with verified quote metadata.";

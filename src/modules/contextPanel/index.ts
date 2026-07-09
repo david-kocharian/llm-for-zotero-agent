@@ -59,8 +59,12 @@ import {
   resolvePanelContextLifecycleState,
   appendSelectedTextContextForItem,
   applySelectedTextPreview,
-  syncSelectedTextContextForSource,
 } from "./contextResolution";
+import {
+  clearNoteEditingSelectedText,
+  getNoteFocusConversationKey,
+  syncNoteEditingSelectedText,
+} from "./noteEditing/selectionController";
 import { ensurePDFTextCached, ensureNoteTextCached } from "./pdfContext";
 import { resolveCurrentSelectionPageLocationFromReader } from "./livePdfSelectionLocator";
 import {
@@ -1091,8 +1095,10 @@ type MainWindowWithNoteEditingTracker = _ZoteroTypes.MainWindow & {
   __llmNoteEditingSelectionTracking?: {
     intervalId: number;
     refresh: () => void;
+    trackSelectionDocument: (doc: Document) => void;
+    trackedSelectionDocuments: Set<Document>;
     lastNoteId: number;
-    lastParentPaperItemId: number;
+    lastNoteFocusConversationKey: number;
     lastSelectionText: string;
   };
 };
@@ -1196,6 +1202,70 @@ function refreshPanelsForConversationKey(conversationKey: number): void {
   }
 }
 
+export function refreshNoteEditingPanelsForNote(noteId: number): number {
+  const normalizedNoteId = Math.floor(Number(noteId || 0));
+  if (!Number.isFinite(normalizedNoteId) || normalizedNoteId <= 0) return 0;
+  let refreshedPanels = 0;
+  for (const [activeBody, syncPanelState] of activeContextPanelStateSync) {
+    if (!(activeBody as Element).isConnected) {
+      activeContextPanels.delete(activeBody);
+      activeContextPanelStateSync.delete(activeBody);
+      continue;
+    }
+    const activeRoot = activeBody.querySelector(
+      "#llm-main",
+    ) as HTMLDivElement | null;
+    const panelNoteId = Number(activeRoot?.dataset.noteId || 0);
+    if (
+      !Number.isFinite(panelNoteId) ||
+      Math.floor(panelNoteId) !== normalizedNoteId
+    ) {
+      continue;
+    }
+    const activeConversationKey = Number(activeRoot?.dataset.itemId || 0);
+    if (Number.isFinite(activeConversationKey) && activeConversationKey > 0) {
+      applySelectedTextPreview(activeBody, Math.floor(activeConversationKey));
+    } else {
+      syncPanelState();
+    }
+    refreshedPanels += 1;
+  }
+  return refreshedPanels;
+}
+
+function parseConversationSystem(value: unknown): ConversationSystem | null {
+  const raw = `${value || ""}`.trim().toLowerCase();
+  if (raw === "upstream") return "upstream";
+  if (raw === "claude_code") return "claude_code";
+  if (raw === "codex") return "codex";
+  return null;
+}
+
+function getActiveNotePanelConversationSystems(
+  noteId: number,
+): ConversationSystem[] {
+  if (!Number.isFinite(noteId) || noteId <= 0) return [];
+  const systems: ConversationSystem[] = [];
+  const seen = new Set<ConversationSystem>();
+  for (const [activeBody] of activeContextPanelStateSync) {
+    if (!(activeBody as Element).isConnected) continue;
+    const activeRoot = activeBody.querySelector(
+      "#llm-main",
+    ) as HTMLDivElement | null;
+    const panelNoteId = Number(activeRoot?.dataset.noteId || 0);
+    if (!Number.isFinite(panelNoteId) || Math.floor(panelNoteId) !== noteId) {
+      continue;
+    }
+    const system = parseConversationSystem(
+      activeRoot?.dataset.conversationSystem,
+    );
+    if (!system || seen.has(system)) continue;
+    seen.add(system);
+    systems.push(system);
+  }
+  return systems;
+}
+
 function refreshTrackedNoteEditingSelection(
   win: MainWindowWithNoteEditingTracker,
 ): void {
@@ -1226,17 +1296,10 @@ function refreshTrackedNoteEditingSelection(
     noteItem && Number.isFinite(noteItem.id) && noteItem.id > 0
       ? Math.floor(noteItem.id)
       : 0;
-  const nextParentPaperItemId: number = (() => {
-    if (!noteItem) return 0;
-    try {
-      const parentId = Number((noteItem as any).parentItemID ?? 0);
-      return Number.isFinite(parentId) && parentId > 0
-        ? Math.floor(parentId)
-        : 0;
-    } catch {
-      return 0;
-    }
-  })();
+  const panelSystems = getActiveNotePanelConversationSystems(nextNoteId);
+  const primaryPanelSystem = panelSystems[0] || null;
+  const nextNoteFocusConversationKey =
+    getNoteFocusConversationKey(noteItem, primaryPanelSystem) || 0;
 
   if (nextNoteId === 0 && tracker.lastNoteId === 0) {
     // No note was active before and none is active now — nothing to do.
@@ -1252,6 +1315,7 @@ function refreshTrackedNoteEditingSelection(
     if (
       tracker.lastSelectionText &&
       tracker.lastNoteId === nextNoteId &&
+      tracker.lastNoteFocusConversationKey === nextNoteFocusConversationKey &&
       typeof win.document.hasFocus === "function" &&
       !win.document.hasFocus()
     ) {
@@ -1261,8 +1325,15 @@ function refreshTrackedNoteEditingSelection(
     /* ignore */
   }
 
+  const noteSelectionDocs = noteItem
+    ? collectAccessibleDocuments(win.document)
+    : [];
+  for (const doc of noteSelectionDocs) {
+    tracker.trackSelectionDocument(doc);
+  }
+
   const nextSelectionText = noteItem
-    ? collectAccessibleDocuments(win.document).reduce((found, doc) => {
+    ? noteSelectionDocs.reduce((found, doc) => {
         if (found) return found;
         // Skip documents from background tab editors: only the focused
         // editor's selection matters.  Without this, switching from Note A
@@ -1278,59 +1349,48 @@ function refreshTrackedNoteEditingSelection(
 
   if (
     tracker.lastNoteId === nextNoteId &&
+    tracker.lastNoteFocusConversationKey === nextNoteFocusConversationKey &&
     tracker.lastSelectionText === nextSelectionText
   ) {
     return;
   }
 
   if (
-    tracker.lastNoteId > 0 &&
-    (tracker.lastNoteId !== nextNoteId || !nextSelectionText)
+    tracker.lastNoteFocusConversationKey > 0 &&
+    (tracker.lastNoteId !== nextNoteId ||
+      tracker.lastNoteFocusConversationKey !== nextNoteFocusConversationKey ||
+      !nextSelectionText)
   ) {
-    if (syncSelectedTextContextForSource(tracker.lastNoteId, "", "note-edit")) {
-      refreshPanelsForConversationKey(tracker.lastNoteId);
-    }
-    // Also clear from the parent paper panel (used by standalone window).
-    if (tracker.lastParentPaperItemId > 0) {
-      if (
-        syncSelectedTextContextForSource(
-          tracker.lastParentPaperItemId,
-          "",
-          "note-edit",
-        )
-      ) {
-        refreshPanelsForConversationKey(tracker.lastParentPaperItemId);
-      }
+    const cleared = clearNoteEditingSelectedText(
+      tracker.lastNoteFocusConversationKey,
+    );
+    if (cleared?.changed) {
+      refreshPanelsForConversationKey(cleared.conversationKey);
+      refreshNoteEditingPanelsForNote(tracker.lastNoteId);
     }
   }
 
+  let selectionChanged = false;
   if (nextNoteId > 0 && nextSelectionText) {
-    if (
-      syncSelectedTextContextForSource(
-        nextNoteId,
-        nextSelectionText,
-        "note-edit",
-      )
-    ) {
-      refreshPanelsForConversationKey(nextNoteId);
-    }
-    // Also sync to the parent paper panel so the standalone window (which is
-    // keyed to the parent paper item, not the note) shows the editing chip.
-    if (nextParentPaperItemId > 0) {
-      if (
-        syncSelectedTextContextForSource(
-          nextParentPaperItemId,
-          nextSelectionText,
-          "note-edit",
-        )
-      ) {
-        refreshPanelsForConversationKey(nextParentPaperItemId);
+    const targetSystems = panelSystems.length ? panelSystems : [null];
+    for (const system of targetSystems) {
+      const synced = syncNoteEditingSelectedText({
+        noteItem,
+        text: nextSelectionText,
+        system,
+      });
+      if (synced?.changed) {
+        selectionChanged = true;
+        refreshPanelsForConversationKey(synced.conversationKey);
       }
     }
+  }
+  if (selectionChanged) {
+    refreshNoteEditingPanelsForNote(nextNoteId);
   }
 
   tracker.lastNoteId = nextNoteId;
-  tracker.lastParentPaperItemId = nextParentPaperItemId;
+  tracker.lastNoteFocusConversationKey = nextNoteFocusConversationKey;
   tracker.lastSelectionText = nextSelectionText;
 }
 
@@ -1342,27 +1402,40 @@ export function registerNoteEditingSelectionTracking(
   const refresh = () => {
     refreshTrackedNoteEditingSelection(trackedWindow);
   };
-  // Debounced version for event-driven calls (selectionchange, mouseup,
-  // keyup) — prevents the expensive iframe traversal from firing dozens
-  // of times per second during rapid typing or drag-selecting.
+  // Debounce noisy selectionchange events, but refresh immediately after the
+  // user completes mouse or keyboard selection so the Editing chip appears
+  // without waiting for runtime conversation refresh.
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  let immediateTimer: ReturnType<typeof setTimeout> | null = null;
   const debouncedRefresh = () => {
     if (debounceTimer !== null) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(refresh, 150);
   };
-  // Interval reduced from 250ms → 1000ms.  The event listeners handle
-  // real-time changes; this interval is only a fallback safety net.
-  const intervalId = win.setInterval(refresh, 1000);
+  const immediateRefresh = () => {
+    if (immediateTimer !== null) clearTimeout(immediateTimer);
+    immediateTimer = setTimeout(refresh, 0);
+  };
+  const trackedSelectionDocuments = new Set<Document>();
+  const trackSelectionDocument = (doc: Document) => {
+    if (trackedSelectionDocuments.has(doc)) return;
+    trackedSelectionDocuments.add(doc);
+    doc.addEventListener("selectionchange", debouncedRefresh, true);
+    doc.addEventListener("mouseup", immediateRefresh, true);
+    doc.addEventListener("keyup", immediateRefresh, true);
+  };
+  // Event listeners handle real-time changes; this interval is only a fallback
+  // safety net for note-editor documents that do not emit selection events.
+  const intervalId = win.setInterval(refresh, 250);
   trackedWindow.__llmNoteEditingSelectionTracking = {
     intervalId,
     refresh,
+    trackSelectionDocument,
+    trackedSelectionDocuments,
     lastNoteId: 0,
-    lastParentPaperItemId: 0,
+    lastNoteFocusConversationKey: 0,
     lastSelectionText: "",
   };
-  win.document.addEventListener("selectionchange", debouncedRefresh, true);
-  win.document.addEventListener("mouseup", debouncedRefresh, true);
-  win.document.addEventListener("keyup", debouncedRefresh, true);
+  trackSelectionDocument(win.document);
   win.addEventListener(
     "unload",
     () => {
@@ -1370,13 +1443,12 @@ export function registerNoteEditingSelectionTracking(
       if (!tracker) return;
       win.clearInterval(tracker.intervalId);
       if (debounceTimer !== null) clearTimeout(debounceTimer);
-      win.document.removeEventListener(
-        "selectionchange",
-        debouncedRefresh,
-        true,
-      );
-      win.document.removeEventListener("mouseup", debouncedRefresh, true);
-      win.document.removeEventListener("keyup", debouncedRefresh, true);
+      if (immediateTimer !== null) clearTimeout(immediateTimer);
+      for (const doc of tracker.trackedSelectionDocuments) {
+        doc.removeEventListener("selectionchange", debouncedRefresh, true);
+        doc.removeEventListener("mouseup", immediateRefresh, true);
+        doc.removeEventListener("keyup", immediateRefresh, true);
+      }
       delete trackedWindow.__llmNoteEditingSelectionTracking;
     },
     { once: true },

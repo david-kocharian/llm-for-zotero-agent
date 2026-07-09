@@ -11,8 +11,15 @@ import type {
   AgentPendingAction,
   AgentPendingField,
 } from "../agent/types";
-import type { CodexConversationKind, PaperContextRef } from "../shared/types";
-import { BALANCED_EVIDENCE_GUIDANCE } from "../shared/quoteGuidance";
+import type {
+  CodexConversationKind,
+  NoteContextRef,
+  PaperContextRef,
+} from "../shared/types";
+import {
+  BALANCED_EVIDENCE_GUIDANCE,
+  NOTE_EDITING_QUOTE_BLOCK_GUIDANCE,
+} from "../shared/quoteGuidance";
 import {
   addZoteroMcpToolActivityObserver,
   addZoteroMcpConfirmationHandler,
@@ -1119,6 +1126,7 @@ function buildCodexNativeVisibleTurnContextBlock(params: {
     selectedTexts: skillContext?.selectedTexts,
     selectedTextSources: skillContext?.selectedTextSources,
     selectedTextPaperContexts: skillContext?.selectedTextPaperContexts,
+    selectedTextNoteContexts: skillContext?.selectedTextNoteContexts,
     screenshots: skillContext?.screenshots,
     attachments: skillContext?.attachments,
     activeNoteContext: scope.activeNoteId
@@ -1260,6 +1268,9 @@ export function buildZoteroEnvironmentManifest(params: {
     "- Write/update requests should use semantic Zotero MCP write tools. Review cards or direct tool results are the deliverable for tool-backed writes.",
     "- Advanced tools run_command, file_io, and zotero_script are escape hatches for explicit shell/file/script tasks or unsupported formats, not ordinary paper/library reading.",
   );
+  if (scope.activeNoteId) {
+    lines.push(`- ${NOTE_EDITING_QUOTE_BLOCK_GUIDANCE}`);
+  }
   if (scope.kind === "paper") {
     lines.push(
       "- Active paper resources are listed above. Use their IDs directly when a paper_read call is useful.",

@@ -21,7 +21,7 @@ import {
   resolvePaperChatSourceItem,
   resolveActiveNoteSession,
   resolvePreferredConversationSystem,
-  resolveNoteConversationSystemSwitch,
+  resolveNoteFocusSystemSwitch,
   resolveShortcutMode,
   createGlobalPortalItem,
   createPaperPortalItem,
@@ -3564,9 +3564,10 @@ export function openStandaloneChat(options?: {
           ? activeItem
           : null;
         if (activeNoteItem) {
-          const resolvedNextSystem = resolveNoteConversationSystemSwitch({
+          const resolvedNextSystem = resolveNoteFocusSystemSwitch({
             nextSystem,
             codexAvailable: isCodexAppServerModeEnabled(),
+            claudeAvailable: getClaudeCodeModeEnabled(),
           });
           if (!resolvedNextSystem) return;
           if (resolvedNextSystem === currentConversationSystem) return;

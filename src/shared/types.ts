@@ -130,14 +130,10 @@ export type TagContextRef = {
 export type ActiveNoteSession = {
   noteKind: "item" | "standalone";
   noteId: number;
+  libraryID: number;
   title: string;
   parentItemId?: number;
-  displayConversationKind: "paper" | "global";
-  capabilities: {
-    showModeSwitch: boolean;
-    showNewConversation: boolean;
-    showHistory: boolean;
-  };
+  conversationKind: "paper" | "global";
 };
 
 export type ActiveNoteContext = {

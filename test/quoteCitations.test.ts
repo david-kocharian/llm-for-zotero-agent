@@ -1914,6 +1914,36 @@ describe("quoteCitations", function () {
     assert.notInclude(finalized.markdown, "(Single, 2024)");
   });
 
+  it("converts note-edit generated blockquotes with source labels to fenced text", function () {
+    const revisedText =
+      "Panel A uses a cartoon neural network to show the stability-plasticity dilemma: practice tunes the weights so the input pattern produces the target output.";
+    const finalized = finalizeAssistantQuoteCitations({
+      markdown: [
+        `Updated the sentence:`,
+        "",
+        `> ${revisedText}`,
+        "",
+        "(Ajemian et al., 2013)",
+      ].join("\n"),
+      sourceIndex: buildQuoteSourceIndex({
+        sourceTexts: [
+          {
+            sourceText:
+              "Panel A illustrates the stability-plasticity dilemma in a cartoon neural network. An input pattern must be transformed into an output.",
+            sourceLabel: "(Ajemian et al., 2013)",
+            contextItemId: 3612,
+          },
+        ],
+      }),
+      fenceUnverifiedBlockquotes: true,
+    });
+
+    assert.notInclude(finalized.markdown, "\n> ");
+    assert.notInclude(finalized.markdown, "(Ajemian et al., 2013)");
+    assert.include(finalized.markdown, `\`\`\`text\n${revisedText}\n\`\`\``);
+    assert.lengthOf(finalized.quoteCitations, 0);
+  });
+
   it("does not double-blockquote anchored quotes already wrapped in quote syntax", function () {
     const citation = buildQuoteCitation({
       quoteText: "First source paragraph.\n\nSecond source paragraph.",

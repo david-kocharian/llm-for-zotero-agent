@@ -23,6 +23,7 @@ import {
   resolveDisplayConversationKind,
   resolvePreferredConversationSystem,
 } from "./portalScope";
+import { getConversationKey } from "./conversationIdentity";
 
 function createActionDropdown(doc: Document, spec: ActionDropdownSpec) {
   const slot = createElement(
@@ -57,12 +58,7 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   const displayConversationKind = resolveDisplayConversationKind(item);
   const isGlobalMode = displayConversationKind === "global";
   const isPaperMode = displayConversationKind === "paper";
-  const conversationItemId =
-    hasItem && item
-      ? item.isAttachment() && item.parentID
-        ? item.parentID
-        : item.id
-      : 0;
+  const conversationItemId = hasItem && item ? getConversationKey(item) : 0;
   const basePaperItemId =
     hasItem && item
       ? activeNoteSession?.parentItemId ||
@@ -95,11 +91,13 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   container.dataset.itemId =
     conversationItemId > 0 ? `${conversationItemId}` : "";
   container.dataset.libraryId = hasItem && item ? `${item.libraryID}` : "";
-  container.dataset.conversationKind = hasItem
-    ? isGlobalMode
-      ? "global"
-      : "paper"
-    : "";
+  container.dataset.conversationKind = activeNoteSession
+    ? activeNoteSession.conversationKind
+    : hasItem
+      ? isGlobalMode
+        ? "global"
+        : "paper"
+      : "";
   container.dataset.conversationSystem = resolvePreferredConversationSystem({
     item,
   });
@@ -143,7 +141,7 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
     title: t("Start a new chat"),
   });
   historyNewBtn.setAttribute("aria-label", t("Start a new chat"));
-  historyNewBtn.style.display = activeNoteSession ? "none" : "";
+  historyNewBtn.style.display = "";
 
   // History toggle button (clock icon)
   const historyToggle = createElement(doc, "button", "llm-history-toggle", {
@@ -154,7 +152,7 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   historyToggle.setAttribute("aria-label", t("Conversation history"));
   historyToggle.setAttribute("aria-haspopup", "menu");
   historyToggle.setAttribute("aria-expanded", "false");
-  historyToggle.style.display = activeNoteSession ? "none" : "";
+  historyToggle.style.display = "";
 
   const isStandaloneBody = (body as HTMLElement).dataset?.standalone === "true";
   const headerModeControls = createElement(
@@ -173,7 +171,9 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   modeSwitchWrap.dataset.mode = hasItem && isGlobalMode ? "global" : "paper";
 
   const modeChipLabel = activeNoteSession
-    ? t("Note editing")
+    ? activeNoteSession.noteKind === "item"
+      ? t("Item note")
+      : t("Standalone note")
     : isGlobalMode
       ? t("Library chat")
       : t("Paper chat");

@@ -26,6 +26,11 @@ import {
   prependNativeSkillMention,
   resolveSkillDirectiveText,
 } from "../../../../agent/skills";
+import {
+  buildNoteEditingTurnContext,
+  resolveNoteEditingScope,
+} from "../../noteEditing";
+import { readNoteSnapshot } from "../../noteSnapshot";
 
 type StatusLevel = "ready" | "warning" | "error";
 
@@ -620,6 +625,11 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
       if (shouldRetainClaudeRuntime) {
         await deps.retainClaudeRuntime?.(deps.body, item);
       }
+      const activeNoteScope = resolveNoteEditingScope(item);
+      const activeNoteContext = buildNoteEditingTurnContext({
+        scope: activeNoteScope,
+        snapshot: readNoteSnapshot(item),
+      }).activeNoteContext;
       const sendTask = deps.sendQuestion({
         body: deps.body,
         item,
@@ -646,6 +656,9 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
         selectedTextNoteContexts: selectedTexts.length
           ? selectedTextNoteContexts
           : undefined,
+        activeNoteContext,
+        conversationKey: textContextConversationKey,
+        conversationKind: activeNoteScope?.conversationKind,
         paperContexts: selectedPaperContexts,
         fullTextPaperContexts,
         selectedCollectionContexts,

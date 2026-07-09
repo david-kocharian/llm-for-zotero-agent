@@ -102,14 +102,12 @@ describe("conversation key space", function () {
       "paper",
       "profile-0",
     );
-    const key = buildDefaultConversationKey(
-      "codex",
-      "paper",
-      42,
-      "profile-0",
-    );
+    const key = buildDefaultConversationKey("codex", "paper", 42, "profile-0");
 
-    assert.equal(key, range.start + RUNTIME_DEFAULT_CONVERSATION_KEY_OFFSET + 42);
+    assert.equal(
+      key,
+      range.start + RUNTIME_DEFAULT_CONVERSATION_KEY_OFFSET + 42,
+    );
     assert.isAtLeast(key, defaultRange.start);
     assert.isBelow(key, defaultRange.endExclusive);
     assert.isAtLeast(key, range.start);
